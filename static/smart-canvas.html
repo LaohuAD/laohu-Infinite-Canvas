@@ -16,11 +16,12 @@
             } catch(e) {}
         })();
     </script>
-    <script src="/static/vendor/js/lucide.js?v=2026.08.01.1785292594"></script>
-    <script src="/static/js/theme.js?v=2026.08.01.1785292593"></script>
-    <script src="/static/js/touch-mouse.js?v=2026.08.01.1785292587"></script>
-    <script src="/static/js/i18n.js?v=2026.08.01.1785292592"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.08.01.1785851403">
+    <script src="/static/vendor/js/lucide.js?v=2026.08.17.1786430759"></script>
+    <script src="/static/js/theme.js?v=2026.08.17.1786430759"></script>
+    <script src="/static/js/touch-mouse.js?v=2026.08.17.1786430759"></script>
+    <script src="/static/js/i18n.js?v=2026.08.17.1786952927"></script>
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.08.17.1786897516">
+    <link rel="stylesheet" href="/static/css/studio-ui-polish.css?v=2026.08.17.1786747623">
 </head>
 <body>
     <div id="shell" class="shell">
@@ -29,13 +30,6 @@
                 <div class="composer-card">
                     <div class="composer-head">
                         <div class="composer-head-left">
-                            <select id="engineSelect" class="engine-select">
-                                <option value="api" data-i18n="smart.engineApi">API生成</option>
-                                <option value="volcengine" data-i18n="smart.engineVolcengine">火山引擎</option>
-                                <option value="modelscope" data-i18n="smart.engineMs">MS生成</option>
-                                <option value="comfy" data-i18n="smart.engineComfy">ComfyUI生成</option>
-                                <option value="runninghub" data-i18n="smart.engineRh">RunningHub</option>
-                            </select>
                             <div id="apiKindToggle" class="kind-toggle" style="display:none">
                                 <button type="button" data-kind="image" class="active"><i data-lucide="image"></i><span data-i18n="smart.kindImage">图片</span></button>
                                 <button type="button" data-kind="video"><i data-lucide="film"></i><span data-i18n="smart.kindVideo">视频</span></button>
@@ -43,7 +37,6 @@
                         </div>
                     </div>
                     <div id="inputThumbsRow" class="input-thumbs-row"></div>
-                    <div id="inputPromptPreview" class="input-prompt-preview"></div>
                     <div class="prompt-row">
                         <div id="promptInput" class="prompt-input" contenteditable="true" data-i18n-placeholder="smart.promptPlaceholder" data-placeholder="描述你想生成或编辑的图片..."></div>
                         <button id="composerTemplateBtn" class="composer-template-btn" type="button" title="模板库" aria-label="模板库" data-i18n-title="smart.promptTemplateLibrary">
@@ -57,6 +50,7 @@
                     </div>
                     <div class="composer-actions">
                         <button id="cascadeRunBtn" class="run-btn cascade-run-btn" type="button" style="display:none"><i data-lucide="workflow"></i><span>一键运行</span></button>
+                        <div id="smartExecutionCountControl" class="smart-control execution-count-control" hidden></div>
                         <button id="runBtn" class="run-btn" type="button"><i data-lucide="sparkles"></i><span data-i18n="smart.run">运行</span></button>
                     </div>
                 </div>
@@ -65,42 +59,35 @@
         <button class="smart-back" type="button" onclick="backToCanvasList()"><i data-lucide="arrow-left"></i><span data-i18n="canvas.backToList">返回画布列表</span></button>
         <div id="smartTitle" class="smart-title" data-i18n="smart.title">智能画布</div>
         <div id="createMenu" class="create-menu">
-            <div class="create-menu-grid">
-                <button class="create-card" type="button" data-create-type="image">
-                    <span class="create-card-icon"><i data-lucide="upload-cloud"></i></span>
-                    <span>
-                        <div class="create-card-title">上传</div>
-                        <div class="create-card-sub" data-i18n="smart.createImportNodeSub">图片、音频、视频都能导入</div>
-                    </span>
-                </button>
-                <button class="create-card" type="button" data-create-type="group">
-                    <span class="create-card-icon"><i data-lucide="group"></i></span>
-                    <span>
-                        <div class="create-card-title">分组</div>
-                        <div class="create-card-sub">把提示词、图片、循环收进同一组</div>
-                    </span>
-                </button>
-                <button class="create-card" type="button" data-create-type="prompt">
-                    <span class="create-card-icon"><i data-lucide="text-cursor-input"></i></span>
-                    <span>
-                        <div class="create-card-title">提示词</div>
-                        <div class="create-card-sub">手写或用 LLM 生成文本</div>
-                    </span>
-                </button>
-                <button class="create-card" type="button" data-create-type="loop">
-                    <span class="create-card-icon"><i data-lucide="repeat-2"></i></span>
-                    <span>
-                        <div class="create-card-title">循环</div>
-                        <div class="create-card-sub">控制运行轮数、批次和变量</div>
-                    </span>
-                </button>
-                <button class="create-card" type="button" data-create-type="minimax">
-                    <span class="create-card-icon"><i data-lucide="clapperboard"></i></span>
-                    <span>
-                        <div class="create-card-title">MiniMax</div>
-                        <div class="create-card-sub">时间轴片段生成视频</div>
-                    </span>
-                </button>
+            <div class="create-menu-section">
+                <div class="create-menu-heading">添加资源</div>
+                <div class="create-menu-list">
+                    <button class="create-card" type="button" data-create-type="material"><span class="create-card-icon"><i data-lucide="upload-cloud"></i></span><span class="create-card-title" data-i18n="smart.createMaterial">素材</span></button>
+                </div>
+            </div>
+            <div class="create-menu-section">
+                <div class="create-menu-heading">常规节点</div>
+                <div class="create-menu-list">
+                    <button class="create-card" type="button" data-create-type="prompt"><span class="create-card-icon"><i data-lucide="text-cursor-input"></i></span><span class="create-card-title">文本生成</span></button>
+                    <button class="create-card" type="button" data-create-type="image-generator"><span class="create-card-icon"><i data-lucide="image-plus"></i></span><span class="create-card-title" data-i18n="smart.createImageGenerator">图片生成</span></button>
+                    <button class="create-card" type="button" data-create-type="video-generator"><span class="create-card-icon"><i data-lucide="film"></i></span><span class="create-card-title" data-i18n="smart.createVideoGenerator">视频生成</span></button>
+                    <button class="create-card" type="button" data-create-type="audio-generator"><span class="create-card-icon"><i data-lucide="audio-lines"></i></span><span class="create-card-title" data-i18n="smart.createAudioGenerator">音频生成</span></button>
+                    <button class="create-card" type="button" data-create-type="music-generator"><span class="create-card-icon"><i data-lucide="music-2"></i></span><span class="create-card-title" data-i18n="smart.createMusicGenerator">音乐生成</span></button>
+                </div>
+            </div>
+            <div class="create-menu-section">
+                <div class="create-menu-heading">ComfyUI 节点</div>
+                <div class="create-menu-list">
+                    <button class="create-card" type="button" data-create-type="ai-app"><span class="create-card-icon"><i data-lucide="blocks"></i></span><span class="create-card-title" data-i18n="smart.createAiApp">RunningHub ComfyUI</span></button>
+                    <button class="create-card" type="button" data-create-type="comfy-workflow"><span class="create-card-icon"><i data-lucide="workflow"></i></span><span class="create-card-title" data-i18n="smart.createComfyWorkflow">本地 ComfyUI</span></button>
+                </div>
+            </div>
+            <div class="create-menu-section">
+                <div class="create-menu-heading">工具节点</div>
+                <div class="create-menu-list">
+                    <button class="create-card" type="button" data-create-type="loop"><span class="create-card-icon"><i data-lucide="repeat-2"></i></span><span class="create-card-title">循环</span></button>
+                    <button class="create-card" type="button" data-create-type="minimax"><span class="create-card-icon"><i data-lucide="clapperboard"></i></span><span class="create-card-title">MiniMax</span></button>
+                </div>
             </div>
         </div>
         <input id="fileInput" type="file" accept="image/*,video/*,audio/*" multiple hidden>
@@ -145,23 +132,39 @@
                 <div id="minimapViewport" class="smart-minimap-viewport"></div>
             </div>
         </div>
+        <button id="smartPriceToggle" class="smart-price-toggle" type="button" title="价格对比" aria-label="价格对比" data-i18n-title="smart.priceComparison"><i data-lucide="circle-dollar-sign"></i><span data-i18n="smart.priceComparison">价格对比</span></button>
         <button id="smartWorkflowToggle" class="smart-workflow-toggle" type="button" title="导入导出工作流" aria-label="导入导出工作流"><i data-lucide="package-open"></i><span>工作流</span></button>
-        <button id="smartShortcutToggle" class="smart-shortcut-toggle" type="button" onclick="openSmartCanvasShortcuts()" title="快捷键" aria-label="快捷键" data-i18n-title="smart.shortcuts"><i data-lucide="keyboard"></i><span data-i18n="smart.shortcuts">快捷键</span></button>
-        <button id="smartLogToggle" class="smart-log-toggle" type="button" onclick="openSmartCanvasLog()" title="日志" aria-label="日志" data-i18n-title="canvas.logs"><i data-lucide="list-todo"></i><span data-i18n="canvas.logs">日志</span></button>
-        <button id="assetToggle" class="asset-toggle" type="button"><i data-lucide="library"></i><span data-i18n="smart.assetLibrary">资产库</span></button>
+        <button id="smartShortcutToggle" class="smart-shortcut-toggle" type="button" onclick="toggleSmartCanvasShortcuts()" title="快捷键" aria-label="快捷键" data-i18n-title="smart.shortcuts"><i data-lucide="keyboard"></i><span data-i18n="smart.shortcuts">快捷键</span></button>
+        <button id="smartLogToggle" class="smart-log-toggle" type="button" onclick="toggleSmartCanvasLog()" title="日志" aria-label="日志" data-i18n-title="canvas.logs"><i data-lucide="list-todo"></i><span data-i18n="canvas.logs">日志</span></button>
+        <aside id="smartPriceComparisonPanel" class="price-comparison-panel" aria-hidden="true">
+            <div class="price-comparison-head">
+                <div>
+                    <div class="price-comparison-title"><i data-lucide="circle-dollar-sign"></i><span data-i18n="smart.priceComparison">价格对比</span></div>
+                    <div id="smartPriceComparisonSub" class="price-comparison-sub"></div>
+                </div>
+                <button id="smartPriceComparisonClose" class="asset-mini-btn" type="button" title="关闭" data-i18n-title="common.close"><i data-lucide="x"></i></button>
+            </div>
+            <div class="price-comparison-toolbar">
+                <input id="smartPriceComparisonSearch" type="search" placeholder="搜索模型或平台" data-i18n-placeholder="smart.priceSearch">
+                <select id="smartPriceComparisonKind" title="筛选类型"></select>
+            </div>
+            <div id="smartPriceComparisonNote" class="price-comparison-note"></div>
+            <div id="smartPriceComparisonBody" class="price-comparison-body"></div>
+        </aside>
+        <button id="assetToggle" class="asset-toggle" type="button"><i data-lucide="library"></i><span data-i18n="smart.assetLibrary">素材库</span></button>
         <aside id="smartWorkflowTransferModal" class="workflow-transfer-panel">
             <div class="workflow-transfer-head">
                 <div>
                     <div class="workflow-transfer-title">导入导出工作流</div>
-                    <div id="smartWorkflowTransferSub" class="workflow-transfer-sub">导出选中节点，或把工作流导入到当前画布</div>
+                    <div id="smartWorkflowTransferSub" class="workflow-transfer-sub">有选中时导出选中内容；未选中时导出整个画布</div>
                 </div>
                 <button class="asset-mini-btn" type="button" onclick="closeSmartWorkflowTransferModal()" title="关闭"><i data-lucide="x"></i></button>
             </div>
             <div class="workflow-transfer-body">
                 <section class="workflow-transfer-card">
                     <div class="workflow-transfer-card-head"><i data-lucide="upload"></i><strong>导出工作流</strong></div>
-                    <p>使用当前选中的节点和它们之间的连线生成工作流。</p>
-                    <div id="smartWorkflowExportMeta" class="workflow-transfer-meta">未选择节点</div>
+                    <p>有选中时导出选中节点；未选中时默认导出当前画布全部节点和连线。</p>
+                    <div id="smartWorkflowExportMeta" class="workflow-transfer-meta">将导出当前画布全部内容</div>
                     <div class="workflow-transfer-actions workflow-export-actions">
                         <button class="workflow-transfer-btn secondary" type="button" onclick="exportSelectedSmartWorkflow(false)"><i data-lucide="file-json"></i><span>导出 JSON</span></button>
                         <button class="workflow-transfer-btn primary" type="button" onclick="exportSelectedSmartWorkflow(true)"><i data-lucide="package"></i><span>导出并包含资源</span></button>
@@ -181,12 +184,13 @@
         </aside>
         <aside id="assetPanel" class="asset-panel">
             <div class="asset-head">
-                <div class="asset-title"><i data-lucide="library"></i><span data-i18n="smart.assetLibrary">资产库</span></div>
+                <div class="asset-title"><i data-lucide="library"></i><span data-i18n="smart.assetLibrary">素材库</span></div>
                 <button id="assetCloseBtn" class="asset-mini-btn" type="button" title="收起" data-i18n-title="common.close"><i data-lucide="chevron-right"></i></button>
             </div>
             <div class="asset-tabs">
-                <button class="asset-tab active" type="button" data-asset-tab="image" data-i18n="smart.assetImages">图片资产</button>
-                <button class="asset-tab" type="button" data-asset-tab="workflow" data-i18n="smart.assetWorkflows">工作流</button>
+                <button class="asset-tab active" type="button" data-asset-tab="image" data-i18n="smart.assetImages">输入素材</button>
+                <button class="asset-tab" type="button" data-asset-tab="workflow">画布工作流</button>
+                <button class="asset-tab" type="button" data-asset-tab="result">生成结果</button>
             </div>
             <div id="assetImageControls">
                 <select id="assetLibrarySelect" class="asset-category-select asset-library-select" title="选择资产库"></select>
@@ -231,21 +235,22 @@
                     <button class="preview-icon-btn" type="button" onclick="closeSmartCanvasShortcuts()" title="关闭" data-i18n-title="common.close"><i data-lucide="x" class="w-4 h-4"></i></button>
                 </div>
                 <div class="shortcut-list">
-                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd></span><span data-i18n="smart.shortcutBoxSelect">按住并拖拽框选节点</span></div>
-                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>G</kbd></span><span data-i18n="smart.shortcutGroup">合并选中的图片为组</span></div>
-                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>G</kbd></span><span data-i18n="smart.shortcutUngroup">释放选中的分组</span></div>
-                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>Z</kbd></span><span data-i18n="smart.shortcutUndo">撤销上一步操作</span></div>
-                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Z</kbd></span><span data-i18n="smart.shortcutUndoAlt">恢复上一步操作</span></div>
-                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>C</kbd></span><span data-i18n="smart.shortcutCopy">复制选中的节点</span></div>
-                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>V</kbd></span><span data-i18n="smart.shortcutPaste">粘贴节点或剪贴板图片</span></div>
-                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Alt</kbd></span><span data-i18n="smart.shortcutAltCopy">按住并拖动复制节点</span></div>
-                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Alt</kbd><kbd>Shift</kbd></span><span data-i18n="smart.shortcutAltShiftCopy">复制节点并保留输入连线</span></div>
-                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>A</kbd></span><span data-i18n="smart.shortcutAssets">打开/关闭资源库</span></div>
-                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Z</kbd></span><span data-i18n="smart.shortcutOverview">缩小画布视图</span></div>
-                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>双击</kbd></span><span data-i18n="smart.shortcutCreateMenu">打开快捷菜单</span></div>
-                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>空白处</kbd></span><span data-i18n="smart.shortcutPan">拖动画布</span></div>
-                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>滚轮</kbd></span><span data-i18n="smart.shortcutZoom">缩放画布或预览图片</span></div>
-                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Del</kbd></span><span data-i18n="smart.shortcutDelete">删除选中节点</span></div>
+                    <div class="shortcut-platform-head"><span>Windows</span><span>Mac</span><span>操作</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd></span><span class="shortcut-keys"><kbd>Cmd</kbd></span><span>按住并拖拽框选节点</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>G</kbd></span><span class="shortcut-keys"><kbd>Cmd</kbd><kbd>G</kbd></span><span>合并选中节点为分组</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>G</kbd></span><span class="shortcut-keys"><kbd>Cmd</kbd><kbd>Shift</kbd><kbd>G</kbd></span><span>解散选中的分组</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>Z</kbd></span><span class="shortcut-keys"><kbd>Cmd</kbd><kbd>Z</kbd></span><span>撤销上一步操作</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Z</kbd></span><span class="shortcut-keys"><kbd>Cmd</kbd><kbd>Shift</kbd><kbd>Z</kbd></span><span>恢复上一步操作</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>C</kbd></span><span class="shortcut-keys"><kbd>Cmd</kbd><kbd>C</kbd></span><span>复制选中的画布节点</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>C</kbd></span><span class="shortcut-keys"><kbd>Cmd</kbd><kbd>Shift</kbd><kbd>C</kbd></span><span>复制选中素材到系统剪贴板</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>V</kbd></span><span class="shortcut-keys"><kbd>Cmd</kbd><kbd>V</kbd></span><span>粘贴节点或系统剪贴板素材</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Shift</kbd><kbd>拖拽</kbd></span><span class="shortcut-keys"><kbd>Shift</kbd><kbd>拖拽</kbd></span><span>鼠标位于节点上时拖出连线；位于空白处时切断连线</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Shift</kbd><kbd data-i18n="smart.shortcutDoubleClick">双击</kbd></span><span class="shortcut-keys"><kbd>Shift</kbd><kbd data-i18n="smart.shortcutDoubleClick">双击</kbd></span><span data-i18n="smart.shortcutFocusNode">聚焦并放大任意画布节点</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>双击</kbd></span><span class="shortcut-keys"><kbd>双击</kbd></span><span>预览素材、聚焦执行节点或在空白处打开快捷菜单</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Alt</kbd></span><span class="shortcut-keys"><kbd>Option</kbd></span><span>按住并拖动复制节点</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>A</kbd></span><span class="shortcut-keys"><kbd>A</kbd></span><span>打开或关闭素材库</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Z</kbd></span><span class="shortcut-keys"><kbd>Z</kbd></span><span>缩小画布总览</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Del</kbd></span><span class="shortcut-keys"><kbd>Delete</kbd></span><span>删除选中节点</span></div>
                 </div>
             </div>
         </div>
@@ -303,6 +308,15 @@
                             </div>
                         </div>
                     </div>
+                </div>
+                <div id="mediaTransformTools" class="image-edit-tools media-transform-tools">
+                    <span class="image-edit-sub">时间范围</span>
+                    <label><span>开始</span><input id="mediaTransformStart" type="range" min="0" max="1" step="0.01" value="0" oninput="updateSmartVideoTransformRange('start', this.value)"><output id="mediaTransformStartValue">0.00s</output></label>
+                    <label><span>结束</span><input id="mediaTransformEnd" type="range" min="0.1" max="1" step="0.01" value="1" oninput="updateSmartVideoTransformRange('end', this.value)"><output id="mediaTransformEndValue">1.00s</output></label>
+                    <span id="mediaTransformDuration" class="image-edit-sub"></span>
+                    <span id="mediaTransformCapability" data-media-transform-capability class="media-transform-capability"></span>
+                    <button id="mediaTrimBtn" class="image-edit-btn secondary" type="button" data-media-transform-action onclick="runSmartMediaTransform('trim')"><i data-lucide="scissors" class="w-4 h-4"></i><span data-i18n="smart.mediaToolTrim">生成裁剪结果</span></button>
+                    <button id="mediaExtractAudioBtn" class="image-edit-btn secondary" type="button" data-media-transform-action onclick="runSmartMediaTransform('extract_audio')"><i data-lucide="audio-lines" class="w-4 h-4"></i><span data-i18n="smart.mediaToolExtractAudio">抽出音频</span></button>
                 </div>
                 <div id="imageMaskTools" class="image-edit-tools">
                     <label><span data-i18n="canvas.brushSize">笔刷</span> <input id="maskBrushSize" type="range" min="4" max="160" value="42"></label>
@@ -444,6 +458,9 @@
         <div id="toast" class="toast"></div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
-    <script src="/static/js/smart-canvas.js?v=2026.08.01.1785851746"></script>
+    <script src="/static/js/material-promote.js?v=2026.08.17.1786546376"></script>
+    <script src="/static/js/smart-node-contract.js?v=2026.08.17.1786947583"></script>
+    <script src="/static/js/smart-model-capabilities.js?v=2026.08.17.1786794269"></script>
+<script src="/static/js/smart-canvas.js?v=2026.08.17.1786947736"></script>
 </body>
 </html>

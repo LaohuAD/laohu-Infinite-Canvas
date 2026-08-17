@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "provider_id": "modelscope",
+  "provider_name": "ModelScope",
+  "status": "maintained",
+  "updated_at": "2026-08-12",
+  "sources": [
+    {"path": "data/api_providers.json", "kind": "user_configuration", "checked_at": "2026-08-12"},
+    {"path": "main.py", "kind": "runtime_verified", "checked_at": "2026-08-12"},
+    {"path": "static/js/smart-canvas.js", "kind": "runtime_verified", "checked_at": "2026-08-12"}
+  ],
+  "models": [
+    {"model_id": "Tongyi-MAI/Z-Image-Turbo", "node_type": "image_generation", "operation": "text_to_image", "status": "pending", "version": 1, "evidence_level": "model_card_only", "note": "当前配置为图片模型，但请求参数需按具体接口进一步核实。"},
+    {"model_id": "Qwen/Qwen-Image-2512", "node_type": "image_generation", "operation": "text_to_image", "status": "pending", "version": 1, "evidence_level": "model_card_only", "note": "当前配置为图片模型；不能仅凭模型名称开放图生图或遮罩。"},
+    {"model_id": "Qwen/Qwen-Image-Edit-2511", "node_type": "image_generation", "operation": "image_to_image", "status": "pending", "version": 1, "evidence_level": "model_card_only", "note": "模型名称提示编辑方向，但当前接口字段仍需官方 Schema 或运行测试确认。"},
+    {"model_id": "black-forest-labs/FLUX.2-klein-9B", "node_type": "image_generation", "operation": "image_generation", "status": "pending", "version": 1, "evidence_level": "model_card_only", "note": "当前项目有图片调用路径，但具体输入和参数未形成可运行档案。"},
+    {"model_id": "Qwen/Qwen3-235B-A22B", "node_type": "text_generation", "operation": "chat", "status": "pending", "version": 1, "evidence_level": "model_card_only", "note": "当前配置为聊天模型，模型能力档案待接口字段确认。"},
+    {"model_id": "Qwen/Qwen3-VL-235B-A22B-Instruct", "node_type": "text_generation", "operation": "multimodal_chat", "status": "pending", "version": 1, "evidence_level": "model_card_only", "note": "视觉模型可能支持图片或视频，但当前档案不因模型名称自动开放媒体输入。"},
+    {"model_id": "MiniMax/MiniMax-M2.7:MiniMax", "node_type": "text_generation", "operation": "chat", "status": "pending", "version": 1, "evidence_level": "model_card_only", "note": "仅登记为当前配置模型；不得修改或扩展现有 MiniMax 节点。"}
+  ]
+}

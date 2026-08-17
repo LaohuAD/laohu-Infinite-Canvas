@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "status": "stable",
+  "updated_at": "2026-08-12",
+  "media_types": ["text", "image", "video", "audio"],
+  "node_types": ["text_generation", "image_generation", "video_generation", "audio_generation", "music_generation", "ai_application"],
+  "input_roles": {
+    "prompt": "文本提示词",
+    "system_prompt": "系统提示词",
+    "reference": "参考素材",
+    "first_frame": "首帧图片",
+    "last_frame": "尾帧图片",
+    "source_video": "待处理视频",
+    "reference_audio": "参考音频",
+    "mask": "遮罩图片"
+  },
+  "parameter_levels": ["required", "optional", "advanced"],
+  "evidence_levels": ["runtime_verified", "official_schema", "official_documented", "model_card_only", "unknown"],
+  "profile_statuses": ["confirmed", "pending", "deprecated"],
+  "rules": {
+    "only_confirmed_evidence_runs": true,
+    "unsupported_parameters_are_not_submitted": true,
+    "canvas_processing_is_not_model_parameter": true,
+    "efficiency_tools_are_not_model_parameter": true,
+    "history_requires_profile_snapshot": true
+  }
+}

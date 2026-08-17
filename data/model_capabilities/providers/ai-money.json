@@ -1,0 +1,200 @@
+{
+  "schema_version": 1,
+  "provider_id": "ai-money",
+  "provider_name": "AI MONEY",
+  "status": "maintained",
+  "updated_at": "2026-08-12",
+  "sources": [
+    {
+      "url": "https://api.laohuaimoney.com/docs/llms.txt",
+      "kind": "official_documented",
+      "checked_at": "2026-08-12"
+    },
+    {
+      "path": "main.py",
+      "kind": "runtime_verified",
+      "checked_at": "2026-08-12"
+    }
+  ],
+  "models": [
+    {
+      "model_id": "laohuaimoney-image-g-v2-lowprice",
+      "family_id": "ai-money-image-g-v2-lowprice",
+      "family_name": "AI MONEY Image G V2 · 低价版",
+      "variant_id": "text_or_image_to_image",
+      "node_type": "image_generation",
+      "operation": "text_to_image",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "official_documented",
+      "inputs": {
+        "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"},
+        "reference": {"media_type": "image", "min": 0, "max": 16, "role": "reference"}
+      },
+      "parameters": {
+        "resolution": {"level": "optional", "type": "enum", "options": ["1k", "2k", "4k"]},
+        "aspect_ratio": {"level": "optional", "type": "enum", "options": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "4:5", "5:4", "21:9", "9:21"], "source_field": "size"},
+        "count": {"level": "optional", "type": "integer", "min": 1, "max": 10}
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "resolution": "metadata.resolution",
+        "aspect_ratio": "size",
+        "count": "n"
+      },
+      "output": {"media_type": "image", "min": 1, "max": 10, "async": true},
+      "platform": {"endpoint": "/v1/image/generations"}
+    },
+    {
+      "model_id": "kimi-k3",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "enabled_in_api_settings": false,
+      "version": 1,
+      "evidence_level": "official_documented",
+      "inputs": {"prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}},
+      "parameters": {
+        "stream": {"level": "optional", "type": "boolean", "default": false},
+        "max_output_tokens": {"level": "optional", "type": "integer"}
+      },
+      "request_mapping": {"prompt": "messages", "stream": "stream", "max_output_tokens": "max_tokens"},
+      "output": {"media_type": "text", "min": 1, "max": 1, "async": false},
+      "platform": {"endpoint": "/v1/chat/completions"}
+    },
+    {
+      "model_id": "qwen/qwen3.8-max",
+      "family_id": "ai-money-qwen-qwen3-8",
+      "family_name": "Qwen 3.8",
+      "family_name_en": "Qwen 3.8",
+      "variant_id": "max",
+      "variant_name": "Max",
+      "variant_name_en": "Max",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 1,
+      "evidence_level": "official_documented",
+      "inputs": {
+        "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}
+      },
+      "parameters": {
+        "max_output_tokens": {"level": "optional", "type": "integer", "min": 1}
+      },
+      "request_mapping": {"prompt": "messages", "max_output_tokens": "max_tokens"},
+      "output": {"media_type": "text", "min": 1, "max": 1, "async": false},
+      "platform": {"endpoint": "/v1/chat/completions"}
+    },
+    {
+      "model_id": "laohuaimoney/gk-4.6",
+      "family_id": "ai-money-laohuaimoney-gk-4-6",
+      "family_name": "GK 4.6",
+      "family_name_en": "GK 4.6",
+      "variant_id": "default",
+      "variant_name": "默认",
+      "variant_name_en": "Default",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 1,
+      "evidence_level": "official_documented",
+      "inputs": {
+        "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"},
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 8,
+          "role": "reference",
+          "note": "官方文档确认支持视觉输入；当前画布适配器最多转发 8 张图片。"
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {"level": "optional", "type": "integer", "min": 1}
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {"media_type": "text", "min": 1, "max": 1, "async": false},
+      "platform": {"endpoint": "/v1/chat/completions"}
+    },
+    {
+      "model_id": "doubao-seed-audio-1.0",
+      "node_type": "audio_generation",
+      "operation": "speech_or_audio",
+      "status": "confirmed",
+      "enabled_in_api_settings": true,
+      "version": 1,
+      "evidence_level": "official_documented",
+      "inputs": {
+        "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"},
+        "reference_audio": {"media_type": "audio", "min": 0, "max": 1, "role": "reference_audio"}
+      },
+      "parameters": {
+        "speaker": {"level": "optional", "type": "text"},
+        "format": {"level": "optional", "type": "enum", "options": ["mp3", "wav", "pcm", "ogg_opus"], "default": "mp3"},
+        "sample_rate": {"level": "optional", "type": "enum", "options": [8000, 16000, 24000, 32000, 44100], "default": 24000},
+        "speech_rate": {"level": "advanced", "type": "integer", "min": -50, "max": 100, "default": 0},
+        "loudness_rate": {"level": "advanced", "type": "integer", "min": -50, "max": 100, "default": 0},
+        "pitch_rate": {"level": "advanced", "type": "integer", "min": -12, "max": 12, "default": 0}
+      },
+      "request_mapping": {"prompt": "input", "speaker": "speaker", "reference_audio": "audio_url", "format": "format", "sample_rate": "sample_rate", "speech_rate": "speech_rate", "loudness_rate": "loudness_rate", "pitch_rate": "pitch_rate"},
+      "output": {"media_type": "audio", "min": 1, "max": 1, "async": true},
+      "platform": {"endpoint": "/v1/audio/generations"}
+    },
+    {
+      "model_id": "mureka-v8-bgm",
+      "node_type": "music_generation",
+      "operation": "music",
+      "status": "confirmed",
+      "enabled_in_api_settings": false,
+      "version": 1,
+      "evidence_level": "official_documented",
+      "inputs": {"prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}},
+      "parameters": {"count": {"level": "optional", "type": "integer", "min": 1, "max": 3}},
+      "request_mapping": {"prompt": "prompt", "count": "n"},
+      "output": {"media_type": "audio", "min": 1, "max": 3, "async": true},
+      "platform": {"endpoint": "/v1/audio/generations"}
+    },
+    {
+      "model_id": "mureka-v9-bgm",
+      "node_type": "music_generation",
+      "operation": "music",
+      "status": "confirmed",
+      "enabled_in_api_settings": false,
+      "version": 1,
+      "evidence_level": "official_documented",
+      "inputs": {"prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}},
+      "parameters": {"count": {"level": "optional", "type": "integer", "min": 1, "max": 3}},
+      "request_mapping": {"prompt": "prompt", "count": "n"},
+      "output": {"media_type": "audio", "min": 1, "max": 3, "async": true},
+      "platform": {"endpoint": "/v1/audio/generations"}
+    },
+    {
+      "model_id": "whisper-1",
+      "node_type": "audio_generation",
+      "operation": "transcription",
+      "status": "pending",
+      "enabled_in_api_settings": false,
+      "version": 1,
+      "evidence_level": "official_documented",
+      "note": "这是音频转文本，不是音频生成；待独立转写操作契约完成后接入。"
+    },
+    {
+      "model_id": "video-models-from-official-docs",
+      "node_type": "video_generation",
+      "operation": "text_to_video_or_multimodal",
+      "status": "pending",
+      "enabled_in_api_settings": false,
+      "version": 1,
+      "evidence_level": "official_documented",
+      "note": "官方文档已确认 /v1/videos、-t2v、-i2v、-multi 及部分参数，但模型清单和逐模型能力尚未绑定到当前用户配置；禁止作为具体模型运行。"
+    }
+  ]
+}

@@ -1472,7 +1472,8 @@ async function saveCanvas(){
                 viewport,
                 logs:canvas.logs || [],
                 client_id:CLIENT_ID,
-                base_updated_at:Number(lastCanvasUpdatedAt || canvas.updated_at || 0)
+                base_updated_at:Number(lastCanvasUpdatedAt || canvas.updated_at || 0),
+                base_revision:Number(canvas.revision || 0)
             })
         });
         if(res.status === 409){
@@ -1480,6 +1481,7 @@ async function saveCanvas(){
             const remote = data.detail?.canvas || data.canvas;
             if(localCanvasDirty || saveCanvasAgain){
                 lastCanvasUpdatedAt = Number(data.detail?.updated_at || data.updated_at || remote?.updated_at || lastCanvasUpdatedAt || 0);
+                canvas.revision = Number(data.detail?.revision || data.revision || remote?.revision || canvas.revision || 1);
                 saveCanvasAgain = true;
                 setStatus('Saving...');
                 return;
@@ -1645,6 +1647,7 @@ function setCanvasSortMode(mode){
 }
 async function patchCanvasMeta(id, patch){
     const item = canvases.find(c => c.id === id);
+    const baseRevision = Number(item?.revision || (canvas?.id === id ? canvas.revision : 0) || 0);
     if(item) Object.assign(item, patch);
     if(canvas?.id === id) Object.assign(canvas, patch);
     sortCanvasListByUpdated();
@@ -1653,7 +1656,7 @@ async function patchCanvasMeta(id, patch){
         const res = await fetch(`/api/canvases/${encodeURIComponent(id)}/meta`, {
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify(patch)
+            body:JSON.stringify({...patch, base_revision:baseRevision})
         });
         if(!res.ok) throw new Error('meta save failed');
         const data = await res.json();
@@ -2064,6 +2067,7 @@ async function openCanvas(id){
         rememberCanvasListProject(canvas.project || 'default');
         const touched = await touchCanvasOpened(canvas.id);
         if(touched?.updated_at) canvas.updated_at = Number(touched.updated_at);
+        if(touched?.revision) canvas.revision = Number(touched.revision);
         if((canvas.kind || 'classic') === 'smart'){
             openSmartCanvasPage(canvas.id);
             return;
@@ -2183,7 +2187,9 @@ async function syncRemoteCanvasNow(){
         if(!res.ok) throw new Error(tr('canvas.openFailed'));
         const data = await res.json();
         const remote = data.canvas;
-        if(Number(remote?.updated_at || 0) >= Number(lastCanvasUpdatedAt || 0)){
+        const remoteRevision = Number(remote?.revision || 0);
+        if((remoteRevision && remoteRevision >= Number(canvas.revision || 0))
+            || (!remoteRevision && Number(remote?.updated_at || 0) >= Number(lastCanvasUpdatedAt || 0))){
             applyRemoteCanvasData(remote);
         }
     } catch(e) {
@@ -2199,8 +2205,10 @@ async function checkRemoteCanvasVersion(){
         const res = await fetch(`/api/canvases/${canvas.id}/meta`);
         if(!res.ok) throw new Error('meta failed');
         const meta = await res.json();
+        const remoteRevision = Number(meta.revision || 0);
         const remoteUpdatedAt = Number(meta.updated_at || 0);
-        if(remoteUpdatedAt > Number(lastCanvasUpdatedAt || 0)){
+        if((remoteRevision && remoteRevision > Number(canvas.revision || 0))
+            || (!remoteRevision && remoteUpdatedAt > Number(lastCanvasUpdatedAt || 0))){
             await syncRemoteCanvasNow();
         }
     } catch(e) {
@@ -2223,8 +2231,10 @@ function handleCanvasUpdatedMessage(data){
     if(!canvas || !data || data.type !== 'canvas_updated') return;
     if(data.client_id && data.client_id === CLIENT_ID) return;
     if(data.canvas_id !== canvas.id) return;
+    const remoteRevision = Number(data.revision || 0);
     const remoteUpdatedAt = Number(data.updated_at || 0);
-    if(remoteUpdatedAt && remoteUpdatedAt <= Number(lastCanvasUpdatedAt || 0)) return;
+    if((remoteRevision && remoteRevision <= Number(canvas.revision || 0))
+        || (!remoteRevision && remoteUpdatedAt && remoteUpdatedAt <= Number(lastCanvasUpdatedAt || 0))) return;
     clearTimeout(saveTimer);
     saveTimer = null;
     localCanvasDirty = false;
@@ -4026,7 +4036,8 @@ async function uploadMediaFiles(files, point, onlyImages=false, opts={}){
             y:base.y + i * 36,
             url:file.url,
             name:file.name,
-            mediaKind:kind
+            mediaKind:kind,
+            material_id:file.material_id || ''
         };
         nodes.push(node);
         created.push(node);
@@ -4061,7 +4072,7 @@ async function createImageCardsFromLocalPaths(paths, point){
         const base = point || screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
         const created = [];
         files.forEach((file, i) => {
-            const node = {id:uid('img'), type:'image', x:base.x + i * 36, y:base.y + i * 36, url:file.url, name:file.name, mediaKind:'image'};
+            const node = {id:uid('img'), type:'image', x:base.x + i * 36, y:base.y + i * 36, url:file.url, name:file.name, mediaKind:'image', material_id:file.material_id || ''};
             nodes.push(node);
             created.push(node);
         });
@@ -4101,6 +4112,7 @@ async function applyImageDropPayloadToNode(nodeId, payload){
             node.url = file.url;
             node.name = file.name || outputImageName(file.url);
             node.mediaKind = 'image';
+            node.material_id = file.material_id || '';
             render();
             scheduleSave();
         }
@@ -4188,6 +4200,7 @@ async function fillImageNode(nodeId, files, opts={}){
         node.url = file.url;
         node.name = file.name;
         node.mediaKind = file.kind || mediaKindForUpload(imgs[0]);
+        node.material_id = file.material_id || '';
         render();
         scheduleSave();
     }
@@ -6125,6 +6138,21 @@ function destroyLTXEditor(node){
 function isNodeDragSurface(target){
     return !isNodeControl(target) && !target.closest('.port, .resize-handle, .output-img-wrap');
 }
+async function promoteCanvasMaterial(materialId, name=''){
+    if(!materialId){
+        setStatus('这个素材暂时不能收藏');
+        return;
+    }
+    await window.MaterialPromote.open({
+        materialId,
+        name,
+        onSuccess:async () => {
+            await loadCanvasAssetLibrary({renderPanel:canvasAssetLibraryOpen});
+            setStatus('已收藏到资产素材');
+        },
+        onError:error => setStatus(error?.message || '收藏失败')
+    });
+}
 function renderNode(node){
     normalizeApiNodeLayout(node);
     if(node.type === 'rh' && Number(node.h) === 560) delete node.h;
@@ -6160,7 +6188,16 @@ function renderNode(node){
         const label = { queued:'排队中', running:'运行中', done:'完成', failed:'失败' }[node.runStatus] || '';
         return `<span class="node-run-status ${node.runStatus}"><span class="dot"></span>${escapeHtml(label)}${node._cascadeIdx?' '+node._cascadeIdx:''}</span>`;
     })() : '';
-    el.innerHTML = `<div class="node-head"><span class="node-title">${displayTitle}</span><div style="display:flex;align-items:center;gap:8px">${statusHtml}<button onclick="deleteNodeFromButton('${node.id}', event)" class="text-gray-300 hover:text-red-500"><i data-lucide="x" class="w-4 h-4"></i></button></div></div>`;
+    const materialId = node.type === 'image' && node.url ? window.MaterialPromote?.materialIdFromUrl?.(node.url) : '';
+    const promoteButton = materialId
+        ? `<button type="button" data-material-promote="${escapeAttr(materialId)}" title="收藏到资产素材" class="text-gray-400 hover:text-gray-700"><i data-lucide="bookmark-plus" class="w-4 h-4"></i></button>`
+        : '';
+    el.innerHTML = `<div class="node-head"><span class="node-title">${displayTitle}</span><div style="display:flex;align-items:center;gap:8px">${statusHtml}${promoteButton}<button onclick="deleteNodeFromButton('${node.id}', event)" class="text-gray-300 hover:text-red-500"><i data-lucide="x" class="w-4 h-4"></i></button></div></div>`;
+    el.querySelector('[data-material-promote]')?.addEventListener('click', async event => {
+        event.preventDefault();
+        event.stopPropagation();
+        await promoteCanvasMaterial(event.currentTarget.dataset.materialPromote || '', node.name || '');
+    });
     const body = document.createElement('div');
     body.className = 'node-body';
     if(node.type === 'image') {
@@ -6746,22 +6783,14 @@ function canvasAssetLibraries(){
     return Array.isArray(canvasAssetLibrary.libraries) && canvasAssetLibrary.libraries.length ? canvasAssetLibrary.libraries : [{id:'default', name:'默认资产库', categories:canvasAssetLibrary.categories || []}];
 }
 function localCanvasAssetFolderCategories(){
-    const result = [];
-    const walk = node => {
-        if(!node) return;
-        const isRoot = (node.id || node.path || '__root__') === '__root__';
-        result.push({
-            id: node.id || (node.path ? node.path : '__root__'),
-            name: node.name || (node.path ? node.path.split('/').pop() : '全部上传'),
-            type: 'image',
-            items: (isRoot ? (localCanvasAssetLibrary.items || []) : (node.items || [])).filter(item => canvasAssetItemKind(item) === 'image'),
-            readonly: true,
-            source: 'local',
-        });
-        (node.children || []).forEach(walk);
-    };
-    walk(localCanvasAssetLibrary.tree || {id:'__root__', name:'全部上传', items:localCanvasAssetLibrary.items || [], children:[]});
-    return result.filter(cat => cat.id === '__root__' || cat.items.length || (localCanvasAssetLibrary.tree?.children || []).length);
+    return [{
+        id:'__temporary__',
+        name:'全部临时素材',
+        type:'media',
+        items:localCanvasAssetLibrary.items || [],
+        readonly:true,
+        source:'local'
+    }];
 }
 function canvasAssetLibraryIsLocal(){
     return activeCanvasAssetLibraryId === LOCAL_CANVAS_ASSET_LIBRARY_ID;
@@ -6769,7 +6798,7 @@ function canvasAssetLibraryIsLocal(){
 function canvasAssetSourceLibraries(){
     return [
         ...canvasAssetLibraries(),
-        {id:LOCAL_CANVAS_ASSET_LIBRARY_ID, name:'本地素材', categories:localCanvasAssetFolderCategories(), readonly:true, source:'local'}
+        {id:LOCAL_CANVAS_ASSET_LIBRARY_ID, name:'临时素材', categories:localCanvasAssetFolderCategories(), readonly:true, source:'local'}
     ];
 }
 function activeCanvasAssetLibrary(){
@@ -6952,7 +6981,7 @@ function renderCanvasAssetLibrary(){
     if(canvasAssetAddCategoryBtn) canvasAssetAddCategoryBtn.disabled = localMode;
     if(canvasAssetDropZone) {
         canvasAssetDropZone.style.display = localMode ? 'none' : 'flex';
-        canvasAssetDropZone.textContent = catType === 'workflow' ? '工作流分组支持上传/导出工作流，双击卡片导入画布' : '拖入图片或输出保存到当前分组';
+        canvasAssetDropZone.textContent = catType === 'workflow' ? '工作流分组支持上传/导出工作流，双击卡片导入画布' : '拖入图片、视频或音频保存到当前分组';
     }
     const items = cat?.items || [];
     canvasAssetGrid.innerHTML = items.length ? items.map(item => `
@@ -6961,12 +6990,13 @@ function renderCanvasAssetLibrary(){
             <div class="canvas-asset-meta">
                 <span class="canvas-asset-name" title="${escapeAttr(item.name || '')}">${escapeHtml(item.name || 'asset')}</span>
                 ${localMode
-                    ? `<span class="canvas-asset-local-tag">本地</span>`
+                    ? `<span class="canvas-asset-local-tag">临时</span>
+                       <button class="canvas-asset-action" type="button" data-canvas-material-promote="${escapeAttr(item.id || '')}" title="收藏到资产素材" aria-label="收藏到资产素材"><i data-lucide="bookmark-plus" class="w-4 h-4"></i></button>`
                     : `<button class="canvas-asset-action" type="button" data-canvas-asset-rename="${escapeAttr(item.id || '')}" title="重命名" aria-label="重命名"><i data-lucide="pencil" class="w-4 h-4"></i></button>
                        <button class="canvas-asset-action danger" type="button" data-canvas-asset-delete="${escapeAttr(item.id || '')}" title="删除" aria-label="删除"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`}
             </div>
         </div>
-    `).join('') : `<div class="canvas-asset-empty">${escapeHtml(localMode ? '暂无本地素材，请在素材库管理中上传' : '当前分组还没有资产')}</div>`;
+    `).join('') : `<div class="canvas-asset-empty">${escapeHtml(localMode ? '暂无临时素材，可以直接拖入图片、视频或音频' : '当前分组还没有资产')}</div>`;
     bindCanvasPreviewImageFallbacks(canvasAssetGrid);
     canvasAssetGrid.querySelectorAll('.canvas-asset-item').forEach(card => {
         card.addEventListener('dragstart', event => {
@@ -6991,6 +7021,12 @@ function renderCanvasAssetLibrary(){
             event.stopPropagation();
             hideCanvasAssetHoverPreview();
             await renameCanvasAssetItem(event.currentTarget.dataset.canvasAssetRename || '');
+        });
+        card.querySelector('[data-canvas-material-promote]')?.addEventListener('click', async event => {
+            event.preventDefault();
+            event.stopPropagation();
+            hideCanvasAssetHoverPreview();
+            await promoteCanvasMaterial(item?.material_id || window.MaterialPromote?.materialIdFromUrl?.(item?.url || ''), item?.name || '');
         });
         card.querySelector('[data-canvas-asset-delete]')?.addEventListener('click', async event => {
             event.preventDefault();
@@ -7086,13 +7122,13 @@ function renderImageAssetManager(){
         </div>
         <div class="asset-manager-main">
             <div class="asset-manager-tools">
-                <label class="${!cat ? 'disabled' : ''}"><i data-lucide="upload" class="w-4 h-4"></i><span>批量上传</span><input id="managerAssetUpload" type="file" multiple accept="image/*" ${!cat ? 'disabled' : ''}></label>
+                <label class="${!cat ? 'disabled' : ''}"><i data-lucide="upload" class="w-4 h-4"></i><span>批量上传</span><input id="managerAssetUpload" type="file" multiple accept="image/*,video/*,audio/*" ${!cat ? 'disabled' : ''}></label>
                 <button type="button" class="danger" ${managerSelectedAssetIds.size ? '' : 'disabled'} data-manager-asset-delete><i data-lucide="trash-2" class="w-4 h-4"></i><span>删除所选 ${managerSelectedAssetIds.size ? managerSelectedAssetIds.size : ''}</span></button>
             </div>
             <div class="asset-manager-grid">
                 ${items.length ? items.map(item => `<div class="asset-manager-card">
                     <input type="checkbox" data-manager-asset-check="${escapeAttr(item.id)}" ${managerSelectedAssetIds.has(item.id) ? 'checked' : ''}>
-                    ${canvasPreviewImgHtml(item.thumbnail || item.url || '', 512, 'alt=""')}
+                    ${canvasAssetThumbHtml(item)}
                     <span class="asset-manager-card-name" title="${escapeAttr(item.name || '')}">${escapeHtml(item.name || 'asset')}</span>
                     <div class="asset-manager-card-actions">
                         <button type="button" data-manager-asset-rename="${escapeAttr(item.id)}"><i data-lucide="pencil" class="w-3.5 h-3.5"></i><span>重命名</span></button>
@@ -9937,7 +9973,7 @@ function rhPaymentOptions(node){
     const provider = runningHubProvider();
     const selected = node.rhPayment === 'wallet' ? 'wallet' : 'free';
     return `
-        <option value="free" ${selected === 'free' ? 'selected' : ''}>RunningHub币 Key${provider?.has_key ? '' : '（未配置）'}</option>
+        <option value="free" ${selected === 'free' ? 'selected' : ''}>RH币 Key${provider?.has_key ? '' : '（未配置）'}</option>
         <option value="wallet" ${selected === 'wallet' ? 'selected' : ''}>账户余额 Key${provider?.has_wallet_key ? '' : '（未配置）'}</option>
     `;
 }

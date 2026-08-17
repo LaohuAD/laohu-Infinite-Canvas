@@ -1,0 +1,32 @@
+.DS_Store
+.venv/
+.superpowers/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.log
+*.zip
+
+# 本机密钥和用户 API 配置
+API/.env
+API/*.env
+!API/.env.example
+
+# 用户运行数据；模型能力档案属于公开程序数据
+data/*
+!data/model_capabilities/
+!data/model_capabilities/**
+
+# 用户素材、生成结果、工作流、缓存和备份
+assets/
+output/
+uploads/
+workflows/
+cache/
+backups/
+
+# 本地测试与系统临时文件
+tests/.pytest_cache/
+.pytest_cache/
+.coverage
+htmlcov/

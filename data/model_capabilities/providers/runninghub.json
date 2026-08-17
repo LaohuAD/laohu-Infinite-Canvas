@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "provider_id": "runninghub",
+  "provider_name": "RunningHub",
+  "status": "maintained",
+  "updated_at": "2026-08-12",
+  "sources": [
+    {
+      "url": "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/main/models_registry.json",
+      "kind": "official_schema",
+      "checked_at": "2026-08-12"
+    },
+    {"path": "static/js/smart-canvas.js", "kind": "runtime_verified", "checked_at": "2026-08-12"},
+    {"path": "data/api_providers.json", "kind": "user_configuration", "checked_at": "2026-08-12"}
+  ],
+  "models": [
+    {
+      "model_id": "gpt-image-2.0/text-to-image-channel-low-price",
+      "family_id": "gpt-image-2.0-low-price",
+      "family_name": "全能图片 G2 · 低价渠道版",
+      "variant_id": "text_to_image",
+      "node_type": "image_generation",
+      "operation": "text_to_image",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "official_schema",
+      "inputs": {"prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}},
+      "parameters": {
+        "aspect_ratio": {"level": "optional", "type": "enum", "options": ["empty", "3:2", "1:1", "2:3", "5:4", "4:5", "16:9", "9:16", "21:9", "3:4", "4:3", "9:21", "1:2", "2:1", "1:3", "3:1"], "default": "empty", "source_field": "aspectRatio"},
+        "resolution": {"level": "optional", "type": "enum", "options": ["1k", "2k", "4k"], "default": "1k", "source_field": "resolution"}
+      },
+      "request_mapping": {"prompt": "prompt", "aspect_ratio": "aspectRatio", "resolution": "resolution"},
+      "output": {"media_type": "image", "min": 1, "async": true}
+    },
+    {
+      "model_id": "gpt-image-2.0/edit-channel-low-price",
+      "family_id": "gpt-image-2.0-low-price",
+      "family_name": "全能图片 G2 · 低价渠道版",
+      "variant_id": "image_to_image",
+      "node_type": "image_generation",
+      "operation": "image_to_image",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "official_schema",
+      "inputs": {
+        "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"},
+        "reference": {"media_type": "image", "min": 1, "max": 10, "role": "reference"}
+      },
+      "parameters": {
+        "aspect_ratio": {"level": "optional", "type": "enum", "options": ["empty", "3:2", "1:1", "2:3", "5:4", "4:5", "16:9", "9:16", "21:9", "3:4", "4:3", "9:21", "1:2", "2:1", "1:3", "3:1"], "default": "empty", "source_field": "aspectRatio"},
+        "resolution": {"level": "optional", "type": "enum", "options": ["1k", "2k", "4k"], "default": "1k", "source_field": "resolution"}
+      },
+      "request_mapping": {"prompt": "prompt", "reference": "imageUrls", "aspect_ratio": "aspectRatio", "resolution": "resolution"},
+      "output": {"media_type": "image", "min": 1, "async": true}
+    }
+  ],
+  "dynamic_resources": {
+    "ai_applications": "data/api_providers.json:rh_apps",
+    "workflows": "data/api_providers.json:rh_workflows",
+    "rule": "每次同步远端字段后保存本地快照；字段类型、输入编号和 required 状态进入对应 AI 应用档案，不写入通用图片参数。"
+  }
+}

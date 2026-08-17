@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-08-12",
+  "vocabulary": "data/model_capabilities/capability-vocabulary.json",
+  "provider_directory": "data/model_capabilities/providers",
+  "profile_statuses": {
+    "confirmed": "已核实，可参与运行",
+    "pending": "待核实，只展示状态，不参与自动运行",
+    "deprecated": "已下线，只供历史记录和迁移使用"
+  },
+  "providers": [
+    {
+      "provider_id": "ai-money",
+      "file": "data/model_capabilities/providers/ai-money.json",
+      "status": "maintained",
+      "source": "官方文档与项目适配器",
+      "change_frequency": "中高"
+    },
+    {
+      "provider_id": "runninghub",
+      "file": "data/model_capabilities/providers/runninghub.json",
+      "status": "maintained",
+      "source": "官方模型注册表、远端字段快照与项目适配器",
+      "change_frequency": "高"
+    },
+    {
+      "provider_id": "modelscope",
+      "file": "data/model_capabilities/providers/modelscope.json",
+      "status": "maintained",
+      "source": "项目适配器与模型资料",
+      "change_frequency": "高"
+    },
+    {
+      "provider_id": "volcengine",
+      "file": "data/model_capabilities/providers/volcengine.json",
+      "status": "maintained",
+      "source": "用户添加模型后的官方 Schema 与项目适配器",
+      "change_frequency": "按接入变化"
+    },
+    {
+      "provider_id": "jimeng-cli",
+      "file": "data/model_capabilities/providers/jimeng-cli.json",
+      "status": "maintained",
+      "source": "项目 CLI 适配器与双平台安装脚本",
+      "change_frequency": "按 CLI 版本变化"
+    },
+    {
+      "provider_id": "codex-cli",
+      "file": "data/model_capabilities/providers/codex-cli.json",
+      "status": "maintained",
+      "source": "OpenAI Codex CLI 文本适配器与双平台安装脚本",
+      "change_frequency": "按 CLI 版本变化"
+    },
+    {
+      "provider_id": "agnes",
+      "file": "data/model_capabilities/providers/agnes.json",
+      "status": "maintained",
+      "source": "参考项目运行适配器与当前项目请求实现",
+      "change_frequency": "按上游模型变化"
+    },
+    {
+      "provider_id": "gemini-cli",
+      "file": "data/model_capabilities/providers/gemini-cli.json",
+      "status": "maintained",
+      "source": "Antigravity CLI 文本与图片运行适配器",
+      "change_frequency": "按 CLI 版本变化"
+    }
+  ],
+  "runtime_data": {
+    "user_provider_config": "data/api_providers.json",
+    "secrets": "API/",
+    "canvas_snapshots": "data/canvases/",
+    "results": "data/indexes/results.json"
+  }
+}

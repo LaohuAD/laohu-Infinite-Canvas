@@ -9,10 +9,10 @@ const createMenu = document.getElementById('createMenu');
 const promptInput = document.getElementById('promptInput');
 const mentionPicker = document.getElementById('mentionPicker');
 const mentionPreview = document.getElementById('mentionPreview');
-const engineSelect = document.getElementById('engineSelect');
 const dynamicParams = document.getElementById('dynamicParams');
 const runBtn = document.getElementById('runBtn');
 const cascadeRunBtn = document.getElementById('cascadeRunBtn');
+const smartExecutionCountControl = document.getElementById('smartExecutionCountControl');
 const fileInput = document.getElementById('fileInput');
 const apiKindToggle = document.getElementById('apiKindToggle');
 const inputThumbsRow = document.getElementById('inputThumbsRow');
@@ -25,7 +25,10 @@ const SMART_MINIMAX_REF_AUDIO_MAX = 3;
 const SMART_MINIMAX_DEFAULT_ENGINE = 'comfyui';
 const SMART_MINIMAX_RUNNINGHUB_WORKFLOW_ID = '2084608321469898754';
 const SMART_MINIMAX_RUNNINGHUB_WORKFLOW_TITLE = 'Minimax-多参视频生成';
-const inputPromptPreview = document.getElementById('inputPromptPreview');
+const SMART_NODE_CONTRACT = window.SmartNodeContract;
+if(!SMART_NODE_CONTRACT) throw new Error('智能画布节点契约未加载');
+const SMART_NODE_TYPES = SMART_NODE_CONTRACT.NODE_TYPES;
+const SMART_NODE_SCHEMA_VERSION = SMART_NODE_CONTRACT.SCHEMA_VERSION;
 const minimap = document.getElementById('minimap');
 const minimapContent = document.getElementById('minimapContent');
 const smartArrangeBtn = document.getElementById('smartArrangeBtn');
@@ -33,7 +36,17 @@ const imageEditModal = document.getElementById('imageEditModal');
 const smartLogModal = document.getElementById('smartLogModal');
 const smartLogList = document.getElementById('smartLogList');
 const smartShortcutModal = document.getElementById('smartShortcutModal');
+const smartLogToggle = document.getElementById('smartLogToggle');
+const smartShortcutToggle = document.getElementById('smartShortcutToggle');
+const smartPriceToggle = document.getElementById('smartPriceToggle');
 const smartWorkflowToggle = document.getElementById('smartWorkflowToggle');
+const smartPriceComparisonPanel = document.getElementById('smartPriceComparisonPanel');
+const smartPriceComparisonClose = document.getElementById('smartPriceComparisonClose');
+const smartPriceComparisonSub = document.getElementById('smartPriceComparisonSub');
+const smartPriceComparisonSearch = document.getElementById('smartPriceComparisonSearch');
+const smartPriceComparisonKind = document.getElementById('smartPriceComparisonKind');
+const smartPriceComparisonNote = document.getElementById('smartPriceComparisonNote');
+const smartPriceComparisonBody = document.getElementById('smartPriceComparisonBody');
 const smartWorkflowTransferModal = document.getElementById('smartWorkflowTransferModal');
 const smartWorkflowTransferSub = document.getElementById('smartWorkflowTransferSub');
 const smartWorkflowExportMeta = document.getElementById('smartWorkflowExportMeta');
@@ -77,10 +90,13 @@ const composerTemplateBtn = document.getElementById('composerTemplateBtn');
 let minimapViewport = document.getElementById('minimapViewport');
 let canvas = null;
 let canvasUsesConnections = true;
+let smartNodeMigrationPending = false;
+let smartMigrationRestartNotified = false;
 let nodes = [];
 let selectedId = '';
 let selectedIds = [];
 let selectedImage = {nodeId:'', index:-1};
+let openSmartGroupArrangeMenuId = '';
 let dragState = null;
 let loopInsertPreview = null;
 let selectionState = null;
@@ -98,9 +114,22 @@ let mentionInsertMode = 'token';
 let panState = null;
 let didPan = false;
 let portDragState = null;
+let shiftNodeClickCandidate = null;
+let lastShiftConnectionDragAt = 0;
+let runningHubConnectionQueue = null;
 let connectionEraseState = null;
+let smartMediaTransformState = null;
+let smartMediaToolCapabilities = {loaded:false, media_transform:false, missing:[]};
+let smartMediaToolCapabilitiesPromise = null;
+const textResultContentCache = new Map();
 let saveTimer = null;
 let apiProviders = [];
+let modelCapabilityCatalog = {schema_version:0, providers:[]};
+let modelPricingCatalog = {schema_version:0, default_status:'pending', entries:{}, unit_definitions:{}};
+let modelCapabilityLoadError = '';
+let smartPriceHighlightKey = '';
+let smartPriceHighlightModelId = '';
+let smartPriceHighlightProviderId = '';
 let comfyWorkflows = [];
 let comfyInstanceCount = 1;
 let assetLibrary = {categories:[]};
@@ -108,7 +137,9 @@ let assetLibraryOpen = false;
 let assetTab = 'image';
 let activeAssetCategoryId = '';
 let activeAssetLibraryId = '';
+let activeWorkflowAssetLibraryId = '';
 let activeWorkflowAssetCategoryId = '';
+let generationResults = {items:[], canvases:[], counts:{}};
 const LOCAL_ASSET_LIBRARY_ID = '__local_assets__';
 let localAssetLibrary = {items:[], tree:null};
 let activeLocalAssetFolderId = '__root__';
@@ -121,6 +152,8 @@ const ASSET_SMART_CATEGORY_PREFIX = '__smart_class__::';
 const PROMPT_PRESETS_KEY = 'smart_canvas_prompt_presets_v1';
 const PROMPT_TEMPLATE_GROUPS_KEY = 'smart_canvas_prompt_template_groups_v1';
 const PROMPT_TEMPLATE_OVERRIDES_KEY = 'smart_canvas_prompt_template_overrides_v1';
+const PROMPT_UNCATEGORIZED_CATEGORY_ID = 'uncategorized';
+const PROMPT_UNCATEGORIZED_CATEGORY_NAME = '未分类';
 let promptPresets = [];
 let builtinPromptTemplates = [];
 let promptLibraries = [];
@@ -131,9 +164,16 @@ let promptTemplateCategory = 'all';
 let promptTemplateSelectedId = '';
 let promptTemplateEditing = false;
 let promptTemplateGroupEditMode = false;
+let promptTemplateGroupDraft = null;
+let promptTemplateFocusedEditor = null;
 let promptPresetDeleteArmed = false;
+let capabilityParameterTooltip = null;
 let createMenuPoint = {x:0, y:0};
 let createMenuGroupId = '';
+let createMenuConnection = null;
+let createMenuKeepOpenOnNextClick = false;
+let runningHubFieldPicker = null;
+let runningHubFieldPickerOpeningEvent = null;
 let nodeClipboard = null;
 let imageClickTimer = null;
 let suppressImageClickUntil = 0;
@@ -154,12 +194,19 @@ let transientSmartCloudLinks = [];
 let runBtnCooldownToken = 0;
 let smartRunStateToken = 0;
 const activeSmartTaskPolls = new Map();
+const cancelledCanvasTaskIds = new Set();
+const cancelledExecutionResultNodeIds = new Set();
+const executionResultAbortControllers = new Map();
 const smartNodeRunTokens = new Map();
 let smartRhRandomValues = {};
 let lastImagePasteAt = 0;
 let lastNodePasteAt = 0;
 let suppressNodeClickUntil = 0;
 let textSelectionGuard = null;
+let canvasEditableResumeState = null;
+let canvasEditableWasActive = false;
+let canvasFocusWasSuspended = false;
+let canvasEditableRestoreTimer = 0;
 const UNDO_LIMIT = 40;
 const undoStack = [];
 let undoSuppressed = false;
@@ -253,6 +300,7 @@ let gridCustomLines = [];
 let gridCustomOrientation = 'h';
 let gridCustomHistory = [];
 let gridCustomDrag = null;
+let gridPresetDrag = null;
 let gridOperationMode = 'split';
 let gridJoinLayout = null;
 let gridJoinDrag = null;
@@ -306,11 +354,13 @@ let panoramaState = {
 };
 window.__smartCanvasPanoramaState = panoramaState;
 let viewport = {x:0, y:0, scale:1};
+let smartFocusTransitionTimer = 0;
 let settings = {
     engine:'api',
     apiKind:'image',
     provider_id:'',
     model:'',
+    imageFamilyId:'',
     ratio:'square',
     resolution:'4k',
     customRatio:'',
@@ -323,6 +373,7 @@ let settings = {
     count:1,
     videoProvider:'',
     videoModel:'',
+    videoFamilyId:'',
     videoDuration:5,
     videoAspect:'16:9',
     videoResolution:'',
@@ -331,12 +382,26 @@ let settings = {
     videoWatermark:false,
     videoCameraFixed:false,
     videoGenerateAudio:false,
-    videoMultimodal:true,
+    videoMultimodal:false,
     _videoMultimodalUserSet:false,
     videoUseFrameRoles:false,
     videoTrustedAsset:false,
     videoTrustedSource:'library',
     videoTempShLinks:[],
+    audioProvider:'',
+    audioModel:'',
+    audioFamilyId:'',
+    audioFormat:'mp3',
+    audioSampleRate:24000,
+    audioSpeaker:'',
+    audioSpeechRate:0,
+    audioLoudnessRate:0,
+    audioPitchRate:0,
+    musicProvider:'',
+    musicModel:'',
+    musicFamilyId:'',
+    textFamilyId:'',
+    capabilityParameters:{},
     msgenModel:'zimage',
     msCustomModel:'',
     msRatio:'square',
@@ -355,6 +420,8 @@ let settings = {
     rhInstanceType:'',
     rhParams:{},
     rhRandomActive:{},
+    rhInputBindings:{},
+    rhSchemaSnapshot:[],
     width:1024,
     height:1024,
     enhanceStrength:0.5,
@@ -482,8 +549,12 @@ function smartMediaPreviewUrl(itemOrUrl, size=512){
     const displayItem = typeof itemOrUrl === 'object' && itemOrUrl ? {...itemOrUrl, url:raw} : raw;
     const displayUrl = displayMediaUrl(displayItem);
     if(!raw || raw.startsWith('data:') || raw.startsWith('blob:')) return displayUrl;
-    if(!raw.startsWith('/output/') && !raw.startsWith('/assets/')) return displayUrl;
-    if(!/\.(png|jpe?g|webp|gif|bmp|avif|tiff?|mp4|webm|mov|m4v|avi|mkv)(\?|#|$)/i.test(raw)) return displayUrl;
+    const localRoute = raw.startsWith('/output/') || raw.startsWith('/assets/')
+        || /^\/api\/(?:results|materials|storage-files)\//.test(raw);
+    const mediaKind = typeof displayItem === 'object' ? mediaKindForItem(displayItem) : '';
+    const knownMedia = /\.(png|jpe?g|webp|gif|bmp|avif|tiff?|mp4|webm|mov|m4v|avi|mkv)(\?|#|$)/i.test(raw)
+        || ['image', 'video'].includes(mediaKind);
+    if(!localRoute || !knownMedia) return displayUrl;
     const width = Math.max(64, Math.min(2048, Math.round(Number(size) || 512)));
     return `/api/media-preview?w=${width}&url=${encodeURIComponent(raw)}`;
 }
@@ -515,7 +586,7 @@ function smartVideoFallbackHtml(url, attrs=''){
 function smartVideoPlayerHtml(url, attrs=''){
     const original = smartOriginalMediaUrl(url);
     const safe = escapeHtml(displayMediaUrl({url:original}));
-    return `<video src="${safe}" data-url="${escapeAttr(original)}" data-inline-video-active="1" controls autoplay playsinline preload="metadata" disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback"${attrs ? ` ${attrs}` : ''}></video>`;
+    return `<video src="${safe}" data-url="${escapeAttr(original)}" data-inline-video-active="1" controls playsinline preload="metadata" disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback"${attrs ? ` ${attrs}` : ''}></video><button class="smart-video-play" type="button" title="播放" aria-label="播放"><i data-lucide="play"></i></button>`;
 }
 function smartMinimaxVideoPlayerHtml(url){
     const original = smartOriginalMediaUrl(url);
@@ -528,9 +599,9 @@ function smartActivateVideoPreview(target){
     if(!img){
         const fallback = target?.matches?.('video[data-url]') ? target : root?.querySelector?.('video[data-url]');
         if(fallback){
-            fallback.controls = true;
-            fallback.muted = false;
-            fallback.play?.().catch(() => {});
+            bindSmartInlineVideoControls(fallback, null);
+            if(fallback.paused) fallback.play?.().catch(() => {});
+            else fallback.pause?.();
             return true;
         }
         return false;
@@ -548,12 +619,46 @@ function smartActivateVideoPreview(target){
     const video = tpl.content.firstElementChild;
     if(!video) return false;
     img.replaceWith(video);
-    video.parentElement?.querySelector?.('.smart-video-play')?.style?.setProperty('display', 'none');
-    video.addEventListener('ended', () => {
+    bindSmartInlineVideoControls(video, image);
+    toggleSmartInlineVideoPlayback(video, image);
+    return true;
+}
+function bindSmartInlineVideoControls(video, image=null){
+    if(!video || video.dataset.smartInlineControlsBound === '1') return video;
+    video.dataset.smartInlineControlsBound = '1';
+    const card = video.closest('.media-video-card,.video-thumb') || video.parentElement;
+    const button = card?.querySelector('.smart-video-play');
+    const sync = () => {
+        const playing = !video.paused && !video.ended;
+        card?.classList.toggle('is-playing', playing);
+        button?.classList.toggle('is-playing', playing);
+        if(button){
+            button.title = playing ? '暂停' : '播放';
+            button.setAttribute('aria-label', playing ? '暂停' : '播放');
+        }
         if(image) image._inlineVideoActive = true;
         video.dataset.inlineVideoActive = '1';
+    };
+    video.addEventListener('play', sync);
+    video.addEventListener('playing', sync);
+    video.addEventListener('pause', sync);
+    video.addEventListener('ended', sync);
+    video.addEventListener('error', () => {
+        sync();
+        toast('视频结果无法播放，请检查生成结果是否已保存');
     });
-    video.play?.().catch(() => {});
+    video.addEventListener('mouseenter', sync);
+    video.addEventListener('mouseleave', sync);
+    sync();
+    return video;
+}
+function toggleSmartInlineVideoPlayback(video, image=null){
+    if(!video) return false;
+    bindSmartInlineVideoControls(video, image);
+    if(video.paused || video.ended){
+        const playback = video.play?.();
+        playback?.catch?.(() => toast('视频结果无法播放，请检查生成结果是否已保存'));
+    } else video.pause?.();
     return true;
 }
 function isSmartPreviewImage(img){
@@ -568,6 +673,13 @@ function bindSmartPreviewImageFallbacks(root=document){
         img.dataset.previewFallbackBound = '1';
         img.addEventListener('error', () => {
             const original = img.dataset.originalSrc || '';
+            const preview = img.dataset.previewSrc || '';
+            const highResTarget = img.dataset.selectedHighResTarget || '';
+            if(highResTarget && img.getAttribute('src') === highResTarget){
+                delete img.dataset.selectedHighResTarget;
+                if(preview && preview !== highResTarget) img.src = preview;
+                return;
+            }
             if(img.dataset.previewKind === 'video'){
                 const tpl = document.createElement('template');
                 tpl.innerHTML = smartVideoFallbackHtml(original, img.dataset.videoFallbackAttrs || '');
@@ -623,6 +735,11 @@ function smartNodeElementsForHighResSync(root){
 function smartViewportWantsHighRes(){
     return Number(viewport?.scale || 1) >= SMART_HIGH_RES_ZOOM_THRESHOLD;
 }
+function smartStableHighResPreviewUrl(img){
+    const original = smartOriginalMediaUrl(img?.dataset?.originalSrc || '');
+    if(!original) return '';
+    return smartMediaPreviewUrl({url:original, kind:'image'}, 2048) || displayMediaUrl({url:original});
+}
 function smartImageNearViewport(img){
     if(!img?.isConnected || !shell) return false;
     const shellRect = shell.getBoundingClientRect();
@@ -644,7 +761,7 @@ function syncSmartSelectedImageResolution(root=null){
                 if(preview && img.getAttribute('src') !== preview) img.src = preview;
                 return;
             }
-            const target = displayMediaUrl({url:smartOriginalMediaUrl(original)});
+            const target = smartStableHighResPreviewUrl(img);
             if(!target) return;
             img.dataset.selectedHighResTarget = target;
             if(smartSelectedHighResLoaded.has(target)){
@@ -704,7 +821,7 @@ function isApiLikeEngine(engine){
 function smartLoopRoundSettings(runSettings, ctx=smartLoopContext){
     const next = {...(runSettings || {})};
     const imageCountEngine = isApiLikeEngine(next.engine)
-        ? next.apiKind !== 'video'
+        ? next.apiKind === 'image'
         : next.engine === 'modelscope';
     if(ctx?.nodeId && imageCountEngine){
         next.count = 1;
@@ -825,8 +942,11 @@ function serializableSmartNode(node){
 }
 function selectedSmartWorkflowPayload(){
     const ids = selectedNodeIds();
-    const idSet = new Set(ids);
-    const selectedNodes = nodes.filter(node => idSet.has(node.id)).map(serializableSmartNode);
+    const exportNodes = ids.length
+        ? nodes.filter(node => ids.includes(node.id)).map(serializableSmartNode)
+        : nodes.map(serializableSmartNode);
+    const idSet = new Set(exportNodes.map(node => node.id));
+    const selectedNodes = exportNodes;
     const selectedSet = new Set(selectedNodes.map(node => node.id));
     const selectedConnections = (canvas?.connections || [])
         .filter(conn => selectedSet.has(conn.from) && selectedSet.has(conn.to))
@@ -848,7 +968,7 @@ function normalizeImportedSmartWorkflow(data){
 }
 function openSmartWorkflowTransferModal(){
     if(!canvas){ toast('请先打开画布'); return; }
-    toggleAssetLibrary(false);
+    closeSmartTopPanels('workflow');
     updateSmartWorkflowTransferMeta();
     smartWorkflowTransferModal?.classList.add('open');
     smartWorkflowToggle?.classList.add('active');
@@ -864,15 +984,20 @@ function updateSmartWorkflowTransferMeta(){
     const nodeCount = payload.nodes.length;
     const connCount = payload.connections.length;
     smartWorkflowExportMeta?.classList.remove('busy', 'success');
-    if(smartWorkflowExportMeta) smartWorkflowExportMeta.textContent = nodeCount ? `已选择 ${nodeCount} 个节点，${connCount} 条连线` : '未选择节点，请先选中要导出的组件';
-    if(smartWorkflowTransferSub) smartWorkflowTransferSub.textContent = nodeCount ? '导出当前选中内容，或把工作流导入到当前画布' : '请先选中节点再导出；导入会追加到当前画布';
+    const hasSelection = selectedNodeIds().length > 0;
+    if(smartWorkflowExportMeta) smartWorkflowExportMeta.textContent = hasSelection
+        ? `将导出选中的 ${nodeCount} 个节点，${connCount} 条连线`
+        : `将导出当前画布全部 ${nodeCount} 个节点，${connCount} 条连线`;
+    if(smartWorkflowTransferSub) smartWorkflowTransferSub.textContent = hasSelection
+        ? '当前有选中内容，只导出选中节点；导入会追加到当前画布'
+        : '当前未选中节点，将导出整个画布；导入会追加到当前画布';
 }
 async function exportSelectedSmartWorkflow(includeResources=false){
     if(!canvas) return;
     const payload = selectedSmartWorkflowPayload();
     if(!payload.nodes.length){
         updateSmartWorkflowTransferMeta();
-        toast('未选择节点，请先选中要导出的组件');
+        toast('当前画布没有可导出的节点');
         return;
     }
     try {
@@ -958,12 +1083,76 @@ async function importSmartWorkflowFile(file){
     }
 }
 const RECENT_SMART_SETTINGS_KEY = 'smart_canvas_recent_run_settings_v1';
+const SMART_CANVAS_PERSONALIZATION_KEY = 'smart_canvas_personalization_v1';
 const initialSmartSettings = cloneSmartSettings(settings);
 let canvasDefaultSmartSettings = cloneSmartSettings(settings);
 let recentSmartSettingsByMode = {};
+let smartCanvasPersonalization = null;
+let smartCapabilityOptionDragState = null;
+const smartCapabilityOptionShiftAnimations = new WeakMap();
+let smartPreferenceDragState = null;
+let smartPreferenceDragMoved = false;
+
+function smartCanvasPersonalizationStore(){
+    if(smartCanvasPersonalization) return smartCanvasPersonalization;
+    try {
+        const parsed = JSON.parse(localStorage.getItem(SMART_CANVAS_PERSONALIZATION_KEY) || '{}');
+        smartCanvasPersonalization = parsed && typeof parsed === 'object' ? parsed : {};
+    } catch(e) {
+        smartCanvasPersonalization = {};
+    }
+    if(!smartCanvasPersonalization.version) smartCanvasPersonalization.version = 1;
+    if(!smartCanvasPersonalization.executionLayouts || typeof smartCanvasPersonalization.executionLayouts !== 'object') smartCanvasPersonalization.executionLayouts = {};
+    if(!smartCanvasPersonalization.parameterOptionOrder || typeof smartCanvasPersonalization.parameterOptionOrder !== 'object') smartCanvasPersonalization.parameterOptionOrder = {};
+    if(!smartCanvasPersonalization.modelOrder || typeof smartCanvasPersonalization.modelOrder !== 'object') smartCanvasPersonalization.modelOrder = {};
+    return smartCanvasPersonalization;
+}
+function saveSmartCanvasPersonalization(){
+    try { localStorage.setItem(SMART_CANVAS_PERSONALIZATION_KEY, JSON.stringify(smartCanvasPersonalizationStore())); } catch(e) {}
+}
+function smartPreferenceScopeKey(kind, ...parts){
+    return [kind, ...parts].map(part => String(part ?? '').trim()).join('::');
+}
+function smartOrderedItems(items, scope, idFor){
+    const source = Array.isArray(items) ? items : [];
+    const stored = smartCanvasPersonalizationStore().modelOrder[scope];
+    if(!Array.isArray(stored) || !stored.length) return source;
+    const positions = new Map(stored.map((id, index) => [String(id), index]));
+    return [...source].sort((left, right) => {
+        const leftId = String(idFor(left) || '');
+        const rightId = String(idFor(right) || '');
+        const leftPosition = positions.has(leftId) ? positions.get(leftId) : Number.MAX_SAFE_INTEGER;
+        const rightPosition = positions.has(rightId) ? positions.get(rightId) : Number.MAX_SAFE_INTEGER;
+        return leftPosition - rightPosition;
+    });
+}
+function saveSmartPreferenceOrder(scope, ids){
+    const store = smartCanvasPersonalizationStore();
+    store.modelOrder[scope] = [...new Set((ids || []).map(id => String(id || '').trim()).filter(Boolean))];
+    saveSmartCanvasPersonalization();
+}
+function capabilityLayoutKey(profile){
+    return smartPreferenceScopeKey(
+        profile?.node_type || '',
+        profile?.provider_id || '',
+        profile?.family_id || '',
+        profile?.model_id || ''
+    );
+}
+function capabilityOptionOrderScope(profile, parameterKey){
+    return smartPreferenceScopeKey('parameter-options', capabilityLayoutKey(profile), parameterKey);
+}
+function saveCapabilityOptionOrder(scope, order){
+    const store = smartCanvasPersonalizationStore();
+    store.parameterOptionOrder[scope] = [...new Set((order || []).map(item => String(item || '').trim()).filter(Boolean))];
+    saveSmartCanvasPersonalization();
+}
+function renderPreferenceHandle(scope, id){
+    return `<span class="model-order-handle" draggable="true" data-preference-sort-handle data-preference-scope="${escapeAttr(scope)}" data-preference-id="${escapeAttr(id)}" title="${escapeAttr(capabilityUiText('拖动调整顺序','Drag to reorder'))}" aria-hidden="true"><i data-lucide="grip-vertical"></i></span>`;
+}
 function smartSettingsModeKey(source=settings){
     const engine = ['api','volcengine','modelscope','comfy','runninghub'].includes(source?.engine) ? source.engine : 'api';
-    if(engine === 'api') return `api:${source?.apiKind === 'video' ? 'video' : 'image'}`;
+    if(engine === 'api') return `api:${['text','image','video','audio'].includes(source?.apiKind) ? source.apiKind : 'image'}`;
     if(engine === 'volcengine') return `volcengine:${source?.apiKind === 'video' ? 'video' : 'image'}`;
     if(engine === 'comfy') return `comfy:${['text','enhance','edit','custom'].includes(source?.comfyMode) ? source.comfyMode : 'text'}`;
     if(engine === 'runninghub') return 'runninghub';
@@ -1003,7 +1192,7 @@ function rememberRecentSmartSettings(source=settings, node=null){
 }
 function applyRecentSmartSettingsForCurrentMode(){
     const requestedEngine = ['api','volcengine','modelscope','comfy','runninghub'].includes(settings.engine) ? settings.engine : 'api';
-    const requestedApiKind = settings.apiKind === 'video' ? 'video' : 'image';
+    const requestedApiKind = ['image','video','audio'].includes(settings.apiKind) ? settings.apiKind : 'image';
     const key = smartSettingsModeKey(settings);
     const saved = recentSmartSettingsForMode(key);
     if(!Object.keys(saved).length){
@@ -1025,13 +1214,28 @@ function clearVolcengineSelectionOutsideVolcengine(target=settings){
     return target;
 }
 function isSmartImageNode(node){
-    return Boolean(node && (node.type === 'smart-image' || !node.type));
+    return Boolean(node && (node.type === SMART_NODE_TYPES.material || node.type === 'smart-image' || !node.type));
+}
+function isSmartMaterialNode(node){
+    return Boolean(node && node.type === SMART_NODE_TYPES.material);
+}
+function isSmartExecutionNode(node){
+    return SMART_NODE_CONTRACT.isExecutionNode(node);
+}
+function isSmartResultGroupNode(node){
+    return SMART_NODE_CONTRACT.isResultGroupNode(node);
 }
 function isSmartGroupNode(node){
     return Boolean(node && node.type === 'smart-group');
 }
 function isSmartRunnableNode(node){
-    return Boolean(isSmartImageNode(node) || isSmartGroupNode(node) || node?.type === 'smart-minimax');
+    return Boolean(isSmartExecutionNode(node) || node?.type === 'smart-minimax');
+}
+function normalizeSmartMediaReference(item, index=0, extra={}){
+    return SMART_NODE_CONTRACT.normalizeMediaReference(item, index, extra);
+}
+function resultGroupMediaItems(node){
+    return SMART_NODE_CONTRACT.expandResultGroup(node, id => nodes.find(item => item.id === id));
 }
 function isHistoryGroupNode(node){
     return Boolean(isSmartImageNode(node) && (node.isHistoryGroup || node.historyFor));
@@ -1064,7 +1268,7 @@ function normalizeLegacySmartNode(node){
             : (fallbackImage ? [fallbackImage] : []);
         const normalized = {
             ...node,
-            type:'smart-image',
+            type:SMART_NODE_TYPES.material,
             title:images.length > 1 ? 'Group' : (images.length ? 'Image' : tr('smart.createImportNode')),
             images
         };
@@ -1074,7 +1278,8 @@ function normalizeLegacySmartNode(node){
         delete normalized.resultGrouping;
         return normalized;
     }
-    if(!node.type) node.type = 'smart-image';
+    if(!node.type) node.type = SMART_NODE_TYPES.material;
+    if(isSmartExecutionNode(node)) return SMART_NODE_CONTRACT.normalizeExecutionNode(node);
     if(node.type === 'smart-image') delete node.imageMode;
     if(node.type === 'smart-image' && node.historyFor) node.isHistoryGroup = true;
     return node;
@@ -1168,7 +1373,7 @@ function smartSettingsForNode(node){
         ...nodeSettings
     };
     normalizeSmartVideoModeSettings(base, true);
-    return withOutpaintDisplaySettings(node, base);
+    return withOutpaintDisplaySettings(node, SMART_NODE_CONTRACT.normalizeExecutionSettings(node, base));
 }
 function activeSettingsSubject(){
     const active = activeComposerSubject?.id
@@ -1186,6 +1391,7 @@ function persistActiveSmartSettings(){
     if(!composer?.classList?.contains('open')) return;
     const subject = activeComposerNode();
     if(!subject) return;
+    settings = SMART_NODE_CONTRACT.normalizeExecutionSettings(subject, settings);
     subject.runSettings = settingsForStorage(settings);
     rememberRecentSmartSettings(settings, subject);
 }
@@ -1234,12 +1440,26 @@ function applyTheme(theme){
     document.body?.classList.toggle('theme-dark', dark);
     document.body?.classList.toggle('studio-theme-dark', dark);
 }
-function toast(text){
+function toast(text, options={}){
     const el = document.getElementById('toast');
-    el.textContent = text;
+    const action = options.action === 'logs';
+    el.classList.toggle('error', options.tone === 'error');
+    el.innerHTML = `<span class="toast-message">${escapeHtml(text)}</span>${action ? `<button class="toast-action" type="button"><i data-lucide="list-todo"></i><span>${escapeHtml(tr('canvas.openLogs'))}</span></button>` : ''}`;
+    el.querySelector('.toast-action')?.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        el.classList.remove('show');
+        openSmartCanvasLog();
+    });
+    if(action) refreshIcons();
     el.classList.add('show');
     clearTimeout(toast._timer);
-    toast._timer = setTimeout(() => el.classList.remove('show'), 1800);
+    toast._timer = setTimeout(() => el.classList.remove('show'), options.duration || (action ? 4200 : 1800));
+}
+function errorToast(text, options={}){
+    const message = String(text || '').trim();
+    if(options.log !== false) addSmartCanvasNoticeLog(message, options.node || null);
+    toast(message, {tone:'error', action:'logs'});
 }
 let generationCompleteSoundAt = 0;
 function playGenerationCompleteSound(){
@@ -1320,6 +1540,196 @@ function isEditableTarget(target){
     const el = target || document.activeElement;
     return !!el?.closest?.('input, textarea, select, option, [contenteditable="true"], .prompt-node-control, .prompt-input');
 }
+const SMART_TEXT_EDITABLE_SELECTOR = 'textarea, input:not([type]), input[type="text"], input[type="search"], input[type="url"], input[type="email"], input[type="tel"], input[type="password"], input[type="number"], [contenteditable="true"]';
+function canvasTextEditableForTarget(target){
+    const element = target?.nodeType === 1 ? target : target?.parentElement;
+    const editable = element?.matches?.(SMART_TEXT_EDITABLE_SELECTOR)
+        ? element
+        : element?.closest?.(SMART_TEXT_EDITABLE_SELECTOR);
+    if(!editable || editable.disabled || editable.readOnly) return null;
+    return editable;
+}
+function canvasEditableRootDescriptor(editable){
+    const nodeRoot = editable?.closest?.('.image-node[data-id]');
+    if(nodeRoot?.dataset.id) return {kind:'node', id:nodeRoot.dataset.id, element:nodeRoot};
+    const idRoot = editable?.parentElement?.closest?.('[id]');
+    if(idRoot?.id) return {kind:'id', id:idRoot.id, element:idRoot};
+    return {kind:'body', id:'', element:document.body};
+}
+function canvasEditableCandidates(root){
+    if(!root) return [];
+    const candidates = [...root.querySelectorAll(SMART_TEXT_EDITABLE_SELECTOR)];
+    if(root.matches?.(SMART_TEXT_EDITABLE_SELECTOR)) candidates.unshift(root);
+    return candidates;
+}
+function canvasEditableDescriptor(editable){
+    const root = canvasEditableRootDescriptor(editable);
+    const candidates = canvasEditableCandidates(root.element);
+    const data = [...editable.attributes]
+        .filter(attribute => attribute.name.startsWith('data-') && attribute.name !== 'data-scroll-bound' && attribute.value.length <= 240)
+        .slice(0, 10)
+        .map(attribute => [attribute.name, attribute.value]);
+    return {
+        rootKind:root.kind,
+        rootId:root.id,
+        tag:editable.tagName.toLowerCase(),
+        elementId:editable.id || '',
+        type:editable.getAttribute('type') || '',
+        name:editable.getAttribute('name') || '',
+        placeholder:editable.getAttribute('placeholder') || '',
+        classes:[...editable.classList].filter(name => !/^(active|focused|open|invalid|dragging)$/.test(name)),
+        data,
+        ordinal:candidates.indexOf(editable)
+    };
+}
+function canvasEditableRootFromDescriptor(descriptor){
+    if(descriptor?.rootKind === 'node') return world?.querySelector?.(`.image-node[data-id="${CSS.escape(descriptor.rootId || '')}"]`) || null;
+    if(descriptor?.rootKind === 'id') return document.getElementById(descriptor.rootId || '');
+    return document.body;
+}
+function resolveCanvasEditable(descriptor){
+    const root = canvasEditableRootFromDescriptor(descriptor);
+    if(!root) return null;
+    if(descriptor.elementId){
+        const byId = document.getElementById(descriptor.elementId);
+        if(byId && (byId === root || root.contains(byId)) && canvasTextEditableForTarget(byId) === byId) return byId;
+    }
+    const candidates = canvasEditableCandidates(root).filter(candidate => candidate.tagName.toLowerCase() === descriptor.tag);
+    let best = null;
+    let bestScore = -Infinity;
+    candidates.forEach(candidate => {
+        let score = 0;
+        let strongMatches = 0;
+        (descriptor.data || []).forEach(([name, value]) => {
+            if(candidate.getAttribute(name) === value){ score += 24; strongMatches += 1; }
+            else if(candidate.hasAttribute(name)) score -= 8;
+        });
+        if(descriptor.name && candidate.getAttribute('name') === descriptor.name){ score += 18; strongMatches += 1; }
+        if(descriptor.type && candidate.getAttribute('type') === descriptor.type) score += 4;
+        if(descriptor.placeholder && candidate.getAttribute('placeholder') === descriptor.placeholder){ score += 10; strongMatches += 1; }
+        (descriptor.classes || []).forEach(name => {
+            if(candidate.classList.contains(name)) score += 6;
+        });
+        const allCandidates = canvasEditableCandidates(root);
+        if(allCandidates[descriptor.ordinal] === candidate) score += 3;
+        const hasClassIdentity = (descriptor.classes || []).length > 0 && (descriptor.classes || []).every(name => candidate.classList.contains(name));
+        if(strongMatches === 0 && !hasClassIdentity && allCandidates[descriptor.ordinal] !== candidate) score = -Infinity;
+        if(score > bestScore){ best = candidate; bestScore = score; }
+    });
+    return best;
+}
+function canvasEditableBoundaryPath(root, boundaryNode){
+    const path = [];
+    let node = boundaryNode;
+    while(node && node !== root){
+        const parent = node.parentNode;
+        if(!parent) return null;
+        path.unshift([...parent.childNodes].indexOf(node));
+        node = parent;
+    }
+    return node === root ? path : null;
+}
+function canvasEditableBoundaryNode(root, path){
+    let node = root;
+    for(const index of path || []){
+        node = node?.childNodes?.[index];
+        if(!node) return null;
+    }
+    return node;
+}
+function canvasEditableBoundaryOffset(node, offset){
+    const limit = node?.nodeType === Node.TEXT_NODE ? node.data.length : (node?.childNodes?.length || 0);
+    return Math.max(0, Math.min(Number(offset) || 0, limit));
+}
+function captureCanvasEditableState(target=document.activeElement){
+    const editable = canvasTextEditableForTarget(target);
+    if(!editable) return null;
+    const state = {
+        descriptor:canvasEditableDescriptor(editable),
+        scrollTop:editable.scrollTop || 0,
+        scrollLeft:editable.scrollLeft || 0,
+        capturedAt:Date.now()
+    };
+    if(editable.matches('textarea, input')){
+        if(Number.isInteger(editable.selectionStart)){
+            state.selection = {
+                kind:'control',
+                start:editable.selectionStart,
+                end:editable.selectionEnd,
+                direction:editable.selectionDirection || 'none'
+            };
+        }
+    } else {
+        const selection = window.getSelection?.();
+        if(selection?.rangeCount && editable.contains(selection.anchorNode) && editable.contains(selection.focusNode)){
+            state.selection = {
+                kind:'contenteditable',
+                anchorPath:canvasEditableBoundaryPath(editable, selection.anchorNode),
+                anchorOffset:selection.anchorOffset,
+                focusPath:canvasEditableBoundaryPath(editable, selection.focusNode),
+                focusOffset:selection.focusOffset
+            };
+        }
+    }
+    canvasEditableResumeState = state;
+    return state;
+}
+function restoreCanvasEditableState(state=canvasEditableResumeState, options={}){
+    if(!state?.descriptor) return false;
+    const editable = resolveCanvasEditable(state.descriptor);
+    if(!editable) return false;
+    const shouldFocus = options.focus !== false && !document.hidden;
+    if(shouldFocus){
+        try { editable.focus({preventScroll:true}); } catch(_) { editable.focus?.(); }
+    }
+    const selection = state.selection;
+    if(selection?.kind === 'control' && typeof editable.setSelectionRange === 'function'){
+        const length = String(editable.value || '').length;
+        const start = Math.max(0, Math.min(Number(selection.start) || 0, length));
+        const end = Math.max(start, Math.min(Number(selection.end) || start, length));
+        try { editable.setSelectionRange(start, end, selection.direction || 'none'); } catch(_) {}
+    } else if(selection?.kind === 'contenteditable'){
+        const anchorNode = canvasEditableBoundaryNode(editable, selection.anchorPath);
+        const focusNode = canvasEditableBoundaryNode(editable, selection.focusPath);
+        if(anchorNode && focusNode){
+            const anchorOffset = canvasEditableBoundaryOffset(anchorNode, selection.anchorOffset);
+            const focusOffset = canvasEditableBoundaryOffset(focusNode, selection.focusOffset);
+            const current = window.getSelection?.();
+            try {
+                current.removeAllRanges();
+                if(typeof current.setBaseAndExtent === 'function') current.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
+                else {
+                    const range = document.createRange();
+                    range.setStart(anchorNode, anchorOffset);
+                    range.setEnd(focusNode, focusOffset);
+                    current.addRange(range);
+                }
+            } catch(_) {}
+        }
+    }
+    const restoreScroll = () => {
+        editable.scrollTop = state.scrollTop || 0;
+        editable.scrollLeft = state.scrollLeft || 0;
+    };
+    restoreScroll();
+    requestAnimationFrame(restoreScroll);
+    canvasEditableResumeState = {...state, descriptor:canvasEditableDescriptor(editable)};
+    canvasEditableWasActive = shouldFocus;
+    return true;
+}
+function scheduleCanvasEditableRestore(state=canvasEditableResumeState, delay=0, attempt=0){
+    if(state) canvasEditableResumeState = state;
+    clearTimeout(canvasEditableRestoreTimer);
+    canvasEditableRestoreTimer = setTimeout(() => {
+        canvasEditableRestoreTimer = 0;
+        if(document.hidden) return;
+        if(restoreCanvasEditableState(canvasEditableResumeState)){
+            canvasFocusWasSuspended = false;
+            return;
+        }
+        if(canvasFocusWasSuspended && attempt < 8) scheduleCanvasEditableRestore(canvasEditableResumeState, 80 + attempt * 40, attempt + 1);
+    }, Math.max(0, Number(delay) || 0));
+}
 function safeScale(value){
     const n = Number(value);
     return Number.isFinite(n) && n > 0 ? n : 1;
@@ -1340,21 +1750,75 @@ const MEDIA_GROUP_MAX_VISIBLE_ROWS = 3;
 const SMART_GROUP_MAX_VISIBLE_ROWS = 4;
 const EMPTY_UPLOAD_NODE_WIDTH = 316;
 const EMPTY_UPLOAD_NODE_HEIGHT = 194;
+const SINGLE_MATERIAL_TARGET_HEIGHT = EMPTY_UPLOAD_NODE_HEIGHT;
+const SINGLE_MATERIAL_MIN_WIDTH = 120;
+const SINGLE_MATERIAL_MAX_WIDTH = 360;
 const SMART_GROUP_DEFAULT_WIDTH = 340;
 const SMART_GROUP_DEFAULT_HEIGHT = 286;
 const SMART_GROUP_LEGACY_HEIGHT = 220;
-// 分组可缩小到的最小尺寸（缩小分组时组内图片随之等比缩小，靠这个区间产生缩放系数）。
+// 分组手柄只调整容器外框，成员保持各自位置和尺寸。
 const SMART_GROUP_MIN_WIDTH = 150;
 const SMART_GROUP_MIN_HEIGHT = 130;
-// 组内成员（提示词/循环）的最大缩放。已移除“放大不超过原始”的限制：向外拉分组时成员随之放大。
-const SMART_GROUP_MAX_MEMBER_ZOOM = 4;
 function mediaNodeDefaultScale(node){
     if((node?.images || []).length > 1 && !Number.isFinite(Number(node?.scale))) return MEDIA_GROUP_DEFAULT_SCALE;
     return Number.isFinite(Number(node?.scale)) && Number(node.scale) > 0 ? Number(node.scale) : MEDIA_NODE_DEFAULT_SCALE;
 }
+function defaultSingleMaterialSize(image){
+    if(!image || isTextMediaItem(image) || isAudioMediaItem(image) || isFileMediaItem(image)){
+        return {width:EMPTY_UPLOAD_NODE_WIDTH, height:EMPTY_UPLOAD_NODE_HEIGHT};
+    }
+    const size = mediaLayoutSize(image);
+    if(!(size.width > 0 && size.height > 0)){
+        return {width:EMPTY_UPLOAD_NODE_WIDTH, height:EMPTY_UPLOAD_NODE_HEIGHT};
+    }
+    const width = Math.round(SINGLE_MATERIAL_TARGET_HEIGHT * size.width / size.height);
+    return {
+        width:Math.max(SINGLE_MATERIAL_MIN_WIDTH, Math.min(SINGLE_MATERIAL_MAX_WIDTH, width)),
+        height:SINGLE_MATERIAL_TARGET_HEIGHT
+    };
+}
+function singleMaterialHasManualSize(node, image){
+    if(String(node?.mediaSizeMode || '') === 'manual') return true;
+    if(String(node?.mediaSizeMode || '') === 'auto') return false;
+    const width = Number(node?.w);
+    const height = Number(node?.h);
+    if(!(width > 24 && height > 24)) return false;
+    if((Math.abs(width - EMPTY_UPLOAD_NODE_WIDTH) <= 2 && Math.abs(height - EMPTY_UPLOAD_NODE_HEIGHT) <= 2)
+        || (Math.abs(width - 260) <= 2 && Math.abs(height - 180) <= 2)) return false;
+    const size = mediaLayoutSize(image);
+    if(size.width > 0 && size.height > 0){
+        const auto = defaultSingleMaterialSize(image);
+        return Math.abs(width - auto.width) > 2 || Math.abs(height - auto.height) > 2;
+    }
+    return false;
+}
 function createImageNodeAt(point, images=[], options={}){
-    const layout = imageLayout(images || [], mediaNodeDefaultScale({type:'smart-image', images:images || []}), {type:'smart-image', images:images || []});
+    const seed = {type:SMART_NODE_TYPES.material, images:images || []};
+    const defaultSize = images?.length === 1 ? defaultSingleMaterialSize(images[0]) : null;
+    if(defaultSize){ seed.w = defaultSize.width; seed.h = defaultSize.height; }
+    const layout = imageLayout(images || [], mediaNodeDefaultScale(seed), seed);
     return createNode((point?.x || 0) - Math.round(layout.width / 2), (point?.y || 0) - Math.round(layout.height / 2), images, options);
+}
+function createTextMaterialNodeAt(point, text='', options={}){
+    if(!options.skipUndo) pushUndo();
+    const name = String(options.name || (String(text || '').trim() ? '剪贴板文本.md' : '未命名文本.md'));
+    const node = SMART_NODE_CONTRACT.createTextMaterial({
+        id:uid('material'),
+        x:Number(point?.x || 0) - 158,
+        y:Number(point?.y || 0) - 97,
+        name,
+        text,
+        sourceKind:options.sourceKind || 'input'
+    });
+    if(!node) return null;
+    node.scale = MEDIA_NODE_DEFAULT_SCALE;
+    node.w = EMPTY_UPLOAD_NODE_WIDTH;
+    node.h = EMPTY_UPLOAD_NODE_HEIGHT;
+    nodes.push(node);
+    if(options.select !== false) selectedId = node.id;
+    render();
+    scheduleSave();
+    return node;
 }
 function smartGroupLayoutSize(node){
     const explicitW = Number(node?.w);
@@ -1368,6 +1832,19 @@ function smartGroupLayoutSize(node){
         height:Math.round(height)
     };
 }
+function fitSmartGroupBounds(group, members=smartGroupMembers(group)){
+    if(!isSmartGroupNode(group) || !members.length) return false;
+    const rects = members.map(nodeRect);
+    const minX = Math.min(...rects.map(rect => rect.x));
+    const minY = Math.min(...rects.map(rect => rect.y));
+    const maxX = Math.max(...rects.map(rect => rect.x + rect.width));
+    const maxY = Math.max(...rects.map(rect => rect.y + rect.height));
+    group.x = Math.round(minX - SMART_GROUP_ARRANGE_PADDING);
+    group.y = Math.round(minY - SMART_GROUP_ARRANGE_HEADER - SMART_GROUP_ARRANGE_PADDING);
+    group.w = Math.max(SMART_GROUP_MIN_WIDTH, Math.round(maxX - minX + SMART_GROUP_ARRANGE_PADDING * 2));
+    group.h = Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(maxY - minY + SMART_GROUP_ARRANGE_PADDING * 2 + SMART_GROUP_ARRANGE_HEADER));
+    return true;
+}
 function smartGroupMembers(node){
     if(!isSmartGroupNode(node)) return [];
     const ids = Array.isArray(node.items) ? node.items : [];
@@ -1378,28 +1855,58 @@ function smartGroupMembers(node){
         return true;
     });
 }
+function smartGroupMemberOriginalLayout(node){
+    if(!node || isSmartGroupNode(node)) return null;
+    if(!node.smartGroupOriginalLayout){
+        node.smartGroupOriginalLayout = {
+            hasW:Object.prototype.hasOwnProperty.call(node, 'w'),
+            hasH:Object.prototype.hasOwnProperty.call(node, 'h'),
+            hasScale:Object.prototype.hasOwnProperty.call(node, 'scale'),
+            w:node.w,
+            h:node.h,
+            scale:node.scale
+        };
+    }
+    return node.smartGroupOriginalLayout;
+}
+function smartGroupMemberTargetSize(node, targetHeight=194){
+    const rect = nodeRect(node);
+    const sourceWidth = Math.max(40, Number(rect.width) || 120);
+    const sourceHeight = Math.max(40, Number(rect.height) || 120);
+    const height = Math.max(72, Number(targetHeight) || 194);
+    return {
+        w:Math.max(72, Math.round(sourceWidth * height / sourceHeight)),
+        h:Math.round(height)
+    };
+}
+function resizeSmartGroupMember(node, targetHeight=194){
+    if(!node || isSmartGroupNode(node)) return null;
+    smartGroupMemberOriginalLayout(node);
+    const size = smartGroupMemberTargetSize(node, targetHeight);
+    node.w = size.w;
+    node.h = size.h;
+    node.scale = 1;
+    return {node, ...size};
+}
+function restoreSmartGroupMemberOriginalLayout(node){
+    const original = node?.smartGroupOriginalLayout;
+    if(!node || !original) return false;
+    if(original.hasW) node.w = original.w;
+    else delete node.w;
+    if(original.hasH) node.h = original.h;
+    else delete node.h;
+    if(original.hasScale) node.scale = original.scale;
+    else delete node.scale;
+    delete node.smartGroupOriginalLayout;
+    return true;
+}
 function smartGroupCompactMembers(node){
     return smartGroupMembers(node).filter(member => member?.type === 'smart-prompt' || member?.type === 'smart-loop');
 }
 function isSmartGroupCompactMember(node){
     return Boolean(node && (node.type === 'smart-prompt' || node.type === 'smart-loop') && smartGroupContainingNode(node.id));
 }
-// 分组当前缩放比例（1=原始）。分组就像“画布中的画布”：缩放分组时组内所有成员（含提示词）整体等比缩放+
-// 重排。缩放过程用每次手势开始时的快照实时计算（见 resize 处理），不存持久基准，避免移动成员后再缩放位置回退。
-// _memberZoom 仅用于：新入组的成员按它缩小，以匹配已经缩小的分组。
-function smartGroupZoom(group){
-    const z = Number(group?._memberZoom);
-    return Number.isFinite(z) && z > 0 ? z : 1;
-}
-// 让新入组的成员贴合分组当前缩放（只改尺寸、保持落点不跳动）。
-function scaleSmartGroupMemberToZoom(group, member, zoom){
-    if(!member || !(zoom > 0) || zoom === 1) return;
-    const r = nodeRect(member);
-    member.w = Math.max(40, Math.round((Number(r.width) || 0) * zoom));
-    member.h = Math.max(40, Math.round((Number(r.height) || 0) * zoom));
-    if(isSmartImageNode(member)) member.scale = 1;
-}
-// 把指向 fromId 的连线/输入引用改接到 toId（吸收图片入组后保留“来源 → 分组”的连线），并去重去自环。
+// 合并两个分组容器时，把旧容器的外部连线转接到新容器，并去重去自环。
 function rerouteSmartConnections(fromId, toId){
     if(canvas){
         canvas.connections = (canvas.connections || []).map(c => {
@@ -1413,46 +1920,28 @@ function rerouteSmartConnections(fromId, toId){
         if(Array.isArray(n.inputNodeIds)) n.inputNodeIds = Array.from(new Set(n.inputNodeIds.map(id => id === fromId ? toId : id).filter(id => id !== n.id)));
     });
 }
-// 把一张图片节点的图片吸收进分组（收进卡片内的缩略图网格），然后删除该图片节点。
-function absorbImageNodeIntoSmartGroup(group, child){
-    const add = (child.images || []).map(img => stripImageGenerationMeta({...img}));
-    if(!add.length) return false;
-    group.images = [...(group.images || []), ...add];
-    // 清掉显式尺寸，让缩略图网格按图片数自动整理排列（“放入图片自动整理”）。
-    delete group.w; delete group.h;
-    rerouteSmartConnections(child.id, group.id);
-    nodes = nodes.filter(n => n.id !== child.id);
-    nodes.forEach(g => { if(isSmartGroupNode(g) && Array.isArray(g.items)) g.items = g.items.filter(id => id !== child.id); });
-    return true;
-}
 function addNodeToSmartGroup(group, child){
     if(!isSmartGroupNode(group) || !child || child.id === group.id) return false;
     const items = Array.isArray(group.items) ? group.items.slice() : [];
-    const zoom = smartGroupZoom(group);
     if(isSmartGroupNode(child)){
-        // 把一个分组拖进另一个分组：吸收它的图片到本组网格，把它的非图片成员并入本组，然后删除被拖分组本体。
-        const mergedImages = (child.images || []).map(img => stripImageGenerationMeta({...img}));
-        group.images = [...(group.images || []), ...mergedImages];
-        if(mergedImages.length){ delete group.w; delete group.h; }
         const childMemberIds = smartGroupMembers(child)
             .map(m => m.id)
             .filter(id => id !== group.id && !items.includes(id));
         group.items = [...items, ...childMemberIds];
-        childMemberIds.forEach(id => {
-            const m = nodes.find(n => n.id === id);
-            if(m) scaleSmartGroupMemberToZoom(group, m, zoom);
-        });
         rerouteSmartConnections(child.id, group.id);
         nodes = nodes.filter(n => n.id !== child.id);
         nodes.forEach(g => { if(isSmartGroupNode(g) && Array.isArray(g.items)) g.items = g.items.filter(id => id !== child.id); });
         return true;
     }
-    // 图片节点：收进卡片内的缩略图网格（不再作为画布上的独立节点）。
-    if(isSmartImageNode(child)) return absorbImageNodeIntoSmartGroup(group, child);
-    // 提示词 / 循环：仍作为画布上的成员节点。
     if(items.includes(child.id)) return false;
+    smartGroupMemberOriginalLayout(child);
+    nodes.forEach(other => {
+        if(other.id === group.id || !isSmartGroupNode(other) || !Array.isArray(other.items)) return;
+        if(!other.items.includes(child.id)) return;
+        other.items = other.items.filter(id => id !== child.id);
+        if(other.items.length) fitSmartGroupBounds(other, smartGroupMembers(other));
+    });
     group.items = [...items, child.id];
-    scaleSmartGroupMemberToZoom(group, child, zoom);
     return true;
 }
 // 找到把某个节点作为成员的智能分组（用于双击组内图片时按整组左右切换）。
@@ -1495,113 +1984,39 @@ function smartGroupImageRefs(group){
     });
     return refs;
 }
-function smartGroupThumbLayout(node){
-    const refs = smartGroupImageRefs(node).filter(ref => ref.item?.url);
-    if(!refs.length) return null;
-    const compactMembers = smartGroupCompactMembers(node);
-    const count = refs.length + compactMembers.length;
-    const items = refs.map(ref => ref.item);
-    const explicitW = Number(node?.w);
-    const explicitH = Number(node?.h);
-    const hasExplicit = Number.isFinite(explicitW) && explicitW >= SMART_GROUP_MIN_WIDTH
-        && Number.isFinite(explicitH) && explicitH >= SMART_GROUP_MIN_HEIGHT;
-    const scale = mediaNodeDefaultScale({type:'smart-image', images:items, scale:node?.scale});
-    const summarySpace = 28;
-    const outerPad = 32;
-    if(count === 1){
-        if(hasExplicit){
-            return {
-                refs,
-                compactMembers,
-                cols:1,
-                rows:1,
-                visibleRows:1,
-                width:Math.round(explicitW),
-                height:Math.round(explicitH),
-                thumb:Math.round(96 * scale),
-                single:true,
-                innerW:Math.max(24, Math.round(explicitW - outerPad)),
-                innerH:Math.max(24, Math.round(explicitH - outerPad - summarySpace))
-            };
-        }
-        const single = singleImageLayout(refs[0].item, {}, scale);
-        return {
-            refs,
-            compactMembers,
-            ...single,
-            width:Math.max(SMART_GROUP_MIN_WIDTH, Math.round(single.width + outerPad)),
-            height:Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(single.height + outerPad + summarySpace)),
-            innerW:single.width,
-            innerH:single.height
-        };
-    }
-    const gap = 8;
-    const maxVisibleRows = compactMembers.length ? count : SMART_GROUP_MAX_VISIBLE_ROWS;
-    if(hasExplicit){
-        const fitted = groupImageGridLayout(count, Math.max(72, explicitW - outerPad), Math.max(56, explicitH - outerPad - summarySpace), 100000, 0, gap, maxVisibleRows);
-        return {...fitted, refs, compactMembers, width:Math.round(explicitW), height:Math.round(explicitH)};
-    }
-    const thumb = Math.round(MEDIA_GROUP_THUMB_BASE * scale);
-    const cell = thumb + gap;
-    const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(count))));
-    const rows = Math.ceil(count / cols);
-    const visibleRows = Math.min(maxVisibleRows, rows);
-    const gridW = cols * thumb + (cols - 1) * gap;
-    const gridH = visibleRows * cell - gap;
-    return {
-        refs,
-        compactMembers,
-        cols,
-        rows,
-        visibleRows,
-        thumb,
-        width:Math.max(SMART_GROUP_MIN_WIDTH, Math.round(gridW + outerPad)),
-        height:Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(gridH + outerPad + summarySpace))
-    };
-}
-const SMART_GROUP_ARRANGE_PADDING = 18;
-const SMART_GROUP_ARRANGE_GAP = 16;
-const SMART_GROUP_ARRANGE_HEADER = 44;
-// 把分组内的成员整理成整齐的网格（先行后列保持当前阅读顺序），列数尽量接近正方形，
-// 每个成员在所属单元格内居中；最后把分组框尺寸收敛到正好包住所有成员。
-function arrangeSmartGroupMembers(group, options={}){
-    if(!isSmartGroupNode(group)) return false;
-    const hasThumbImages = smartGroupImageRefs(group).some(ref => ref.item?.url);
-    if(hasThumbImages){
-        const compactMembers = smartGroupCompactMembers(group);
-        if(!options.skipUndo) pushUndo();
-        const layout = smartGroupThumbLayout(group);
-        if(!layout) return true;
-        const refs = layout.refs || [];
-        const thumb = Math.max(28, Math.round(Number(layout.thumb) || 96));
-        const gap = 8;
-        const cols = Math.max(1, Number(layout.cols) || 1);
-        const gridW = cols * thumb + Math.max(0, cols - 1) * gap;
-        const contentW = Math.max(0, Math.round(Number(layout.width) || SMART_GROUP_DEFAULT_WIDTH) - 32);
-        const originX = (Number(group.x) || 0) + 16 + Math.max(0, Math.round((contentW - gridW) / 2));
-        const originY = (Number(group.y) || 0) + 16 + 28;
-        group.w = Math.max(SMART_GROUP_MIN_WIDTH, Math.round(Number(layout.width) || SMART_GROUP_DEFAULT_WIDTH));
-        group.h = Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(Number(layout.height) || SMART_GROUP_DEFAULT_HEIGHT));
-        const ordered = compactMembers.slice().sort((a, b) => {
+function smartGroupMediaRefs(group){
+    if(!isSmartGroupNode(group)) return [];
+    const refs = [];
+    (group.images || []).forEach((img, index) => {
+        const item = imageForDisplay(img);
+        if(item?.url) refs.push({nodeId:group.id, index, source:img, item});
+    });
+    smartGroupMembers(group)
+        .slice()
+        .sort((a, b) => {
             const ra = nodeRect(a), rb = nodeRect(b);
             const dy = (Number(ra.y) || 0) - (Number(rb.y) || 0);
             if(Math.abs(dy) > 24) return dy;
             return (Number(ra.x) || 0) - (Number(rb.x) || 0);
+        })
+        .forEach(node => {
+            (node.images || []).forEach((img, index) => {
+                const item = imageForDisplay(img);
+                if(item?.url) refs.push({nodeId:node.id, index, source:img, item});
+            });
         });
-        ordered.forEach((member, memberIndex) => {
-            const index = refs.length + memberIndex;
-            const col = index % cols;
-            const row = Math.floor(index / cols);
-            member.x = Math.round(originX + col * (thumb + gap));
-            member.y = Math.round(originY + row * (thumb + gap));
-            member.w = thumb;
-            member.h = thumb;
-            member.scale = 1;
-        });
-        if(group._memberZoom !== undefined) group._memberZoom = 1;
-        if(options.syncDom) syncSmartGroupMemberElements(group);
-        return true;
-    }
+    return refs;
+}
+function smartGroupThumbLayout(node){
+    return null;
+}
+const SMART_GROUP_ARRANGE_PADDING = 18;
+const SMART_GROUP_ARRANGE_GAP = 16;
+const SMART_GROUP_ARRANGE_HEADER = 44;
+const SMART_GROUP_ARRANGE_HEIGHT = 194;
+// 分组整理只等比改变节点的显示尺寸，不裁切节点内容；阅读顺序始终保持先左后右、先上后下。
+function arrangeSmartGroupMembers(group, options={}){
+    if(!isSmartGroupNode(group)) return false;
     const members = smartGroupMembers(group);
     if(!members.length) return false;
     if(!options.skipUndo) pushUndo();
@@ -1611,50 +2026,47 @@ function arrangeSmartGroupMembers(group, options={}){
         if(Math.abs(dy) > 24) return dy;
         return (Number(ra.x) || 0) - (Number(rb.x) || 0);
     });
-    // 归一化图片成员尺寸：清掉入组缩放写入的 w/h，回到自然尺寸。否则反复拖出/拖入会越缩越小，
-    // 且“整理”无法恢复——这是用户反馈的“拖出再拖入图片变小、整理也救不回来”的根因。
-    ordered.forEach(node => {
-        if(isSmartImageNode(node)){
-            delete node.w;
-            delete node.h;
-        }
-    });
-    const sizes = ordered.map(node => {
-        const r = nodeRect(node);
-        return {node, w:Math.max(40, Number(r.width) || 120), h:Math.max(40, Number(r.height) || 120)};
-    });
-    const count = sizes.length;
+    const sizes = ordered.map(node => resizeSmartGroupMember(node, options.targetHeight || SMART_GROUP_ARRANGE_HEIGHT)).filter(Boolean);
     const pad = SMART_GROUP_ARRANGE_PADDING;
     const gap = SMART_GROUP_ARRANGE_GAP;
     const headerH = SMART_GROUP_ARRANGE_HEADER;
-    const cols = Math.max(1, Math.min(count, Math.round(Math.sqrt(count)) || 1));
-    const rows = Math.ceil(count / cols);
-    const colW = new Array(cols).fill(0);
-    const rowH = new Array(rows).fill(0);
-    sizes.forEach((s, i) => {
-        const c = i % cols, r = Math.floor(i / cols);
-        colW[c] = Math.max(colW[c], s.w);
-        rowH[r] = Math.max(rowH[r], s.h);
-    });
-    const colX = [];
-    let accX = 0;
-    for(let c = 0; c < cols; c++){ colX[c] = accX; accX += colW[c] + gap; }
-    const rowY = [];
-    let accY = 0;
-    for(let r = 0; r < rows; r++){ rowY[r] = accY; accY += rowH[r] + gap; }
     const originX = (Number(group.x) || 0) + pad;
     const originY = (Number(group.y) || 0) + headerH + pad;
-    sizes.forEach((s, i) => {
-        const c = i % cols, r = Math.floor(i / cols);
-        s.node.x = Math.round(originX + colX[c] + (colW[c] - s.w) / 2);
-        s.node.y = Math.round(originY + rowY[r] + (rowH[r] - s.h) / 2);
-    });
-    const totalW = colW.reduce((a, b) => a + b, 0) + gap * (cols - 1) + pad * 2;
-    const totalH = rowH.reduce((a, b) => a + b, 0) + gap * (rows - 1) + pad * 2 + headerH;
+    const mode = ['horizontal','vertical','grid'].includes(options.mode) ? options.mode : (group.arrangeMode || 'grid');
+    group.arrangeMode = mode;
+    const layoutSection = (section, startY) => {
+        if(!section.length) return {width:0, height:0};
+        const cols = mode === 'vertical' ? 1 : mode === 'horizontal' ? section.length : Math.max(1, Math.min(section.length, Math.ceil(Math.sqrt(section.length))));
+        const rows = Math.ceil(section.length / cols);
+        const colW = new Array(cols).fill(0);
+        const rowH = new Array(rows).fill(0);
+        section.forEach((s, index) => {
+            const col = index % cols;
+            const row = Math.floor(index / cols);
+            colW[col] = Math.max(colW[col], s.w);
+            rowH[row] = Math.max(rowH[row], s.h);
+        });
+        const colX = [], rowY = [];
+        let offset = 0;
+        colW.forEach((width, index) => { colX[index] = offset; offset += width + gap; });
+        offset = 0;
+        rowH.forEach((height, index) => { rowY[index] = offset; offset += height + gap; });
+        section.forEach((s, index) => {
+            const col = index % cols;
+            const row = Math.floor(index / cols);
+            s.node.x = Math.round(originX + colX[col] + (colW[col] - s.w) / 2);
+            s.node.y = Math.round(startY + rowY[row] + (rowH[row] - s.h) / 2);
+        });
+        return {
+            width:colW.reduce((sum, width) => sum + width, 0) + gap * Math.max(0, cols - 1),
+            height:rowH.reduce((sum, height) => sum + height, 0) + gap * Math.max(0, rows - 1)
+        };
+    };
+    const layout = layoutSection(sizes, originY);
+    const totalW = layout.width + pad * 2;
+    const totalH = layout.height + pad * 2 + headerH;
     group.w = Math.max(SMART_GROUP_MIN_WIDTH, Math.round(totalW));
     group.h = Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(totalH));
-    // 成员已回到自然尺寸，分组缩放基准随之归零，避免后续再缩放时跳变。
-    if(group._memberZoom !== undefined) group._memberZoom = 1;
     return true;
 }
 function mediaLayoutSize(img){
@@ -1673,7 +2085,11 @@ function copyMediaSizeFields(source, target={}){
 function singleImageLayout(image, node, scale){
     const explicitW = Number(node?.w);
     const explicitH = Number(node?.h);
-    if(Number.isFinite(explicitW) && explicitW > 24 && Number.isFinite(explicitH) && explicitH > 24){
+    const hasExplicitSize = Number.isFinite(explicitW) && explicitW > 24 && Number.isFinite(explicitH) && explicitH > 24;
+    if(mediaKindForItem(image) !== 'image' && hasExplicitSize){
+        return {cols:1, rows:1, width:Math.round(explicitW), height:Math.round(explicitH), thumb:Math.round(96 * scale), single:true};
+    }
+    if(singleMaterialHasManualSize(node, image) && hasExplicitSize){
         return {cols:1, rows:1, width:Math.round(explicitW), height:Math.round(explicitH), thumb:Math.round(96 * scale), single:true};
     }
     // 音频没有自然宽高，否则会套用图片的 260x180 默认框，导致卡片四周大片空白。给一个贴合内容的紧凑尺寸。
@@ -1696,6 +2112,7 @@ function singleImageLayout(image, node, scale){
             single:true
         };
     }
+    if(hasExplicitSize) return {cols:1, rows:1, width:Math.round(explicitW), height:Math.round(explicitH), thumb:Math.round(96 * scale), single:true};
     return {cols:1, rows:1, width:Math.round(260*scale), height:Math.round(180*scale), thumb:Math.round(96*scale), single:true};
 }
 function groupImageGridLayout(count, explicitW, explicitH, maxThumb, pad=32, gap=8, maxVisibleRows=MEDIA_GROUP_MAX_VISIBLE_ROWS){
@@ -1893,6 +2310,10 @@ function smartGroupImageGridLayout(node){
     return {cols, rows, visibleRows, width, height, thumb:baseThumb};
 }
 function imageLayout(images, scale=1, node=null){
+    if(isSmartResultGroupNode(node)){
+        const refs = resultGroupMediaItems(node);
+        return imageLayout(refs, scale, {type:SMART_NODE_TYPES.material, images:refs, scale:node.scale, w:node.w, h:node.h});
+    }
     if(node?.type === 'smart-group'){
         const groupThumbLayout = smartGroupThumbLayout(node);
         if(groupThumbLayout) return groupThumbLayout;
@@ -1908,8 +2329,18 @@ function imageLayout(images, scale=1, node=null){
         }
         return {cols:1, rows:1, width:Math.round(Number(node.w) || smartLoopWidth(node)), height:Math.round(Math.max(Number(node.h) || 0, smartLoopHeight(node))), thumb:96, single:true};
     }
+    if(isSmartExecutionNode(node)){
+        return {
+            cols:1,
+            rows:1,
+            width:SMART_NODE_CONTRACT.EXECUTION_NODE_SIZE.width,
+            height:SMART_NODE_CONTRACT.EXECUTION_NODE_SIZE.height,
+            thumb:96,
+            single:true
+        };
+    }
     const count = (images || []).length;
-    const s = node?.type === 'smart-image' || !node?.type ? mediaNodeDefaultScale(node) : (Number.isFinite(scale) && scale > 0 ? scale : 1);
+    const s = isSmartImageNode(node) ? mediaNodeDefaultScale(node) : (Number.isFinite(scale) && scale > 0 ? scale : 1);
     if(count === 0){
         const explicitW = Number(node?.w);
         const explicitH = Number(node?.h);
@@ -2092,7 +2523,7 @@ function arrangeSelectedSmartNodes(){
     toast('已整理选中节点');
 }
 function applyViewport(){
-    world.style.transform = `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`;
+    world.style.transform = `translate3d(${viewport.x}px, ${viewport.y}px, 0) scale(${viewport.scale})`;
     // world 被 transform:scale 缩放后，其内部带 backdrop-filter 的卡片（参数设置/合成卡等）
     // 会被部分浏览器（Chrome/Edge 等 Blink 内核）当作独立合成层先按 1x 栅格化、再整体缩放，
     // 缩小时位图被降采样 → 组件发虚。缩放态下关闭这些 backdrop-filter（底色本身已接近不透明，
@@ -2102,12 +2533,21 @@ function applyViewport(){
     shell.style.backgroundPosition = '0 0';
     renderMinimap();
     scheduleSmartImageResolutionSync(world, 120);
+    const active = activeComposerNode();
+    if(active && composer?.classList?.contains('open')) positionComposerForNode(active);
 }
 function screenToWorld(event){
     const rect = shell.getBoundingClientRect();
     return {
         x:(event.clientX - rect.left - viewport.x) / viewport.scale,
         y:(event.clientY - rect.top - viewport.y) / viewport.scale
+    };
+}
+function clientPointToWorld(clientX, clientY){
+    const rect = shell.getBoundingClientRect();
+    return {
+        x:(clientX - rect.left - viewport.x) / viewport.scale,
+        y:(clientY - rect.top - viewport.y) / viewport.scale
     };
 }
 function viewportCenter(){
@@ -2249,6 +2689,1124 @@ function toggleZoomPreview(){
 function imageProviders(){
     return (apiProviders || []).filter(p => p.enabled !== false && p.id !== 'modelscope' && p.id !== 'volcengine' && (p.image_models || []).length);
 }
+function executionPlatformKind(node=activeSettingsSubject()){
+    if(node?.type === SMART_NODE_TYPES.videoGenerator) return 'video';
+    if(node?.type === SMART_NODE_TYPES.audioGenerator) return 'audio';
+    if(node?.type === SMART_NODE_TYPES.musicGenerator) return 'music';
+    return 'image';
+}
+function executionPlatformId(kind=executionPlatformKind()){
+    if(settings.engine === 'modelscope') return 'modelscope';
+    if(settings.engine === 'volcengine') return 'volcengine';
+    if(kind === 'video') return settings.videoProvider || '';
+    if(kind === 'audio') return settings.audioProvider || '';
+    if(kind === 'music') return settings.musicProvider || '';
+    return settings.provider_id || '';
+}
+function executionPlatformModels(provider, kind){
+    if(!provider) return [];
+    if(kind === 'video') return provider.id === 'volcengine' ? volcengineVideoModels() : (provider.video_models || []);
+    if(kind === 'audio' || kind === 'music') return provider.audio_models || [];
+    if(provider.id === 'volcengine') return providerImageModels('volcengine');
+    return provider.image_models || [];
+}
+function executionPlatformEntries(kind=executionPlatformKind()){
+    const providers = (apiProviders || []).filter(provider => provider?.enabled !== false && provider?.protocol !== 'codex');
+    return providers.map(provider => {
+        const dedicated = provider.id === 'modelscope' || provider.id === 'volcengine';
+        const supported = executionPlatformModels(provider, kind).length > 0
+            || (provider.id === 'modelscope' && kind === 'image')
+            || (provider.id === 'volcengine' && ['image','video'].includes(kind));
+        return {...provider, dedicated, supported};
+    });
+}
+function renderExecutionChoiceControl(label, icon, className, optionsHtml, disabled=false, invalid=false, displayValue=''){
+    const triggerText = displayValue || label;
+    return `<div class="smart-control ${escapeAttr(className)} execution-config-field ${invalid ? 'is-invalid' : ''}">
+        <button class="smart-pill execution-choice-pill" type="button" title="${escapeAttr(label)}" ${disabled ? 'disabled' : ''}><i data-lucide="${escapeAttr(icon)}"></i><span class="execution-control-label">${escapeHtml(triggerText)}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
+        <div class="smart-popover compact-popover"><div class="smart-popover-title">${escapeHtml(label)}</div><div class="model-list">${optionsHtml}</div></div>
+    </div>`;
+}
+function renderExecutionPlatformControl(kind=executionPlatformKind(), availableEntries=null){
+    const entries = Array.isArray(availableEntries) ? availableEntries : executionPlatformEntries(kind);
+    const selected = executionPlatformId(kind);
+    const current = entries.find(provider => provider.id === selected)
+        || (apiProviders || []).find(provider => provider.id === selected);
+    const currentUnavailable = Boolean(selected && current && !entries.some(provider => provider.id === selected));
+    const scope = smartPreferenceScopeKey('platforms', executionSelectionDescriptor(activeSettingsSubject())?.nodeType || `${kind}_generation`);
+    const orderedEntries = smartOrderedItems(entries, scope, provider => provider.id);
+    const options = `${currentUnavailable ? `<div class="muted-note">${escapeHtml(tr('smart.platformInputMismatch'))}</div>` : ''}${orderedEntries.map(provider => `<button type="button" class="direct-option ${provider.id === selected ? 'active' : ''}" data-execution-platform-option="${escapeAttr(provider.id)}" data-preference-id="${escapeAttr(provider.id)}">${renderPreferenceHandle(scope, provider.id)}<span>${escapeHtml(provider.name || provider.id)}</span></button>`).join('')}`;
+    return renderExecutionChoiceControl(tr('smart.platform'), 'plug-zap', 'execution-platform-control', options, !entries.length, currentUnavailable, current?.name || current?.id || '');
+}
+function selectExecutionPlatform(providerId){
+    const provider = (apiProviders || []).find(item => item.id === providerId);
+    if(!provider) return;
+    const kind = executionPlatformKind();
+    if(providerId === 'modelscope') settings.engine = 'modelscope';
+    else if(providerId === 'volcengine') settings.engine = 'volcengine';
+    else {
+        settings.engine = 'api';
+        if(kind === 'video'){
+            settings.videoProvider = providerId;
+            settings.videoModel = '';
+            settings.videoFamilyId = '';
+        } else if(kind === 'audio'){
+            settings.audioProvider = providerId;
+            settings.audioModel = '';
+            settings.audioFamilyId = '';
+        } else if(kind === 'music'){
+            settings.musicProvider = providerId;
+            settings.musicModel = '';
+            settings.musicFamilyId = '';
+        } else {
+            settings.provider_id = providerId;
+            settings.model = '';
+            settings.imageFamilyId = '';
+        }
+    }
+    sanitizeSmartApiSelection(settings);
+    if(kind === 'video' && providerId !== 'volcengine'){
+        const selection = resolveCapabilityFamilySelection(providerId, 'video_generation', capabilityInputCounts('video'), '', '', '', capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true));
+        settings.videoFamilyId = selection.family?.family_id || '';
+        settings.videoModel = selection.profile?.model_id || '';
+    } else if(kind === 'audio'){
+        const selection = resolveCapabilityFamilySelection(providerId, 'audio_generation', capabilityInputCounts('audio'), '', '', '', capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true));
+        settings.audioFamilyId = selection.family?.family_id || '';
+        settings.audioModel = selection.profile?.model_id || '';
+    } else if(kind === 'music'){
+        const selection = resolveCapabilityFamilySelection(providerId, 'music_generation', capabilityInputCounts('music'), '', '', '', capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true));
+        settings.musicFamilyId = selection.family?.family_id || '';
+        settings.musicModel = selection.profile?.model_id || '';
+    } else if(kind === 'image' && providerId !== 'modelscope' && providerId !== 'volcengine'){
+        const selection = resolveCapabilityFamilySelection(providerId, 'image_generation', capabilityInputCounts('image'), '', '', '', capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true));
+        settings.imageFamilyId = selection.family?.family_id || '';
+        settings.model = selection.profile?.model_id || '';
+    }
+    const subject = activeSettingsSubject();
+    if(subject) subject.runSettings = settingsForStorage(settings);
+    persistActiveSmartSettings();
+    renderDynamicParams();
+    scheduleSave();
+}
+function capabilityNodeTypeForApiKind(apiKind){
+    if(apiKind === 'video') return 'video_generation';
+    if(apiKind === 'audio') return 'audio_generation';
+    if(apiKind === 'music') return 'music_generation';
+    return 'image_generation';
+}
+function capabilityInputRoles(refs=[], promptPresent=true){
+    const roles = {prompt:promptPresent ? 1 : 0};
+    (refs || []).forEach(ref => {
+        if(!ref?.url) return;
+        const kind = mediaKindForItem(ref);
+        const rawRole = String(ref.role || '').trim().toLowerCase().replace(/-/g, '_');
+        const role = ['first_frame','last_frame'].includes(rawRole)
+            ? rawRole
+            : kind === 'image' ? 'reference'
+            : kind === 'video' ? 'source_video'
+            : kind === 'audio' ? 'reference_audio'
+            : '';
+        if(role) roles[role] = (roles[role] || 0) + 1;
+    });
+    return roles;
+}
+function videoCapabilityInputRoles(refs=[], source=settings, promptPresent=true){
+    const images = imageRefsOnly(refs);
+    const useFrames = Boolean(source?.videoUseFrameRoles)
+        && images.length === 2
+        && videoRefsOnly(refs).length === 0
+        && audioRefsOnly(refs).length === 0;
+    if(!useFrames) return capabilityInputRoles(refs, promptPresent);
+    let imageIndex = 0;
+    return capabilityInputRoles((refs || []).map(ref => {
+        if(mediaKindForItem(ref) !== 'image') return ref;
+        const role = imageIndex++ === 0 ? 'first_frame' : 'last_frame';
+        return {...ref, role};
+    }), promptPresent);
+}
+function capabilityInputCounts(apiKind, node=activeSettingsSubject()){
+    const refs = node ? visibleReferenceImagesFor(node) : [];
+    return {
+        text:1,
+        image:imageRefsOnly(refs).length,
+        video:videoRefsOnly(refs).length,
+        audio:audioRefsOnly(refs).length
+    };
+}
+function capabilityProviderEntry(providerId, nodeType, inputCounts, inputRoles={}, parameters={}){
+    const provider = (modelCapabilityCatalog.providers || []).find(item => item.id === providerId);
+    if(!provider) return null;
+    const models = window.SmartModelCapabilities?.modelsForInputs(modelCapabilityCatalog, nodeType, inputCounts, inputRoles, parameters)
+        .filter(model => model.provider_id === providerId && configuredCapabilityModelIds(providerId, nodeType).has(String(model.model_id || ''))) || [];
+    if(!models.length) return null;
+    return {
+        ...provider,
+        image_models:nodeType === 'image_generation' ? models.map(model => model.model_id) : (provider.image_models || []),
+        video_models:nodeType === 'video_generation' ? models.map(model => model.model_id) : (provider.video_models || []),
+        audio_models:['audio_generation','music_generation'].includes(nodeType) ? models.map(model => model.model_id) : (provider.audio_models || []),
+        capabilityModels:models
+    };
+}
+function configuredCapabilityModelIds(providerId, nodeType){
+    const provider = (apiProviders || []).find(item => item.id === providerId || item.capability_provider_id === providerId);
+    if(!provider) return new Set();
+    const key = nodeType === 'text_generation' ? 'chat_models'
+        : nodeType === 'video_generation' ? 'video_models'
+        : ['audio_generation','music_generation'].includes(nodeType) ? 'audio_models'
+        : 'image_models';
+    return new Set((provider[key] || []).map(model => String(model || '').trim()).filter(Boolean));
+}
+function capabilityProvidersFor(nodeType, inputCounts, fallback=[], inputRoles={}, parameters={}){
+    const entries = [];
+    (modelCapabilityCatalog.providers || []).forEach(provider => {
+        if(provider.id === 'modelscope' || provider.id === 'volcengine') return;
+        const entry = capabilityProviderEntry(provider.id, nodeType, inputCounts, inputRoles, parameters);
+        if(entry) entries.push(entry);
+    });
+    return smartOrderedItems(entries, smartPreferenceScopeKey('platforms', nodeType), entry => entry.id);
+}
+function capabilityModelsForProvider(providerId, nodeType, inputCounts, fallback=[], inputRoles={}, parameters={}){
+    const entry = capabilityProviderEntry(providerId, nodeType, inputCounts, inputRoles, parameters);
+    if(entry) return entry.capabilityModels || [];
+    return [];
+}
+function capabilityFamiliesForProvider(providerId, nodeType, inputCounts, operation='', inputRoles={}, parameters={}){
+    const enabledIds = configuredCapabilityModelIds(providerId, nodeType);
+    const families = (window.SmartModelCapabilities?.familiesForInputs(
+        modelCapabilityCatalog,
+        nodeType,
+        inputCounts,
+        providerId,
+        operation,
+        inputRoles,
+        parameters
+    ) || []).map(family => {
+        const variants = (family.variants || []).filter(variant => enabledIds.has(String(variant.model_id || '').trim()));
+        if(!variants.length) return null;
+        const compatibleVariants = window.SmartModelCapabilities?.compatibleFamilyVariants({...family, variants}, inputCounts, inputRoles, parameters) || [];
+        if(!compatibleVariants.length) return null;
+        const resolved = window.SmartModelCapabilities.resolveFamilyVariant({...family, variants}, inputCounts, operation, inputRoles, parameters);
+        return {...family, variants, compatible_variants:compatibleVariants, resolved_variant:resolved};
+    }).filter(Boolean);
+    return smartOrderedItems(families, smartPreferenceScopeKey('families', nodeType, providerId), family => family.family_id);
+}
+function resolveCapabilityFamilySelection(providerId, nodeType, inputCounts, familyId='', legacyModelId='', operation='', inputRoles={}, parameters={}){
+    const provider = (modelCapabilityCatalog.providers || []).find(item => item.id === providerId) || null;
+    const families = capabilityFamiliesForProvider(providerId, nodeType, inputCounts, operation, inputRoles, parameters);
+    const requestedModelId = String(legacyModelId || '').trim();
+    const legacyFamily = window.SmartModelCapabilities?.familyForModel(provider, legacyModelId, nodeType) || null;
+    const requestedId = legacyFamily?.family_id || familyId || '';
+    const requestedFamily = families.find(item => item.family_id === requestedId) || null;
+    const defaultFamily = families.find(item => capabilitySafeDefaultProfileForFamily(item)) || families[0] || null;
+    const family = requestedFamily || defaultFamily;
+    const compatibleVariants = family?.compatible_variants || [];
+    const requestedProfile = requestedModelId
+        ? compatibleVariants.find(item => item.model_id === requestedModelId || item.variant_id === requestedModelId) || null
+        : null;
+    const profile = requestedProfile || capabilityDefaultProfileForFamily(family);
+    return {
+        families,
+        family,
+        profile,
+        compatibleVariants,
+        invalidSelection:false,
+        invalidVariant:false,
+        requiresVariantSelection:Boolean(family && !profile && compatibleVariants.length > 1),
+        requestedId,
+        requestedModelId
+    };
+}
+function executionSelectionDescriptor(node){
+    if(node?.type === SMART_NODE_TYPES.textGenerator) return {nodeType:'text_generation', providerKey:'textProvider', familyKey:'textFamilyId', modelKey:'textModel', kind:'text'};
+    if(node?.type === SMART_NODE_TYPES.videoGenerator) return {nodeType:'video_generation', providerKey:'videoProvider', familyKey:'videoFamilyId', modelKey:'videoModel', kind:'video'};
+    if(node?.type === SMART_NODE_TYPES.audioGenerator) return {nodeType:'audio_generation', providerKey:'audioProvider', familyKey:'audioFamilyId', modelKey:'audioModel', kind:'audio'};
+    if(node?.type === SMART_NODE_TYPES.musicGenerator) return {nodeType:'music_generation', providerKey:'musicProvider', familyKey:'musicFamilyId', modelKey:'musicModel', kind:'music'};
+    if(node?.type === SMART_NODE_TYPES.imageGenerator) return {nodeType:'image_generation', providerKey:'provider_id', familyKey:'imageFamilyId', modelKey:'model', kind:'image'};
+    return null;
+}
+function executionSelectionInputState(node, descriptor){
+    if(descriptor.kind === 'text'){
+        const request = textGenerationRequestForNode(node);
+        return {inputCounts:textGenerationCandidateInputCounts(request), inputRoles:request.inputRoles};
+    }
+    const refs = visibleReferenceImagesFor(node);
+    return {
+        inputCounts:{text:1, image:imageRefsOnly(refs).length, video:videoRefsOnly(refs).length, audio:audioRefsOnly(refs).length},
+        inputRoles:capabilityInputRoles(refs, true)
+    };
+}
+function executionCompatibleProviderIds(descriptor, inputCounts, inputRoles, parameters={}){
+    if(descriptor.kind === 'text'){
+        return [...new Set((window.SmartModelCapabilities?.modelsForVerifiedInputs(
+            modelCapabilityCatalog,
+            descriptor.nodeType,
+            inputCounts,
+            inputRoles,
+            parameters
+        ) || []).filter(model => configuredCapabilityModelIds(model.provider_id, descriptor.nodeType).has(String(model.model_id || '').trim())).map(model => model.provider_id))];
+    }
+    return capabilityProvidersFor(descriptor.nodeType, inputCounts, [], inputRoles, parameters).map(provider => provider.id);
+}
+function ensureExecutionSelectionDefaults(target, node, {resetSelection=false}={}){
+    const descriptor = executionSelectionDescriptor(node);
+    if(!descriptor || !target || typeof target !== 'object') return false;
+    if(descriptor.kind !== 'text' && !['api',''].includes(String(target.engine || 'api'))) return false;
+    const {inputCounts, inputRoles} = executionSelectionInputState(node, descriptor);
+    const parameterIntent = capabilityParameterIntent(target[descriptor.providerKey], target[descriptor.modelKey], descriptor.nodeType, target);
+    if(descriptor.kind === 'video'){
+        const currentProfile = capabilityProfileFor(target[descriptor.providerKey], target[descriptor.modelKey], descriptor.nodeType);
+        parameterIntent.__execution_mode = videoExecutionModeFor(currentProfile, visibleReferenceImagesFor(node), target);
+    }
+    const providerIds = executionCompatibleProviderIds(descriptor, inputCounts, inputRoles, parameterIntent);
+    if(!providerIds.length) return false;
+    const previous = {
+        provider:String(target[descriptor.providerKey] || ''),
+        family:String(target[descriptor.familyKey] || ''),
+        model:String(target[descriptor.modelKey] || '')
+    };
+    let providerId = previous.provider;
+    if(!providerIds.includes(providerId)){
+        if(previous.model && !resetSelection) return false;
+        providerId = providerIds[0] || '';
+    }
+    const selection = resolveCapabilityFamilySelection(
+        providerId,
+        descriptor.nodeType,
+        inputCounts,
+        resetSelection ? '' : previous.family,
+        resetSelection ? '' : previous.model,
+        '',
+        inputRoles,
+        parameterIntent
+    );
+    if((selection.invalidSelection || selection.invalidVariant) && previous.model && !resetSelection) return false;
+    target[descriptor.providerKey] = providerId;
+    target[descriptor.familyKey] = selection.family?.family_id || '';
+    target[descriptor.modelKey] = selection.profile?.model_id || '';
+    return previous.provider !== target[descriptor.providerKey]
+        || previous.family !== target[descriptor.familyKey]
+        || previous.model !== target[descriptor.modelKey];
+}
+function capabilityFamilyLabel(family){
+    if(window.StudioI18n?.lang?.() === 'en') return family?.display_name_en || family?.display_name || family?.family_id || '';
+    return family?.display_name || family?.display_name_en || family?.family_id || '';
+}
+function renderCapabilityFamilyControl(families, settingKey, selectedId, icon='box'){
+    const selected = (families || []).find(item => item.family_id === selectedId) || (!selectedId ? families?.[0] : null) || null;
+    const invalid = Boolean(selectedId && !selected);
+    const descriptor = executionSelectionDescriptor(activeSettingsSubject());
+    const scope = smartPreferenceScopeKey('families', descriptor?.nodeType || '', settings?.[descriptor?.providerKey] || '');
+    const orderedFamilies = smartOrderedItems(families || [], scope, family => family.family_id);
+    const options = `${invalid ? `<div class="muted-note">${escapeHtml(tr('smart.familyInputMismatch'))}</div>` : ''}${orderedFamilies.map(family => `<button type="button" class="direct-option ${family.family_id === (selected?.family_id || '') ? 'active' : ''}" data-execution-family-option="${escapeAttr(family.family_id)}" data-execution-setting="${escapeAttr(settingKey)}" data-preference-id="${escapeAttr(family.family_id)}">${renderPreferenceHandle(scope, family.family_id)}<span>${escapeHtml(capabilityFamilyLabel(family))}</span></button>`).join('')}`;
+    return renderExecutionChoiceControl(tr('smart.model'), icon, 'model-control', options, !families?.length, invalid, selected ? capabilityFamilyLabel(selected) : '');
+}
+const SUNO_ACTION_INFO = {
+    'suno-generation':{zhTitle:'歌曲生成',enTitle:'Song Generation',zhDescription:'根据灵感描述或自定义歌词生成完整歌曲。',enDescription:'Generate a complete song from an idea or custom lyrics.'},
+    'suno-lyrics':{zhTitle:'歌词生成',enTitle:'Lyrics Generation',zhDescription:'根据主题、情绪或故事方向生成歌词文本。',enDescription:'Generate lyrics from a theme, mood, or story direction.'},
+    'suno-upload':{zhTitle:'导入音频',enTitle:'Import Audio',zhDescription:'导入已有音频，作为续写、翻唱或处理的来源。',enDescription:'Import existing audio as the source for later operations.'},
+    'suno-inspo':{zhTitle:'参考音乐生成',enTitle:'Inspiration',zhDescription:'参考一到四条音频生成一首新的音乐。',enDescription:'Create new music inspired by one to four audio references.'},
+    'suno-sounds':{zhTitle:'音效生成',enTitle:'Sound Effects',zhDescription:'根据文字描述生成环境声或短音效。',enDescription:'Generate ambience or short sound effects from text.'},
+    'suno-create-voice':{zhTitle:'创建音色',enTitle:'Create Voice',zhDescription:'从音频中创建可复用的演唱音色。',enDescription:'Create a reusable singing voice from audio.'},
+    'suno-upsample-tags':{zhTitle:'优化风格标签',enTitle:'Improve Style Tags',zhDescription:'扩展并优化音乐风格标签，让生成方向更明确。',enDescription:'Expand and improve music style tags.'},
+    'suno-extend':{zhTitle:'歌曲续写',enTitle:'Extend Song',zhDescription:'从指定位置继续创作并延长已有歌曲。',enDescription:'Continue and extend an existing song from a chosen point.'},
+    'suno-cover-song':{zhTitle:'风格翻唱',enTitle:'Cover Song',zhDescription:'保留原曲结构，用新的风格或演唱方式重新制作。',enDescription:'Recreate a source song with a new style or performance.'},
+    'suno-mashup':{zhTitle:'歌曲混合',enTitle:'Mashup',zhDescription:'把两首来源歌曲融合成新的混合版本。',enDescription:'Blend two source songs into a new mashup.'},
+    'suno-stems':{zhTitle:'提取指定音轨',enTitle:'Extract Stem',zhDescription:'从歌曲中提取人声、鼓或其他指定音轨。',enDescription:'Extract a selected vocal or instrumental stem.'},
+    'suno-stems-all':{zhTitle:'完整多轨分离',enTitle:'Separate All Stems',zhDescription:'把歌曲拆分为完整的多轨音频。',enDescription:'Separate a song into all available stems.'},
+    'suno-wav':{zhTitle:'导出 WAV',enTitle:'Export WAV',zhDescription:'把生成结果转换为无损 WAV 文件。',enDescription:'Export a result as a lossless WAV file.'},
+    'suno-generate-mp4':{zhTitle:'生成音乐视频',enTitle:'Generate Music Video',zhDescription:'为歌曲生成可播放的 MP4 音乐视频。',enDescription:'Create an MP4 music video for a song.'},
+    'suno-concat':{zhTitle:'拼接歌曲',enTitle:'Join Song Parts',zhDescription:'把歌曲片段按顺序拼接为完整音频。',enDescription:'Join song sections into one audio file.'},
+    'suno-crop':{zhTitle:'裁剪歌曲',enTitle:'Crop Song',zhDescription:'按开始和结束时间截取歌曲片段。',enDescription:'Crop a song by start and end time.'},
+    'suno-fade-in':{zhTitle:'添加淡入',enTitle:'Fade In',zhDescription:'在歌曲开头添加渐强淡入效果。',enDescription:'Add a fade-in to the beginning of a song.'},
+    'suno-fade-out':{zhTitle:'添加淡出',enTitle:'Fade Out',zhDescription:'在歌曲结尾添加渐弱淡出效果。',enDescription:'Add a fade-out to the end of a song.'},
+    'suno-remove-section':{zhTitle:'删除片段',enTitle:'Remove Section',zhDescription:'删除歌曲中指定时间范围的内容。',enDescription:'Remove a selected time range from a song.'},
+    'suno-replace-music':{zhTitle:'重做片段',enTitle:'Replace Section',zhDescription:'重新生成并替换歌曲中的指定片段。',enDescription:'Regenerate and replace a selected song section.'},
+    'suno-adjust-speed':{zhTitle:'调整速度',enTitle:'Adjust Speed',zhDescription:'改变播放速度，同时尽量保持原有音高。',enDescription:'Change playback speed while preserving pitch.'},
+    'suno-remaster':{zhTitle:'重新母带',enTitle:'Remaster',zhDescription:'重新处理歌曲的响度、清晰度和整体听感。',enDescription:'Improve loudness, clarity, and overall mastering.'},
+    'suno-midi':{zhTitle:'生成 MIDI',enTitle:'Generate MIDI',zhDescription:'从歌曲中分析并生成 MIDI 数据。',enDescription:'Analyze a song and generate MIDI data.'},
+    'suno-bpm':{zhTitle:'分析节拍',enTitle:'Analyze BPM',zhDescription:'分析歌曲的每分钟节拍数。',enDescription:'Analyze a song\'s beats per minute.'},
+    'suno-aligned-lyrics':{zhTitle:'歌词时间轴',enTitle:'Aligned Lyrics',zhDescription:'生成与音频逐行对齐的歌词时间信息。',enDescription:'Create line-aligned lyric timestamps.'},
+    'suno-persona':{zhTitle:'创建歌手角色',enTitle:'Create Persona',zhDescription:'从歌曲中创建可复用的歌手 Persona。',enDescription:'Create a reusable singer persona from a song.'},
+    'suno-vox':{zhTitle:'提取人声片段',enTitle:'Extract Vocal Clip',zhDescription:'提取创建歌手 Persona 所需的人声片段。',enDescription:'Extract a vocal clip for persona creation.'},
+    'suno-sample':{zhTitle:'片段再创作',enTitle:'Sample to Song',zhDescription:'使用源曲片段生成一首新的歌曲。',enDescription:'Generate a new song from a source clip.'},
+    'suno-add-vocals':{zhTitle:'添加人声',enTitle:'Add Vocals',zhDescription:'为已有音乐添加匹配的人声演唱。',enDescription:'Add matching vocals to existing music.'},
+    'suno-add-instrumental':{zhTitle:'添加伴奏',enTitle:'Add Instrumental',zhDescription:'为已有内容生成并添加伴奏。',enDescription:'Generate and add instrumental accompaniment.'},
+    'suno-add-stem':{zhTitle:'叠加音轨',enTitle:'Add Stem',zhDescription:'为歌曲叠加指定类型的新音轨。',enDescription:'Add a selected new stem to a song.'}
+};
+function capabilityUiText(zh, en){
+    return window.StudioI18n?.lang?.() === 'en' ? en : zh;
+}
+function capabilityVariantLabel(variant){
+    const modelId = String(variant?.model_id || '').trim().toLowerCase();
+    const suno = SUNO_ACTION_INFO[modelId];
+    if(suno) return capabilityUiText(suno.zhTitle, suno.enTitle);
+    if(window.StudioI18n?.lang?.() === 'en') return variant?.variant_name_en || variant?.variant_name || variant?.display_name || variant?.label || variant?.model_id || variant?.variant_id || '';
+    return variant?.variant_name || variant?.variant_name_en || variant?.display_name || variant?.label || variant?.model_id || variant?.variant_id || '';
+}
+function renderCapabilityVariantControl(selection, settingKey){
+    selection = selection || {};
+    const descriptor = executionSelectionDescriptor(activeSettingsSubject());
+    const scope = smartPreferenceScopeKey('variants', descriptor?.nodeType || '', settings?.[descriptor?.providerKey] || '', selection.family?.family_id || '');
+    const variants = smartOrderedItems(selection.compatibleVariants || [], scope, variant => variant.model_id);
+    const selectedModelId = String(settings?.[settingKey] || '').trim();
+    const selected = variants.find(item => item.model_id === selectedModelId) || selection.profile || variants[0] || null;
+    const label = tr('smart.mode') || '运行模式';
+    const options = `${!selected ? `<div class="muted-note">${escapeHtml(tr('smart.selectMode') || '请选择运行模式')}</div>` : ''}${variants.map(variant => `<button type="button" class="direct-option ${variant.model_id === selected?.model_id ? 'active' : ''}" data-execution-variant-option="${escapeAttr(variant.model_id)}" data-execution-setting="${escapeAttr(settingKey)}" data-preference-id="${escapeAttr(variant.model_id)}">${renderPreferenceHandle(scope, variant.model_id)}<span>${escapeHtml(capabilityVariantLabel(variant))}</span></button>`).join('')}`;
+    return renderExecutionChoiceControl(label, 'list-filter', 'model-variant-control', options, !variants.length, Boolean(selection.invalidVariant), selected ? capabilityVariantLabel(selected) : '');
+}
+function renderExecutionModeFallbackControl(){
+    const label = tr('smart.mode') || '运行模式';
+    const value = capabilityUiText('默认模式', 'Default mode');
+    const note = capabilityUiText('当前平台没有可切换的运行模式。', 'This provider has no alternate run modes.');
+    return renderExecutionChoiceControl(label, 'list-filter', 'model-variant-control', `<div class="muted-note">${escapeHtml(note)}</div>`, true, false, value);
+}
+function capabilityFamilySelectionNote(selection){
+    return '';
+}
+function capabilityVariantSelectionNote(selection){
+    return '';
+}
+function resolveCapabilityForRun(providerId, nodeType, inputCounts, familyId='', legacyModelId='', operation='', inputRoles={}, parameters={}){
+    const selection = resolveCapabilityFamilySelection(providerId, nodeType, inputCounts, familyId, legacyModelId, operation, inputRoles, parameters);
+    if(!selection.profile){
+        if(selection.invalidSelection) throw new Error(tr('smart.familyInputMismatch') || '当前模型家族不支持新的输入组合，请重新选择模型。');
+        if(selection.invalidVariant) throw new Error(tr('smart.variantInputMismatch') || '当前运行模式不支持新的输入组合，请重新选择运行模式。');
+        if(selection.requiresVariantSelection) throw new Error(tr('smart.selectModeHint') || '该模型包含多个可用运行模式，请选择后再运行。');
+        throw new Error(tr('smart.noVerifiedTextModel') || '没有已确认支持当前输入组合的模型。');
+    }
+    return selection;
+}
+function capabilityProfileFor(providerId, modelId, nodeType){
+    return window.SmartModelCapabilities?.findModel(modelCapabilityCatalog, providerId, modelId, nodeType) || null;
+}
+function capabilityModelLabel(model, fallback=''){
+    const profile = typeof model === 'string' ? null : model;
+    const modelId = typeof model === 'string' ? model : (model?.model_id || fallback);
+    return profile?.validation_mode === 'compatible' ? `${modelId} · ${tr('smart.capabilityPending')}` : modelId;
+}
+function capabilityStatusNote(profile){
+    if(modelCapabilityLoadError) return `<div class="smart-capability-note warning"><i data-lucide="triangle-alert"></i><span>${escapeHtml(tr('smart.capabilityLoadFallback'))}</span></div>`;
+    if(profile?.validation_mode === 'compatible') return `<div class="smart-capability-note"><i data-lucide="circle-help"></i><span>${escapeHtml(tr('smart.capabilityCompatibility'))}</span></div>`;
+    return '';
+}
+function capabilityAspectRatioValue(sourceSettings, profile){
+    const values = sourceSettings || settings;
+    if(profile?.validation_mode === 'strict' && profile.parameters?.aspect_ratio?.type === 'enum'){
+        const options = Array.isArray(profile.parameters.aspect_ratio.options) ? profile.parameters.aspect_ratio.options.map(String) : [];
+        const value = String(values.capabilityAspectRatio || profile.parameters.aspect_ratio.default || '').trim();
+        return options.length && options.includes(value) ? (value === 'empty' ? '' : value) : '';
+    }
+    return API_RATIO_VALUES[values.ratio] || (values.ratio === 'custom' ? String(values.customRatio || '').trim() : '');
+}
+function renderCapabilitySelect(paramKey, param, current, label){
+    const options = Array.isArray(param?.options) && param.options.length ? param.options : [];
+    if(!options.length) return '';
+    const value = options.includes(current) ? current : (param?.default && options.includes(param.default) ? param.default : options[0]);
+    settings[paramKey] = value;
+    return `<div class="smart-control capability-param-control" title="${escapeAttr(label)}">
+        <button class="smart-pill" type="button"><i data-lucide="sliders-horizontal"></i><span class="sub">${escapeHtml(label)} · ${escapeHtml(String(value))}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
+        <div class="smart-popover compact-popover"><div class="smart-popover-title">${escapeHtml(label)}</div><div class="seg-row">
+            ${options.map(option => `<button type="button" class="${String(option) === String(value) ? 'active' : ''}" data-smart-param="${escapeAttr(paramKey)}" data-smart-value="${escapeAttr(option)}">${escapeHtml(String(option))}</button>`).join('')}
+        </div></div>
+    </div>`;
+}
+function renderCapabilityParameters(profile, apiKind){
+    const bundle = renderCapabilityParameterBundle(profile);
+    if(!bundle) return {markup:'', settingsControl:''};
+    return {
+        markup:bundle.markup ? `<div class="capability-fields capability-layout-${escapeAttr(bundle.layout.mode)}" data-capability-layout data-layout-key="${escapeAttr(bundle.layout.key)}" data-layout-mode="${escapeAttr(bundle.layout.mode)}">${bundle.markup}</div>` : '',
+        settingsControl:bundle.settingsControl
+    };
+}
+function renderCapabilityNumber(paramKey, param, current, label){
+    const minimum = Number.isFinite(Number(param?.min)) ? Number(param.min) : 0;
+    const maximum = Number.isFinite(Number(param?.max)) ? Number(param.max) : 100;
+    const value = Math.max(minimum, Math.min(maximum, Number(current ?? param?.default ?? minimum)));
+    settings[paramKey] = value;
+    return `<div class="smart-control capability-param-control" title="${escapeAttr(label)}">
+        <button class="smart-pill" type="button"><i data-lucide="sliders-horizontal"></i><span class="sub">${escapeHtml(label)} · ${value}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
+        <div class="smart-popover compact-popover"><div class="smart-popover-title">${escapeHtml(label)}</div>
+            <input type="range" min="${minimum}" max="${maximum}" step="${param?.type === 'number' ? '0.1' : '1'}" value="${value}" data-param="${escapeAttr(paramKey)}">
+        </div>
+    </div>`;
+}
+
+const CAPABILITY_PARAMETER_UNSET = '__canvas_unset__';
+function capabilityParameterIsOptional(spec){
+    return ['optional', 'advanced'].includes(String(spec?.level || '').toLowerCase());
+}
+function capabilityParameterDefaultValue(profile, key, spec={}){
+    if(capabilityParameterIsOptional(spec)) return CAPABILITY_PARAMETER_UNSET;
+    if(spec.default !== undefined && spec.default !== null && spec.default !== '') return spec.default;
+    const options = Array.isArray(spec.options) ? spec.options : [];
+    if(options.length) return options[0];
+    const type = String(spec.type || '').toLowerCase();
+    if(type === 'model') return String(profile?.model_id || '').trim() || undefined;
+    if(type === 'boolean') return false;
+    if(['integer','number'].includes(type) && Number.isFinite(Number(spec.min))) return Number(spec.min);
+    return undefined;
+}
+function capabilityProfileHasParameterDefaults(profile){
+    return Object.entries(profile?.parameters || {}).every(([key, spec]) => (
+        spec?.ui_hidden === true || capabilityParameterDefaultValue(profile, key, spec) !== undefined
+    ));
+}
+function capabilitySafeDefaultProfileForFamily(family){
+    const variants = family?.compatible_variants || family?.variants || [];
+    const resolved = family?.resolved_variant || null;
+    if(resolved && capabilityProfileHasParameterDefaults(resolved)) return resolved;
+    return variants.find(capabilityProfileHasParameterDefaults) || null;
+}
+function capabilityDefaultProfileForFamily(family){
+    const variants = family?.compatible_variants || family?.variants || [];
+    const resolved = family?.resolved_variant || null;
+    return capabilitySafeDefaultProfileForFamily(family) || resolved || variants[0] || null;
+}
+function capabilityParameterValues(profile, source=settings){
+    const modelId = String(profile?.model_id || '').trim();
+    if(!modelId) return {};
+    const store = source?.capabilityParameters && typeof source.capabilityParameters === 'object'
+        ? source.capabilityParameters
+        : {};
+    const values = store[modelId] && typeof store[modelId] === 'object' ? {...store[modelId]} : {};
+    Object.entries(profile?.parameters || {}).forEach(([key, spec]) => {
+        if(values[key] !== undefined) return;
+        const defaultValue = capabilityParameterDefaultValue(profile, key, spec);
+        if(defaultValue !== undefined) values[key] = defaultValue;
+    });
+    return values;
+}
+function capabilityParameterSubmissionValues(profile, source=settings){
+    const specs = profile?.parameters || {};
+    return Object.fromEntries(Object.entries(capabilityParameterValues(profile, source)).filter(([key, value]) => (
+        Object.prototype.hasOwnProperty.call(specs, key)
+        && specs[key]?.ui_hidden !== true
+        && value !== CAPABILITY_PARAMETER_UNSET
+        && value !== undefined
+        && value !== null
+        && value !== ''
+    )));
+}
+function setCapabilityParameter(profile, key, value){
+    const modelId = String(profile?.model_id || '').trim();
+    if(!modelId || !key) return;
+    settings.capabilityParameters = settings.capabilityParameters && typeof settings.capabilityParameters === 'object'
+        ? settings.capabilityParameters
+        : {};
+    settings.capabilityParameters[modelId] = settings.capabilityParameters[modelId] && typeof settings.capabilityParameters[modelId] === 'object'
+        ? settings.capabilityParameters[modelId]
+        : {};
+    settings.capabilityParameters[modelId][key] = value;
+    persistActiveSmartSettings();
+    scheduleSave();
+}
+function generatedCapabilityParameterLabel(key, spec={}){
+    const raw = String(key || spec?.source_field || '').trim();
+    const words = raw.replace(/([a-z0-9])([A-Z])/g, '$1_$2').split(/[^a-zA-Z0-9]+/).filter(Boolean);
+    if(window.StudioI18n?.lang?.() === 'en'){
+        return words.map(word => /^(id|url|fps|bgm|ai|aigc|cfg|base64)$/i.test(word) ? word.toUpperCase() : `${word[0]?.toUpperCase() || ''}${word.slice(1).toLowerCase()}`).join(' ') || raw;
+    }
+    const tokens = {
+        access:'访问', accuracy:'准确度', ai:'AI', aigc:'AIGC', allow:'允许', allowed:'允许', amplitude:'幅度', aspect:'画面', audio:'音频',
+        background:'背景', base64:'Base64', bgm:'背景音乐', bitrate:'码率', boost:'增强', cache:'缓存', camera:'镜头', cfg:'引导', channel:'声道',
+        chaos:'混乱度', character:'角色', client:'客户端', clip:'片段', clone:'克隆', compression:'压缩', conversion:'转换', count:'数量', cover:'封面',
+        creativity:'创意度', crop:'裁剪', custom:'自定义', cut:'转场', cw:'角色权重', deblur:'去模糊', decompression:'去压缩', denoise:'降噪',
+        description:'描述', detail:'细节', detection:'检测', dict:'词典', direction:'方向', disable:'关闭', display:'显示', draft:'草稿', dub:'配音',
+        duration:'时长', edge:'边缘', effect:'效果', effort:'强度', element:'元素', emotion:'情绪', enable:'启用', encode:'编码', end:'结束', english:'英文',
+        enhancement:'增强', erase:'擦除', expansion:'扩展', extend:'续写', face:'人脸', feature:'功能', fidelity:'保真度', fill:'填充', fix:'修复', fixed:'固定',
+        force:'强制', format:'格式', fps:'帧率', frame:'帧', frequency:'频率', generate:'生成', generation:'生成', guidance:'引导', hd:'高清', height:'高度',
+        id:'ID', image:'图片', images:'图片', index:'序号', input:'输入', insert:'插入', instructions:'指令', instrumental:'纯音乐', is:'是否', iw:'图片权重',
+        keep:'保留', lang:'语言', langs:'语言', language:'语言', last:'尾', level:'等级', list:'列表', long:'长边', loop:'循环', loudness:'音量', lyrics:'歌词',
+        make:'生成', map:'映射', max:'最大', min:'最小', mode:'模式', model:'模型', motion:'运动', movement:'运动', multi:'多项', name:'名称', need:'需要',
+        negative:'负向', noise:'噪声', normalization:'规范化', num:'数量', opacity:'不透明度', optimize:'优化', optimizer:'优化', options:'选项', orientation:'方向',
+        original:'原始', output:'输出', ow:'全局权重', pano:'全景', penalty:'惩罚', permission:'权限', person:'真人', pitch:'音高', presence:'话题',
+        preview:'预览', project:'项目', prompt:'提示词', pronunciation:'发音', public:'公开', quality:'质量', rate:'速率', ratio:'比例', raw:'原始参数',
+        readers:'读取者', real:'真人', reasoning:'推理', recaption:'重描述', reconstruct:'重建', recovery:'恢复', reduction:'处理', reference:'参考', remove:'移除',
+        resolution:'分辨率', result:'结果', return:'返回', safety:'安全', sample:'采样', scale:'强度', script:'脚本', search:'搜索', seed:'种子', sequential:'连续',
+        session:'会话', setting:'设置', sharpen:'锐化', short:'短边', shot:'镜头', single:'单个', size:'尺寸', slots:'范围', sound:'声音', source:'来源',
+        speaker:'音色', speech:'语音', speed:'速度', start:'开始', stop:'停止词', storyboard:'分镜', stream:'流式输出', strength:'强度', style:'风格',
+        stylize:'风格化', subject:'主体', sv:'风格版本', sw:'风格权重', switch:'开关', tag:'标签', tags:'标签', target:'目标', task:'任务',
+        temperature:'随机度', template:'模板', text:'文本', texture:'纹理', thinking:'思考', tile:'平铺', time:'时间', title:'标题', to:'至', token:'令牌',
+        tokens:'令牌', tolerance:'容忍度', tools:'工具', top:'顶部', translation:'翻译', type:'类型', upscale:'超分', upstream:'来源', url:'网址',
+        version:'版本', video:'视频', voice:'音色', volume:'音量', watermark:'水印', web:'联网', weird:'奇异度', width:'宽度', writers:'编辑者', zoom:'缩放'
+    };
+    return words.map(word => tokens[word.toLowerCase()] || '参数').join('') || '模型参数';
+}
+function capabilityParameterLabel(key, spec, profile=null){
+    const known = {
+        resolution:'分辨率', size:'尺寸', aspect_ratio:'画面比例', ratio:'画面比例', duration:'时长', generate_audio:'生成音频',
+        count:'数量', quality:'质量', format:'格式', sample_rate:'采样率', speech_rate:'语速',
+        loudness_rate:'音量', pitch_rate:'音调', speaker:'音色',
+        negativePrompt:'负向提示词', negative_prompt:'负向提示词', seed:'种子',
+        return_last_frame:'返回尾帧', voice_id:'音色', volume:'音量', pitch:'音高',
+        emotion:'情绪', outputFormat:'输出格式', output_format:'输出格式', webSearch:'联网搜索',
+        returnLastFrame:'返回尾帧', realPersonMode:'真人保护模式', conversionSlots:'真人转换范围', bitrateMode:'码率模式',
+        pronunciation_dict:'发音词典', enable_base64_output:'Base64 输出', english_normalization:'英文文本规范化',
+        reasoning_effort:'推理强度', max_output_tokens:'最大输出长度', temperature:'随机度',
+        top_p:'采样范围', presence_penalty:'话题惩罚', frequency_penalty:'重复惩罚',
+        version:'模型版本', upstream_task_id:'来源任务 ID', upstream_result_index:'来源结果序号',
+        continue_at:'续写位置', start_time:'开始时间', end_time:'结束时间', fade_duration:'渐变时长',
+        target_speed:'播放速度', persona_name:'歌手角色名称', stem_type:'音轨类型'
+    };
+    const knownEn = {
+        resolution:'Resolution', size:'Size', aspect_ratio:'Aspect Ratio', ratio:'Aspect Ratio', duration:'Duration', generate_audio:'Generate Audio',
+        count:'Count', quality:'Quality', format:'Format', sample_rate:'Sample Rate', speech_rate:'Speech Rate',
+        loudness_rate:'Volume', pitch_rate:'Pitch', speaker:'Voice', negativePrompt:'Negative Prompt',
+        negative_prompt:'Negative Prompt', seed:'Seed', return_last_frame:'Return Last Frame', voice_id:'Voice',
+        volume:'Volume', pitch:'Pitch', emotion:'Emotion', outputFormat:'Output Format', webSearch:'Web Search',
+        returnLastFrame:'Return Last Frame', realPersonMode:'Real Person Protection', conversionSlots:'Person Conversion Range', bitrateMode:'Bitrate Mode',
+        pronunciation_dict:'Pronunciation Dictionary', enable_base64_output:'Base64 Output', english_normalization:'English Text Normalization',
+        output_format:'Output Format', reasoning_effort:'Reasoning Effort', max_output_tokens:'Maximum Output Length',
+        temperature:'Randomness', top_p:'Sampling Range', presence_penalty:'Topic Penalty', frequency_penalty:'Repetition Penalty',
+        version:'Model Version', upstream_task_id:'Source Task ID', upstream_result_index:'Source Result Index',
+        continue_at:'Continue At', start_time:'Start Time', end_time:'End Time', fade_duration:'Fade Duration',
+        target_speed:'Playback Speed', persona_name:'Persona Name', stem_type:'Stem Type'
+    };
+    const translated = {
+        is_instrumental:'smart.paramInstrumental', lyrics:'smart.paramLyrics', lyrics_optimizer:'smart.paramLyricsOptimizer',
+        bitrate:'smart.paramBitrate', voice:'smart.paramVoice', language_type:'smart.paramLanguage',
+        instructions:'smart.paramInstructions', optimize_instructions:'smart.paramOptimizeInstructions',
+        language_boost:'smart.paramLanguageBoost', channel:'smart.paramChannel', custom_voice_id:'smart.paramCustomVoiceId',
+        clone_target_model:'smart.paramCloneTargetModel', need_noise_reduction:'smart.paramNoiseReduction',
+        need_volume_normalization:'smart.paramVolumeNormalization'
+    };
+    const contextualLabel = key === 'speed'
+        ? String(profile?.node_type || '').toLowerCase() === 'audio_generation'
+            ? capabilityUiText('语速','Speech speed')
+            : capabilityUiText('生成速度','Generation speed')
+        : '';
+    const knownLabel = known[key] ? capabilityUiText(known[key], knownEn[key] || generatedCapabilityParameterLabel(key, spec)) : '';
+    const rawLabel = String(spec?.label || '').trim();
+    const localizedRawLabel = window.StudioI18n?.lang?.() === 'en' || /[\u3400-\u9fff]/.test(rawLabel) ? rawLabel : '';
+    return String((translated[key] ? tr(translated[key]) : '') || contextualLabel || knownLabel || localizedRawLabel || generatedCapabilityParameterLabel(key, spec)).trim();
+}
+function capabilityRunValue(profile, key, fallback, source=settings){
+    if(profile?.parameters && Object.prototype.hasOwnProperty.call(profile.parameters, key)){
+        const spec = profile.parameters[key] || {};
+        const values = capabilityParameterValues(profile, source);
+        const value = values[key];
+        if(value === CAPABILITY_PARAMETER_UNSET || value === undefined){
+            return capabilityParameterIsOptional(spec) ? undefined : (spec.default ?? fallback);
+        }
+        return value;
+    }
+    return fallback;
+}
+function capabilityVideoParameterValues(profile, source=settings){
+    const values = capabilityParameterSubmissionValues(profile, source);
+    return window.SmartModelCapabilities?.effectiveParameters(profile, values) || values;
+}
+function capabilityImageParameterValues(profile, source=settings){
+    const values = capabilityParameterSubmissionValues(profile, source);
+    return window.SmartModelCapabilities?.effectiveParameters(profile, values) || values;
+}
+function capabilityAudioParameterValues(profile, source=settings, referenceAudio=''){
+    const values = {
+        ...capabilityParameterSubmissionValues(profile, source),
+        speaker:capabilityRunValue(profile, 'speaker', referenceAudio ? '' : (source?.audioSpeaker || ''), source),
+        format:capabilityRunValue(profile, 'format', source?.audioFormat || 'mp3', source),
+        sample_rate:capabilityRunValue(profile, 'sample_rate', Number(source?.audioSampleRate || 24000), source),
+        speech_rate:capabilityRunValue(profile, 'speech_rate', Number(source?.audioSpeechRate || 0), source),
+        loudness_rate:capabilityRunValue(profile, 'loudness_rate', Number(source?.audioLoudnessRate || 0), source),
+        pitch_rate:capabilityRunValue(profile, 'pitch_rate', Number(source?.audioPitchRate || 0), source)
+    };
+    return window.SmartModelCapabilities?.effectiveParameters(profile, values) || values;
+}
+function capabilityParameterIntent(providerId, modelId, nodeType, source=settings){
+    const profile = capabilityProfileFor(providerId, modelId, nodeType);
+    return profile ? capabilityParameterSubmissionValues(profile, source) : {};
+}
+function videoExecutionModeFor(profile, refs=[], source=settings, manualVideoReference=false){
+    const imageRefs = imageRefsOnly(refs);
+    const videoCount = videoRefsOnly(refs).length + (manualVideoReference ? 1 : 0);
+    const audioCount = audioRefsOnly(refs).length;
+    const parameters = capabilityVideoParameterValues(profile, source);
+    return window.SmartModelCapabilities?.resolveVideoExecutionMode({
+        imageRefs,
+        videoCount,
+        audioCount,
+        parameters,
+        useFrameRoles:Boolean(source?.videoUseFrameRoles),
+        forceMultimodal:source?._videoMultimodalUserSet === true && Boolean(source?.videoMultimodal)
+    }) || (videoCount || audioCount || imageRefs.length > 1 ? 'multimodal2video' : imageRefs.length ? 'image2video' : 'text2video');
+}
+function capabilityOptionLabel(key, option){
+    const value = String(option ?? '');
+    const normalized = value.toLowerCase();
+    const common = {
+        auto:['自动','Auto'], low:['低','Low'], medium:['中','Medium'], high:['高','High'],
+        standard:['标准','Standard'], true:['是','Yes'], false:['否','No'],
+        landscape:['横向','Landscape'], portrait:['竖向','Portrait'], square:['方形','Square'],
+        empty:['自动','Auto'], adaptive:['自适应','Adaptive'], source:['原图比例','Source ratio'], original:['原图比例','Original ratio'],
+        '-1':['自动','Auto']
+    };
+    if(common[normalized]) return capabilityUiText(common[normalized][0], common[normalized][1]);
+    const numberedMedia = normalized.match(/^(image|video|audio|text)(\d+)$/);
+    if(numberedMedia){
+        const names = {image:['图片','Image'], video:['视频','Video'], audio:['音频','Audio'], text:['文本','Text']};
+        const name = names[numberedMedia[1]] || [numberedMedia[1], numberedMedia[1]];
+        return `${capabilityUiText(name[0], name[1])}${numberedMedia[2]}`;
+    }
+    if(normalized === 'all') return capabilityUiText('全部','All');
+    if(key === 'generate_audio') return normalized === 'true' ? capabilityUiText('是','Yes') : capabilityUiText('否','No');
+    return value;
+}
+function capabilityInputOutputSummary(profile){
+    const mediaNames = {
+        text:capabilityUiText('文本','Text'), image:capabilityUiText('图片','Image'),
+        video:capabilityUiText('视频','Video'), audio:capabilityUiText('音频','Audio')
+    };
+    const modelId = String(profile?.model_id || '').trim().toLowerCase();
+    if(modelId.startsWith('suno-')){
+        const action = modelId.slice(5);
+        const sourceTask = capabilityUiText('已有音频任务','Existing audio task');
+        const sunoInput = ['upload', 'inspo', 'create-voice'].includes(action)
+            ? capabilityUiText('音频','Audio')
+            : ['generation', 'lyrics', 'sounds', 'upsample-tags'].includes(action)
+                ? capabilityUiText('文本','Text')
+                : sourceTask;
+        const sunoOutput = action === 'generate-mp4'
+            ? capabilityUiText('视频','Video')
+            : action === 'midi'
+                ? 'MIDI'
+                : ['lyrics', 'upsample-tags', 'bpm', 'aligned-lyrics', 'persona', 'create-voice'].includes(action)
+                    ? capabilityUiText('文本 / 数据','Text / Data')
+                    : capabilityUiText('音频','Audio');
+        return {input:sunoInput, output:sunoOutput};
+    }
+    const inputParts = Object.values(profile?.inputs || {}).map(spec => {
+        const name = mediaNames[String(spec?.media_type || '').toLowerCase()] || String(spec?.media_type || '');
+        const maximum = Number(spec?.max || 0);
+        return maximum > 1 ? `${name} × ${maximum}` : name;
+    }).filter(Boolean);
+    const output = profile?.output || {};
+    const outputName = mediaNames[String(output.media_type || '').toLowerCase()] || String(output.media_type || '');
+    const outputMaximum = Number(output.max || output.min || 1);
+    return {
+        input:inputParts.join(' + ') || capabilityUiText('无需外部素材','No external media'),
+        output:outputMaximum > 1 ? `${outputName} × ${outputMaximum}` : outputName
+    };
+}
+function capabilityActiveParameterSummary(profile, source=settings){
+    const specs = Object.entries(profile?.parameters || {});
+    if(!specs.length) return capabilityUiText('无需额外参数','No additional parameters');
+    const values = capabilityParameterValues(profile, source);
+    const parts = specs.map(([key, spec]) => {
+        const value = values[key];
+        const missing = value === undefined || value === CAPABILITY_PARAMETER_UNSET || value === '';
+        const display = missing
+            ? capabilityParameterIsOptional(spec)
+                ? capabilityUiText('使用默认','Use default')
+                : capabilityUiText('未填写（必填）','Missing (required)')
+            : capabilityOptionLabel(key, value);
+        return `${capabilityParameterLabel(key, spec, profile)}：${display}`;
+    });
+    const visible = parts.slice(0, 8).join(' · ');
+    return parts.length > 8
+        ? `${visible} · ${capabilityUiText(`另有 ${parts.length - 8} 项`,`and ${parts.length - 8} more`)}`
+        : visible;
+}
+function capabilityModelDescription(profile){
+    const modelId = String(profile?.model_id || '').trim().toLowerCase();
+    const suno = SUNO_ACTION_INFO[modelId];
+    if(suno) return capabilityUiText(suno.zhDescription, suno.enDescription);
+    const operation = String(profile?.operation || '').toLowerCase();
+    const descriptions = {
+        chat:['理解并处理输入内容，输出新的文本结果。','Understand the inputs and return new text.'],
+        multimodal_chat:['分析文本和多媒体素材，输出文本结果。','Analyze text and media inputs and return text.'],
+        text_to_image:['根据文字描述生成图片。','Generate images from text.'],
+        image_to_image:['参考输入图片进行重绘或编辑。','Redraw or edit using image references.'],
+        text_to_video:['根据文字描述生成视频。','Generate video from text.'],
+        image_to_video:['让输入图片产生动态视频。','Animate image references into video.'],
+        text_to_audio:['根据文字生成语音、音乐或音频。','Generate speech, music, or audio from text.']
+    };
+    const copy = descriptions[operation];
+    return copy ? capabilityUiText(copy[0], copy[1]) : capabilityUiText('按当前输入和参数执行该模型。','Run this model with the current inputs and parameters.');
+}
+function capabilityModelTitle(profile){
+    return capabilityModelIdLabel(profile);
+}
+function capabilityModelIdLabel(profile){
+    return String(profile?.model_id || '').trim() || capabilityVariantLabel(profile) || profile?.display_name || '';
+}
+function renderCapabilityModelName(profile){
+    if(!profile) return '';
+    const title = capabilityModelTitle(profile);
+    return `<strong class="capability-model-name" title="${escapeAttr(title)}">${escapeHtml(title)}</strong>`;
+}
+function renderCapabilityModelHelp(profile){
+    if(!profile) return '';
+    const summary = capabilityInputOutputSummary(profile);
+    const title = capabilityModelTitle(profile);
+    return `<div class="capability-model-help">
+        <button type="button" class="capability-help-btn" aria-label="${escapeAttr(capabilityUiText('模型说明','Model details'))}"><i data-lucide="circle-help"></i></button>
+        <div class="capability-help-popover">
+            <div class="capability-help-title">${escapeHtml(title)}</div>
+            <p>${escapeHtml(capabilityModelDescription(profile))}</p>
+            <dl><div><dt>${escapeHtml(capabilityUiText('输入','Input'))}</dt><dd>${escapeHtml(summary.input)}</dd></div><div><dt>${escapeHtml(capabilityUiText('输出','Output'))}</dt><dd>${escapeHtml(summary.output)}</dd></div><div><dt>${escapeHtml(capabilityUiText('当前设置','Current'))}</dt><dd class="capability-help-current">${escapeHtml(capabilityActiveParameterSummary(profile))}</dd></div></dl>
+        </div>
+    </div>`;
+}
+function refreshCapabilityModelHelp(profile){
+    const target = dynamicParams?.querySelector?.('.capability-help-current');
+    if(target) target.textContent = capabilityActiveParameterSummary(profile);
+}
+function renderCapabilityCostEstimate(profile){
+    if(!profile) return '';
+    const nodeType = profile.node_type || 'image_generation';
+    const record = priceRecordFor(profile.provider_id || '', profile.model_id || '', profile, nodeType);
+    const estimate = record.status === 'confirmed'
+        ? formatPriceRecord(record, nodeType)
+        : priceUiText(`价格待同步 · 计费单位：${priceUnitLabel(record.unit)}`, `Price pending · billing unit: ${priceUnitLabel(record.unit)}`);
+    return `<div class="capability-cost-estimate"><i data-lucide="wallet-cards"></i><span><b>${escapeHtml(capabilityUiText('预计费用','Estimated cost'))}</b>${escapeHtml(estimate)}</span><button type="button" class="capability-cost-link" data-smart-price-jump data-provider-id="${escapeAttr(profile.provider_id || '')}" data-model-id="${escapeAttr(profile.model_id || '')}" data-node-type="${escapeAttr(nodeType)}">${escapeHtml(priceUiText('查看价格对比','View comparison'))}</button></div>`;
+}
+function renderExecutionConfigPanel(content, profile, className='', settingsControl=''){
+    queueMicrotask(() => syncExecutionCountControl(profile));
+    return `<section class="execution-config-panel ${escapeAttr(className)}">
+        <div class="execution-config-panel-head"><div class="execution-config-panel-title"><span>${escapeHtml(capabilityUiText('参数配置','Parameters'))}</span>${renderCapabilityModelHelp(profile)}${settingsControl}</div><div class="execution-config-head-actions">${renderCapabilityModelName(profile)}</div></div>
+        <div class="execution-config-grid">${content}</div>
+        ${renderCapabilityCostEstimate(profile)}
+    </section>`;
+}
+function renderExecutionCountControl(profile){
+    const spec = profile?.parameters?.count;
+    if(!spec || profile?.node_type === 'text_generation') return '';
+    const options = capabilityParameterChoiceOptions('count', spec);
+    const minimum = Number.isFinite(Number(spec?.min)) ? Number(spec.min) : 1;
+    const maximum = Number.isFinite(Number(spec?.max)) ? Math.min(8, Number(spec.max)) : Math.min(8, Math.max(3, options.length || 3));
+    const values = options.length ? options.map(Number).filter(Number.isFinite) : Array.from({length:Math.max(0, maximum - minimum + 1)}, (_, index) => minimum + index);
+    if(!values.length) return '';
+    const stored = settings?.count ?? settings?.capabilityParameters?.[String(profile.model_id || '')]?.count;
+    const value = Math.max(minimum, Math.min(maximum, Number(stored === undefined ? (spec.default ?? values[0]) : stored) || values[0]));
+    return `<button class="smart-pill execution-count-pill" type="button" title="${escapeAttr(capabilityUiText('生成数量','Output count'))}" aria-label="${escapeAttr(capabilityUiText('生成数量','Output count'))}"><span>X${value}</span></button><div class="smart-popover execution-count-popover"><div class="smart-popover-title">${escapeHtml(capabilityUiText('生成数量','Output count'))}</div><div class="execution-count-options">${values.map(item => `<button type="button" class="execution-count-option ${item === value ? 'active' : ''}" data-execution-count-value="${item}">X${item}</button>`).join('')}</div></div>`;
+}
+function bindExecutionCountControl(){
+    if(!smartExecutionCountControl) return;
+    const pill = smartExecutionCountControl.querySelector('.execution-count-pill');
+    if(pill) pill.onclick = event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const wasPinned = smartExecutionCountControl.classList.contains('pinned');
+        closeAllSmartPopovers();
+        if(!wasPinned){
+            smartExecutionCountControl.classList.add('pinned');
+            pill.setAttribute('aria-expanded','true');
+            requestAnimationFrame(() => positionPinnedSmartPopover(smartExecutionCountControl));
+        }
+    };
+    smartExecutionCountControl.querySelectorAll('[data-execution-count-value]').forEach(option => option.onclick = event => {
+        event.preventDefault();
+        event.stopPropagation();
+        setDynamicSetting('count', option.dataset.executionCountValue);
+        closeAllSmartPopovers();
+    });
+}
+function placeExecutionCountControl(inHeader){
+    if(!smartExecutionCountControl) return;
+    const headerActions = inHeader ? dynamicParams?.querySelector?.('.execution-config-head-actions') : null;
+    if(headerActions){
+        if(smartExecutionCountControl.parentElement !== headerActions) headerActions.appendChild(smartExecutionCountControl);
+        return;
+    }
+    const composerActions = runBtn?.parentElement;
+    if(composerActions && smartExecutionCountControl.parentElement !== composerActions) composerActions.insertBefore(smartExecutionCountControl, runBtn);
+}
+function syncExecutionCountControl(profile){
+    if(!smartExecutionCountControl) return;
+    const markup = renderExecutionCountControl(profile);
+    smartExecutionCountControl.innerHTML = markup;
+    smartExecutionCountControl.hidden = !markup;
+    smartExecutionCountControl.classList.remove('pinned');
+    placeExecutionCountControl(Boolean(markup));
+    if(markup) bindExecutionCountControl();
+    if(window.lucide && markup) lucide.createIcons({attrs:{'aria-hidden':'true'}});
+}
+function capabilityParameterControlKind(key, spec){
+    const type = String(spec?.type || 'text').toLowerCase();
+    if(capabilityParameterSemantic(key, spec) === 'aspect_ratio') return 'segments';
+    if(key === 'duration') return 'select';
+    if(type === 'boolean') return 'segments';
+    if(type === 'enum') return ['aspect_ratio', 'ratio', 'resolution', 'quality', 'count'].includes(key) ? 'segments' : 'select';
+    if(type === 'integer' && key === 'count') return 'segments';
+    if(['integer', 'number'].includes(type) && Number.isFinite(Number(spec?.min)) && Number.isFinite(Number(spec?.max))) return 'range';
+    if(['integer', 'number'].includes(type)) return 'stepper';
+    return 'text';
+}
+const CAPABILITY_DEFAULT_ASPECT_RATIOS = Object.freeze([
+    '1:1', '2:3', '3:2', '4:5',
+    '5:4', '4:3', '3:4', '16:9',
+    '9:16', '21:9', '9:21', '2:1',
+    '1:2', '3:1', '1:3'
+]);
+function capabilityParameterChoiceOptions(key, spec){
+    if(Array.isArray(spec?.options) && spec.options.length) return spec.options;
+    if(capabilityParameterSemantic(key, spec) === 'aspect_ratio') return CAPABILITY_DEFAULT_ASPECT_RATIOS;
+    if(key !== 'count' && capabilityParameterSemantic(key, spec) !== 'duration') return [];
+    const minimum = Number(spec?.min);
+    const maximum = Number(spec?.max);
+    const step = Number(spec?.step || 1);
+    if(!Number.isFinite(minimum) || !Number.isFinite(maximum) || step <= 0) return [];
+    const optionCount = Math.floor((maximum - minimum) / step) + 1;
+    return optionCount > 0 && optionCount <= (capabilityParameterSemantic(key, spec) === 'duration' ? 120 : 16)
+        ? Array.from({length:optionCount}, (_, index) => minimum + index * step)
+        : [];
+}
+function renderCapabilityUnsetChoice(key, active, compact=false){
+    return `<button type="button" class="capability-option capability-unset-option ${active ? 'active' : ''}" data-capability-unset data-capability-param="${escapeAttr(key)}" title="${escapeAttr(capabilityUiText('不向平台提交该参数','Do not submit this parameter'))}">${escapeHtml(capabilityUiText(compact ? '默认' : '使用默认',compact ? 'Default' : 'Use default'))}</button>`;
+}
+function capabilityParameterIcon(key, type=''){
+    const icons = {
+        resolution:'monitor', size:'monitor', aspect_ratio:'scan', ratio:'scan', duration:'timer',
+        count:'copy', quality:'sparkles', format:'file-cog', output_format:'file-cog', outputFormat:'file-cog',
+        version:'history', speaker:'mic-2', voice_id:'mic-2', voice:'mic-2', language_type:'languages',
+        sample_rate:'audio-lines', speech_rate:'gauge', speed:'gauge', volume:'volume-2', loudness_rate:'volume-2',
+        pitch:'music-2', pitch_rate:'music-2', seed:'dice-5', negative_prompt:'circle-minus', negativePrompt:'circle-minus'
+    };
+    if(icons[key]) return icons[key];
+    if(type === 'boolean') return 'toggle-left';
+    if(type === 'text') return 'text-cursor-input';
+    return 'sliders-horizontal';
+}
+function capabilityParameterPreview(key, spec, value, unset){
+    if(unset || value === CAPABILITY_PARAMETER_UNSET || value === undefined || value === '') return capabilityUiText('默认','Default');
+    const type = String(spec?.type || 'text').toLowerCase();
+    if(type === 'boolean') return value === true || ['true','1'].includes(String(value).toLowerCase()) ? capabilityUiText('是','Yes') : capabilityUiText('否','No');
+    const label = capabilityOptionLabel(key, value);
+    if(key === 'duration') return `${label}s`;
+    if(key === 'count') return capabilityUiText(`${label} 个`,`${label}`);
+    const text = String(label || '').trim();
+    return text.length > 22 ? `${text.slice(0, 22)}…` : text;
+}
+function capabilityParameterControlClass(key){
+    return `capability-${String(key || 'parameter').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'parameter'}-control`;
+}
+function renderCapabilityParameterControl(key, label, spec, profile, value, unset, body, extraClass=''){
+    const type = String(spec?.type || 'text').toLowerCase();
+    const controlClass = capabilityParameterControlClass(key);
+    const triggerText = unset
+        ? capabilityUiText('默认','Default')
+        : value === undefined || value === ''
+            ? label
+            : capabilityParameterPreview(key, spec, value, false);
+    return `<div class="smart-control capability-param-control ${controlClass} ${escapeAttr(extraClass)}" data-control-key="${escapeAttr(controlClass)}" data-param-key="${escapeAttr(key)}">
+        <button class="smart-pill capability-param-pill" type="button" title="${escapeAttr(label)}"><i data-lucide="${capabilityParameterIcon(key, type)}"></i><span class="capability-param-label">${escapeHtml(triggerText)}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
+        <div class="smart-popover capability-param-popover"><div class="smart-popover-title">${escapeHtml(label)}</div>${body}</div>
+    </div>`;
+}
+function capabilityParameterDescription(key, spec={}, profile=null){
+    const semantic = capabilityParameterSemantic(key, spec);
+    const type = String(spec?.type || 'text').toLowerCase();
+    const english = window.StudioI18n?.lang?.() === 'en';
+    const rawDescription = String(spec?.description || '').trim();
+    const description = english
+        ? (spec?.description_en || spec?.descriptionEn || (/[^\u3400-\u9fff]/.test(rawDescription) && !/[\u3400-\u9fff]/.test(rawDescription) ? rawDescription : ''))
+        : (spec?.description || spec?.description_cn || spec?.descriptionZh || '');
+    if(description) return String(description);
+    const descriptions = {
+        model:['指定实际调用的底层模型。通常由上方“模型”选择自动决定，不应在高级参数中重复填写。','Specifies the underlying model. This is normally determined by the Model selector and should not be entered again.'],
+        resolution:['决定输出素材的像素尺寸和清晰度；更高分辨率通常会增加生成时间、文件大小或费用。','Controls output pixel dimensions and clarity; higher resolutions usually increase time, file size, or cost.'],
+        size:['决定输出素材的像素尺寸和清晰度；更大尺寸通常会增加生成时间、文件大小或费用。','Controls output dimensions and clarity; larger sizes usually increase time, file size, or cost.'],
+        aspect_ratio:['决定画面的横竖构图。应按最终发布位置选择，例如横屏视频、竖屏短视频或方形封面。','Controls the frame shape. Match it to the destination, such as landscape video, vertical short video, or square cover.'],
+        ratio:['决定画面的横竖构图。应按最终发布位置选择，例如横屏视频、竖屏短视频或方形封面。','Controls the frame shape. Match it to the destination, such as landscape video, vertical short video, or square cover.'],
+        duration:['决定生成内容的播放时长；时长越长通常生成越慢、费用越高，也更容易出现内容漂移。','Controls playback length; longer outputs usually take more time, cost more, and may drift more.'],
+        count:['决定一次运行返回多少个结果；数量越多，通常总费用和等待时间越高。','Controls how many results one run returns; higher counts usually increase total cost and waiting time.'],
+        quality:['控制生成质量与速度、费用之间的取舍；高质量通常细节更多，但耗时或费用也更高。','Balances generation quality against speed and cost; higher quality usually adds detail but takes more time or money.'],
+        format:['决定下载结果的文件格式，会影响兼容性、透明通道和文件大小。','Controls the downloaded file format, affecting compatibility, transparency, and file size.'],
+        output_format:['决定下载结果的文件格式，会影响兼容性和文件大小。','Controls the downloaded file format, affecting compatibility and file size.'],
+        outputFormat:['决定下载结果的文件格式，会影响兼容性和文件大小。','Controls the downloaded file format, affecting compatibility and file size.'],
+        sample_rate:['决定音频每秒采样次数；较高采样率通常更清晰，但文件也更大。','Controls audio samples per second; higher rates are usually clearer but produce larger files.'],
+        speech_rate:['控制朗读速度，不改变文本内容；数值过高或过低可能降低自然度。','Controls speaking speed without changing the text; extreme values may sound less natural.'],
+        speed:['控制生成或播放速度。具体作用取决于当前模型，调整前请结合模型选项判断。','Controls generation or playback speed. Its exact effect depends on the current model.'],
+        loudness_rate:['控制输出音频的响度；建议小幅调整，避免失真或音量过低。','Controls output loudness; adjust conservatively to avoid distortion or audio that is too quiet.'],
+        volume:['控制输出音频的响度；建议小幅调整，避免失真或音量过低。','Controls output loudness; adjust conservatively to avoid distortion or audio that is too quiet.'],
+        pitch_rate:['控制声音音调高低，不等同于音量；幅度过大可能让声音不自然。','Controls vocal pitch rather than volume; large changes may sound unnatural.'],
+        pitch:['控制声音音调高低，不等同于音量；幅度过大可能让声音不自然。','Controls vocal pitch rather than volume; large changes may sound unnatural.'],
+        speaker:['选择用于合成语音的音色或说话人，直接影响声音身份、质感和表达风格。','Selects the voice or speaker used for synthesis, affecting identity, tone, and delivery.'],
+        voice_id:['选择用于合成语音的音色或说话人，直接影响声音身份、质感和表达风格。','Selects the voice or speaker used for synthesis, affecting identity, tone, and delivery.'],
+        voice:['选择用于合成语音的音色或说话人，直接影响声音身份、质感和表达风格。','Selects the voice or speaker used for synthesis, affecting identity, tone, and delivery.'],
+        seed:['固定随机种子可帮助复现相近结果；更换种子会在其他设置不变时产生不同变化。','Fixing the random seed helps reproduce similar results; changing it creates a new variation with other settings unchanged.'],
+        negative_prompt:['告诉模型哪些元素、风格或缺陷不要出现在结果中，用于减少不需要的内容。','Tells the model which elements, styles, or defects to avoid, reducing unwanted content.'],
+        negativePrompt:['告诉模型哪些元素、风格或缺陷不要出现在结果中，用于减少不需要的内容。','Tells the model which elements, styles, or defects to avoid, reducing unwanted content.'],
+        max_output_tokens:['限制模型最多生成多少文本；它是上限而不是必须生成的长度，调高可能增加等待时间和费用。','Limits how much text the model may generate. It is a ceiling, not a target, and higher limits may increase time and cost.'],
+        temperature:['控制回答的随机性。较低更稳定一致，较高更多样但也更容易偏离要求。','Controls randomness. Lower values are steadier; higher values are more varied but may drift from the request.'],
+        top_p:['限制模型参与采样的候选范围。较低更保守集中，较高更多样；通常只需和随机度调整其中一项。','Limits the sampling pool. Lower values are more focused; higher values are more diverse. Usually adjust this or randomness, not both.'],
+        presence_penalty:['降低模型反复停留在已有话题上的倾向，数值越高越鼓励引入新内容。','Reduces the tendency to stay on existing topics; higher values encourage new content.'],
+        frequency_penalty:['降低词句重复出现的概率，数值过高可能让表达变得生硬。','Reduces repeated words and phrases; excessive values may make the writing unnatural.'],
+        reasoning_effort:['控制模型在回答前投入的推理强度；更高通常更适合复杂任务，但速度更慢、消耗更多。','Controls reasoning effort before answering; higher effort suits complex tasks but is slower and uses more resources.'],
+        stream:['开启后会边生成边返回内容，能更早看到结果；关闭后等待完整结果一次返回。','Returns content as it is generated so results appear sooner; off waits for the complete response.'],
+        generate_audio:['决定视频是否同时生成声音；开启后可能增加生成时间、费用，并受当前模式支持范围限制。','Controls whether video is generated with audio; enabling it may increase time or cost and depends on mode support.'],
+        is_instrumental:['决定生成纯音乐还是包含人声的歌曲；开启后通常不会演唱歌词。','Chooses instrumental music or a vocal song; when enabled, lyrics are normally not sung.'],
+        lyrics:['提供需要演唱的歌词内容；仅在非纯音乐模式下生效。','Provides lyrics to sing and only applies when instrumental mode is off.'],
+        instructions:['补充模型应遵循的风格、结构或处理要求，用于约束最终结果。','Adds style, structure, or processing requirements that constrain the final result.'],
+        bitrate:['决定音频压缩码率；较高码率通常音质更好，但文件更大。','Controls audio compression bitrate; higher rates usually improve quality but increase file size.'],
+        webSearch:['允许模型在回答时检索网络信息，适合时效性问题，但会增加等待时间。','Allows web lookup for current information, with additional latency.'],
+        web_search:['允许模型在回答时检索网络信息，适合时效性问题，但会增加等待时间。','Allows web lookup for current information, with additional latency.']
+    };
+    const copy = descriptions[key];
+    if(copy) return capabilityUiText(copy[0], copy[1]);
+    const label = capabilityParameterLabel(key, spec, profile);
+    if(semantic === 'resolution') return capabilityUiText('决定输出素材的像素尺寸和清晰度；更高分辨率通常会增加生成时间、文件大小或费用。','Controls output pixel dimensions and clarity; higher resolutions usually increase time, file size, or cost.');
+    if(semantic === 'duration') return capabilityUiText('决定生成内容的播放时长；时长越长通常生成越慢、费用越高。','Controls playback length; longer outputs usually take more time and cost more.');
+    if(semantic === 'aspect_ratio') return capabilityUiText('决定画面的横竖构图，应根据最终发布位置选择。','Controls frame shape and should match the final publishing destination.');
+    if(type === 'boolean') return capabilityUiText(`决定是否启用“${label}”。选择“默认”时不提交该字段，由平台采用自身默认行为。`,`Controls whether “${label}” is enabled. Default omits the field and lets the provider decide.`);
+    if(type === 'enum') return capabilityUiText(`决定“${label}”采用哪种预设方案；不同选项会改变结果或处理方式。`,`Chooses the preset used for “${label}”; each option changes the result or processing behavior.`);
+    if(['integer','number'].includes(type)) return capabilityUiText(`控制“${label}”的数值。请在模型允许范围内调整，并观察它对结果、耗时或费用的影响。`,`Controls the numeric value for “${label}”. Keep it within the model range and consider effects on output, time, or cost.`);
+    const required = !capabilityParameterIsOptional(spec);
+    return capabilityUiText(
+        `向平台传递“${label}”对应的附加信息。${required ? '这是当前模型的必填项，请按平台要求的格式填写。' : '不确定时保持默认，只有明确知道平台要求时再填写。'}`,
+        `Passes additional information for “${label}”. ${required ? 'This model requires it; use the provider format.' : 'Keep the default unless the provider explicitly requires a value.'}`
+    );
+}
+function ensureCapabilityParameterTooltip(){
+    if(capabilityParameterTooltip?.isConnected) return capabilityParameterTooltip;
+    capabilityParameterTooltip = document.createElement('div');
+    capabilityParameterTooltip.id = 'capabilityParameterTooltip';
+    capabilityParameterTooltip.className = 'capability-parameter-tooltip';
+    capabilityParameterTooltip.setAttribute('role', 'tooltip');
+    capabilityParameterTooltip.innerHTML = '<strong></strong><p></p>';
+    document.body.appendChild(capabilityParameterTooltip);
+    return capabilityParameterTooltip;
+}
+function hideCapabilityParameterTooltip(){
+    capabilityParameterTooltip?.classList.remove('open');
+}
+function showCapabilityParameterTooltip(button){
+    if(!button) return;
+    const tooltip = ensureCapabilityParameterTooltip();
+    tooltip.querySelector('strong').textContent = button.dataset.capabilityHelpTitle || '';
+    tooltip.querySelector('p').textContent = button.dataset.capabilityHelpText || '';
+    tooltip.classList.add('open');
+    tooltip.style.left = '0px';
+    tooltip.style.top = '0px';
+    const anchorRect = button.getBoundingClientRect();
+    const tooltipRect = tooltip.getBoundingClientRect();
+    const margin = 10;
+    const gap = 8;
+    const viewportWidth = window.visualViewport?.width || window.innerWidth;
+    const viewportHeight = window.visualViewport?.height || window.innerHeight;
+    const left = Math.max(margin, Math.min(anchorRect.left + anchorRect.width / 2 - tooltipRect.width / 2, viewportWidth - tooltipRect.width - margin));
+    const preferredTop = anchorRect.top - tooltipRect.height - gap;
+    const top = preferredTop >= margin
+        ? preferredTop
+        : Math.min(anchorRect.bottom + gap, viewportHeight - tooltipRect.height - margin);
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${Math.max(margin, top)}px`;
+}
+function renderCapabilityParameterHelp(label, description){
+    const accessibleLabel = capabilityUiText(`查看“${label}”参数说明`,`Explain “${label}”`);
+    return `<button type="button" class="capability-param-help" data-capability-help data-capability-help-title="${escapeAttr(label)}" data-capability-help-text="${escapeAttr(description)}" title="${escapeAttr(accessibleLabel)}" aria-label="${escapeAttr(accessibleLabel)}" aria-describedby="capabilityParameterTooltip"><i data-lucide="circle-help"></i></button>`;
+}
+function capabilityParameterSemantic(key, spec={}){
+    const normalized = `${key || ''} ${spec?.source_field || ''}`.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+    if(/(^|_)(aspect_?ratio|ratio|frame_?ratio)($|_)/.test(normalized)) return 'aspect_ratio';
+    if(/(^|_)(duration|video_?duration|generation_?duration|seconds|length_?seconds)($|_)/.test(normalized)) return 'duration';
+    if(/(^|_)(resolution|output_?resolution|video_?resolution|image_?resolution|size|output_?size|image_?size)($|_)/.test(normalized)) return 'resolution';
+    if(/(^|_)(quality|image_?quality|output_?quality)($|_)/.test(normalized)) return 'quality';
+    return '';
+}
+function capabilityAspectIconHtml(option){
+    const raw = String(option ?? '').trim();
+    const match = raw.match(/^(\d+(?:\.\d+)?)\s*[:xX*]\s*(\d+(?:\.\d+)?)$/);
+    if(!match) return `<span class="capability-aspect-icon is-auto"><i data-lucide="scan"></i></span>`;
+    const width = Math.max(1, Number(match[1]));
+    const height = Math.max(1, Number(match[2]));
+    return `<span class="capability-aspect-icon"><span style="--aspect-width:${width};--aspect-height:${height}"></span></span>`;
+}
+function capabilityChoiceContent(key, option, semantic=''){
+    let label = capabilityOptionLabel(key, option);
+    if(semantic === 'duration' && Number.isFinite(Number(option)) && Number(option) >= 0 && !/s$/i.test(String(label))) label = `${label}s`;
+    if(semantic === 'resolution' && /^\d+k$/i.test(String(label))) label = String(label).toUpperCase();
+    return semantic === 'aspect_ratio'
+        ? `${capabilityAspectIconHtml(option)}<span>${escapeHtml(label)}</span>`
+        : `<span>${escapeHtml(label)}</span>`;
+}
+function renderCapabilityParameterEditor(key, spec, profile, values){
+    const label = capabilityParameterLabel(key, spec, profile);
+    const semantic = capabilityParameterSemantic(key, spec);
+    const type = String(spec?.type || 'text').toLowerCase();
+    const optional = capabilityParameterIsOptional(spec);
+    const storedValue = values[key];
+    const unset = optional && (storedValue === undefined || storedValue === CAPABILITY_PARAMETER_UNSET);
+    const value = unset ? CAPABILITY_PARAMETER_UNSET : (storedValue ?? spec?.default ?? spec?.min ?? '');
+    const controlKind = capabilityParameterControlKind(key, spec);
+    const choices = capabilityParameterChoiceOptions(key, spec);
+    const optionScope = capabilityOptionOrderScope(profile, key);
+    const optionButton = option => `<button type="button" class="capability-option ${semantic === 'aspect_ratio' ? 'capability-aspect-option' : ''} ${String(option) === String(value) ? 'active' : ''}" data-capability-option data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" data-capability-value="${escapeAttr(option)}" title="${escapeAttr(capabilityOptionLabel(key, option))}">${capabilityChoiceContent(key, option, semantic)}</button>`;
+    if((controlKind === 'segments' || controlKind === 'select') && choices.length){
+        const gridClass = semantic === 'aspect_ratio'
+            ? 'capability-aspect-options'
+            : semantic === 'duration'
+                ? 'capability-duration-options'
+                : semantic === 'resolution'
+                    ? 'capability-resolution-options'
+                    : (controlKind === 'select' ? 'is-list' : '');
+        const body = `<div class="capability-option-grid ${gridClass}" data-capability-option-sort data-capability-option-scope="${escapeAttr(optionScope)}">${optional ? renderCapabilityUnsetChoice(key, unset, semantic !== 'resolution') : ''}${choices.map(optionButton).join('')}</div>`;
+        return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value, unset, body, extraClass:`capability-choice-control capability-${semantic || 'standard'}-picker`};
+    }
+    if(type === 'boolean'){
+        const checked = value === true || ['true','1'].includes(String(value).toLowerCase());
+        const body = `<div class="capability-option-grid ${optional ? 'three-options' : 'two-options'}" data-capability-option-sort data-capability-option-scope="${escapeAttr(optionScope)}">${optional ? renderCapabilityUnsetChoice(key, unset, true) : ''}<button type="button" class="capability-option ${!unset && checked ? 'active' : ''}" data-capability-option data-capability-param="${escapeAttr(key)}" data-capability-type="boolean" data-capability-value="true"><span>${escapeHtml(capabilityUiText('是','Yes'))}</span></button><button type="button" class="capability-option ${!unset && !checked ? 'active' : ''}" data-capability-option data-capability-param="${escapeAttr(key)}" data-capability-type="boolean" data-capability-value="false"><span>${escapeHtml(capabilityUiText('否','No'))}</span></button></div>`;
+        return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value, unset, body, extraClass:'capability-boolean-control'};
+    }
+    if(type === 'integer' || type === 'number'){
+        const step = spec?.step ?? (type === 'integer' ? 1 : 0.1);
+        const minimum = Number(spec?.min);
+        const maximum = Number(spec?.max);
+        const hasRange = Number.isFinite(minimum) && Number.isFinite(maximum) && maximum > minimum;
+        if(hasRange){
+            const rangeValue = unset ? (spec?.default ?? minimum) : value;
+            const body = `<div class="capability-range-field"><div class="capability-range-value"><span>${escapeHtml(capabilityUiText('当前值','Current'))}</span><output>${escapeHtml(unset ? capabilityUiText('默认','Default') : String(rangeValue))}</output></div>${optional ? `<div class="capability-optional-mode">${renderCapabilityUnsetChoice(key, unset, true)}<button type="button" class="capability-option ${unset ? '' : 'active'}" data-capability-enable data-capability-param="${escapeAttr(key)}" data-capability-value="${escapeAttr(rangeValue)}"><span>${escapeHtml(capabilityUiText('自定义','Custom'))}</span></button></div>` : ''}<input type="range" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" value="${escapeAttr(rangeValue)}" min="${escapeAttr(minimum)}" max="${escapeAttr(maximum)}" step="${escapeAttr(step)}" ${unset ? 'disabled' : ''}></div>`;
+            return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value:rangeValue, unset, body, extraClass:'capability-range-control'};
+        }
+        const stepValue = unset ? (spec?.default ?? 0) : value;
+        const body = `${optional ? `<div class="capability-optional-mode">${renderCapabilityUnsetChoice(key, unset, true)}<button type="button" class="capability-option ${unset ? '' : 'active'}" data-capability-enable data-capability-param="${escapeAttr(key)}" data-capability-value="${escapeAttr(stepValue)}"><span>${escapeHtml(capabilityUiText('自定义','Custom'))}</span></button></div>` : ''}<div class="capability-stepper ${unset ? 'is-disabled' : ''}"><button type="button" data-capability-step="-1" data-capability-delta="${escapeAttr(step)}" data-capability-min="${spec?.min !== undefined ? escapeAttr(spec.min) : ''}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" aria-label="${escapeAttr(capabilityUiText('减少','Decrease'))}" ${unset ? 'disabled' : ''}>−</button><output>${escapeHtml(unset ? capabilityUiText('默认','Default') : String(stepValue))}</output><button type="button" data-capability-step="1" data-capability-delta="${escapeAttr(step)}" data-capability-min="${spec?.min !== undefined ? escapeAttr(spec.min) : ''}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" aria-label="${escapeAttr(capabilityUiText('增加','Increase'))}" ${unset ? 'disabled' : ''}>+</button></div>`;
+        return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value:stepValue, unset, body, extraClass:'capability-stepper-control'};
+    }
+    const isLongText = ['lyrics','prompt','instructions','negative_prompt','negativePrompt'].includes(key);
+    const textValue = value === CAPABILITY_PARAMETER_UNSET ? '' : value;
+    const placeholder = optional ? capabilityUiText('可选，不填写则使用默认','Optional; leave blank for default') : capabilityUiText('请输入内容','Enter content');
+    const body = `<div class="capability-text-field ${isLongText ? 'is-long' : ''}">${isLongText ? `<textarea data-capability-param="${escapeAttr(key)}" data-capability-type="text" placeholder="${escapeAttr(placeholder)}">${escapeHtml(textValue)}</textarea>` : `<input type="text" data-capability-param="${escapeAttr(key)}" data-capability-type="text" value="${escapeAttr(textValue)}" placeholder="${escapeAttr(placeholder)}">`}</div>`;
+    return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value:textValue, unset, body, extraClass:`capability-text-control ${isLongText ? 'is-long' : ''}`};
+}
+function renderCapabilitySettingsControl(entries, extraSettings=''){
+    if(!entries.length && !extraSettings) return '';
+    const title = capabilityUiText('更多参数','More settings');
+    const itemCount = entries.length + (extraSettings ? 1 : 0);
+    return `<div class="smart-control capability-settings-control" data-capability-settings data-control-key="capability-settings-control">
+        <button class="smart-pill capability-settings-pill" type="button" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}"><i data-lucide="settings-2"></i></button>
+        <div class="smart-popover capability-settings-popover"><div class="capability-settings-head"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(capabilityUiText(`${itemCount} 项`,` ${itemCount} items`))}</span></div><div class="capability-settings-list">${extraSettings}${entries.map(entry => `<section class="capability-setting-row ${entry.extraClass.includes('is-long') ? 'is-long' : ''}"><div class="capability-setting-label"><span>${escapeHtml(entry.label)}</span>${renderCapabilityParameterHelp(entry.label, entry.description)}${entry.optional ? `<small>${escapeHtml(capabilityUiText('可选','Optional'))}</small>` : ''}</div>${entry.body}</section>`).join('')}</div></div>
+    </div>`;
+}
+function renderJimengUpscaleSetting(){
+    const current = JIMENG_UPSCALE_RESOLUTIONS.includes(settings.jimengUpscaleRes) ? settings.jimengUpscaleRes : '2k';
+    const label = tr('smart.jimengUpscale');
+    const description = capabilityUiText('决定是否在生成完成后继续放大图片，以及放大后的目标清晰度。开启会增加处理时间，并可能产生额外费用。','Controls whether the generated image is upscaled and its target clarity. Enabling it adds processing time and may add cost.');
+    return `<section class="capability-setting-row"><div class="capability-setting-label"><span>${escapeHtml(label)}</span>${renderCapabilityParameterHelp(label, description)}</div><div class="capability-option-grid">${JIMENG_UPSCALE_RESOLUTIONS.map(value => `<button type="button" class="capability-option ${value === current ? 'active' : ''}" data-smart-param="jimengUpscaleRes" data-smart-value="${escapeAttr(value)}">${escapeHtml(value.toUpperCase())}</button>`).join('')}</div></section>`;
+}
+function renderCapabilityParameterBundle(profile, excluded=[]){
+    if(!profile || profile.validation_mode !== 'strict') return '';
+    const excludedKeys = new Set(excluded || []);
+    const values = capabilityParameterValues(profile);
+    const entries = Object.entries(profile.parameters || {})
+        .filter(([key, spec]) => !excludedKeys.has(key) && spec?.ui_hidden !== true)
+        .map(([key, spec]) => renderCapabilityParameterEditor(key, spec, profile, values));
+    const shortcutOrder = {resolution:0, duration:1, aspect_ratio:2};
+    const shortcutPriority = entry => entry.semantic === 'quality' ? 1 : (shortcutOrder[entry.semantic] ?? 99);
+    const shortcuts = entries.filter(entry => entry.semantic).sort((left, right) => shortcutPriority(left) - shortcutPriority(right));
+    const orderedShortcuts = shortcuts;
+    const settingsEntries = entries.filter(entry => !entry.semantic && entry.key !== 'count');
+    const extraSettings = profile?.node_type === 'image_generation' && isJimengProviderId(settings.provider_id) ? renderJimengUpscaleSetting() : '';
+    return {
+        markup:orderedShortcuts.map(entry => renderCapabilityParameterControl(entry.key, entry.label, profile.parameters[entry.key], profile, entry.value, entry.unset, entry.body, entry.extraClass)).join(''),
+        settingsControl:renderCapabilitySettingsControl(settingsEntries, extraSettings),
+        layout:{key:capabilityLayoutKey(profile), mode:'grid', order:orderedShortcuts.map(entry => entry.key)}
+    };
+}
+function renderGenericCapabilityParameters(profile, excluded=[]){
+    const bundle = renderCapabilityParameterBundle(profile, excluded);
+    if(!bundle) return '';
+    return `${bundle.markup}${bundle.settingsControl}`;
+}
 function volcengineProvider(){
     return (apiProviders || []).find(p => p.id === 'volcengine' && p.enabled !== false) || {
         id:'volcengine',
@@ -2260,6 +3818,11 @@ function volcengineProvider(){
 }
 function runningHubProvider(){
     return (apiProviders || []).find(p => p.id === 'runninghub' && p.enabled !== false) || null;
+}
+function runningHubRegion(){
+    const provider = runningHubProvider();
+    const region = String(provider?.rh_region || '').trim().toLowerCase();
+    return region === 'cn' ? 'cn' : 'global';
 }
 function runningHubEntries(kind){
     const provider = runningHubProvider();
@@ -2377,15 +3940,16 @@ function parseRunningHubEntryKey(value){
     const match = text.match(/^(app|workflow|model):(.+)$/);
     return match ? {kind:match[1], id:match[2].trim()} : null;
 }
-function runningHubAllEntries(){
+function runningHubAllEntries(kinds=['model','app','workflow']){
+    const allowed = new Set(kinds);
     return [
-        ...runningHubEntries('model').map(entry => ({kind:'model', id:runningHubEntryId(entry, 'model'), entry})).filter(x => x.id),
-        ...runningHubEntries('app').map(entry => ({kind:'app', id:runningHubEntryId(entry, 'app'), entry})).filter(x => x.id),
-        ...runningHubEntries('workflow').map(entry => ({kind:'workflow', id:runningHubEntryId(entry, 'workflow'), entry})).filter(x => x.id)
+        ...(allowed.has('model') ? runningHubEntries('model').map(entry => ({kind:'model', id:runningHubEntryId(entry, 'model'), entry})).filter(x => x.id) : []),
+        ...(allowed.has('app') ? runningHubEntries('app').map(entry => ({kind:'app', id:runningHubEntryId(entry, 'app'), entry})).filter(x => x.id) : []),
+        ...(allowed.has('workflow') ? runningHubEntries('workflow').map(entry => ({kind:'workflow', id:runningHubEntryId(entry, 'workflow'), entry})).filter(x => x.id) : [])
     ];
 }
 function selectedRunningHubRef(sourceSettings=settings){
-    const all = runningHubAllEntries();
+    const all = runningHubAllEntries(SMART_NODE_CONTRACT.runningHubEntryKindsForType(SMART_NODE_TYPES.aiApp));
     sourceSettings = sourceSettings || settings;
     const parsed = parseRunningHubEntryKey(sourceSettings.rhConfigKey || '');
     let ref = parsed ? all.find(item => item.kind === parsed.kind && item.id === parsed.id) : null;
@@ -2421,9 +3985,12 @@ function rhUsableFields(fields){
 }
 function rhActiveFields(sourceSettings=settings){
     const ref = selectedRunningHubRef(sourceSettings);
-    let fields = Array.isArray(sourceSettings?.rhFields) && sourceSettings.rhFields.length
-        ? sourceSettings.rhFields
-        : rhEntryFields(ref?.entry);
+    const officialAppFields = ref?.kind === 'app' ? rhEntryFields(ref.entry) : [];
+    let fields = officialAppFields.length
+        ? officialAppFields
+        : Array.isArray(sourceSettings?.rhFields) && sourceSettings.rhFields.length
+            ? sourceSettings.rhFields
+            : rhEntryFields(ref?.entry);
     if(ref?.kind === 'workflow' && !(Array.isArray(sourceSettings?.rhFields) && sourceSettings.rhFields.length)){
         const cached = runningHubWorkflowCache[ref.id];
         if(Array.isArray(cached?.fields) && cached.fields.length) fields = cached.fields;
@@ -2446,7 +4013,15 @@ function smartRunNeedsPrompt(sourceSettings=settings){
     return true;
 }
 function sortRunningHubFields(fields){
-    return [...(fields || [])].sort((a, b) => {
+    const indexed = [...(fields || [])].map((field, index) => ({field, index}));
+    if(indexed.some(item => Number.isFinite(Number(item.field?.schemaOrder)))){
+        return indexed.sort((a, b) => {
+            const aOrder = Number.isFinite(Number(a.field?.schemaOrder)) ? Number(a.field.schemaOrder) : a.index;
+            const bOrder = Number.isFinite(Number(b.field?.schemaOrder)) ? Number(b.field.schemaOrder) : b.index;
+            return aOrder - bOrder || a.index - b.index;
+        }).map(item => item.field);
+    }
+    return indexed.map(item => item.field).sort((a, b) => {
         const ak = rhFieldKind(a), bk = rhFieldKind(b);
         if(ak === 'image' && bk === 'image'){
             const ao = Number(a.imageOrder) || 9999;
@@ -2474,15 +4049,58 @@ function resolveChatModel(model='', providerId=''){
     const models = providerChatModels(resolveChatProviderId(providerId));
     return models.includes(model) ? model : (models[0] || model || 'gpt-4o-mini');
 }
-function chatProviderOptions(selectedId=''){
-    const selected = resolveChatProviderId(selectedId);
-    return chatApiProviders().map(provider => `<option value="${escapeHtml(provider.id)}" ${provider.id === selected ? 'selected' : ''}>${escapeHtml(provider.name || provider.id)}</option>`).join('');
+function chatProviderOptions(selectedId='', capabilityModels=null){
+    const allowed = Array.isArray(capabilityModels) ? new Set(capabilityModels.map(model => model.provider_id)) : null;
+    const providers = chatApiProviders().filter(provider => !allowed || allowed.has(provider.id));
+    const selected = providers.some(provider => provider.id === selectedId) ? selectedId : (providers[0]?.id || '');
+    return providers.map(provider => `<option value="${escapeHtml(provider.id)}" ${provider.id === selected ? 'selected' : ''}>${escapeHtml(provider.name || provider.id)}</option>`).join('');
 }
-function chatModelOptions(selectedModel='', providerId=''){
-    const selectedProvider = resolveChatProviderId(providerId);
-    const models = providerChatModels(selectedProvider);
-    const selected = resolveChatModel(selectedModel, selectedProvider);
-    return [...new Set([selected, ...models].filter(Boolean))].map(model => `<option value="${escapeHtml(model)}" ${model === selected ? 'selected' : ''}>${escapeHtml(model)}</option>`).join('');
+function textProviderCompatibleModelCount(providerId, capabilityModels){
+    return (capabilityModels || []).filter(model => model.provider_id === providerId).length;
+}
+function textGenerationInputKindLabel(inputCounts={}){
+    const zh = [];
+    const en = [];
+    if(Number(inputCounts.image) > 0){ zh.push('图片'); en.push('image'); }
+    if(Number(inputCounts.video) > 0){ zh.push('视频'); en.push('video'); }
+    if(Number(inputCounts.audio) > 0){ zh.push('音频'); en.push('audio'); }
+    if(!zh.length){ zh.push('文本'); en.push('text'); }
+    return capabilityUiText(zh.join('、'), en.join(', '));
+}
+function textProviderUnavailableMessage(provider, inputCounts={}){
+    const count = (provider?.chat_models || []).length;
+    const inputLabel = textGenerationInputKindLabel(inputCounts);
+    return capabilityUiText(
+        `已配置 ${count} 个聊天模型，但没有模型确认支持当前${inputLabel}输入。`,
+        `${count} chat model${count === 1 ? '' : 's'} configured, but none is verified for the current ${inputLabel} input.`
+    );
+}
+function renderTextProviderCompatibilityNote(capabilityModels, inputCounts={}){
+    return '';
+}
+function renderTextExecutionPlatformControl(capabilityModels, inputCounts={}){
+    const providers = chatApiProviders().filter(provider => textProviderCompatibleModelCount(provider.id, capabilityModels) > 0);
+    const current = providers.find(provider => provider.id === settings.textProvider) || null;
+    const scope = smartPreferenceScopeKey('platforms', 'text_generation');
+    const options = smartOrderedItems(providers, scope, provider => provider.id).map(provider => {
+        const compatibleCount = textProviderCompatibleModelCount(provider.id, capabilityModels);
+        const countLabel = capabilityUiText(`${compatibleCount} 个可用`, `${compatibleCount} available`);
+        return `<button type="button" class="direct-option text-provider-option ${provider.id === settings.textProvider ? 'active' : ''}" data-text-provider-option="${escapeAttr(provider.id)}" data-preference-id="${escapeAttr(provider.id)}">${renderPreferenceHandle(scope, provider.id)}<span>${escapeHtml(provider.name || provider.id)}</span><small>${escapeHtml(countLabel)}</small></button>`;
+    }).join('');
+    return renderExecutionChoiceControl(tr('smart.platform'), 'plug-zap', 'text-generation-field text-provider-control', options, !providers.length, false, current?.name || current?.id || '');
+}
+function chatModelOptions(selectedModel='', providerId='', capabilityModels=null){
+    const selectedProvider = providerId || resolveChatProviderId(providerId);
+    const models = Array.isArray(capabilityModels)
+        ? capabilityModels.filter(model => model.provider_id === selectedProvider).map(model => model.model_id)
+        : providerChatModels(selectedProvider);
+    const selected = models.includes(selectedModel) ? selectedModel : (models[0] || '');
+    return [...new Set(models.filter(Boolean))].map(model => `<option value="${escapeHtml(model)}" ${model === selected ? 'selected' : ''}>${escapeHtml(model)}</option>`).join('');
+}
+function capabilityFamilyOptions(families, selectedId=''){
+    const valid = (families || []).some(family => family.family_id === selectedId);
+    const placeholder = selectedId && !valid ? `<option value="" selected disabled>${escapeHtml(tr('smart.familyInputMismatch') || '请重新选择模型')}</option>` : '';
+    return placeholder + (families || []).map(family => `<option value="${escapeAttr(family.family_id)}" ${family.family_id === selectedId ? 'selected' : ''}>${escapeHtml(family.display_name || family.family_id)}</option>`).join('');
 }
 function apiProviderById(providerId){
     if(providerId === 'volcengine') return volcengineProvider();
@@ -2528,7 +4146,7 @@ let _jimengModelRefreshing = false;
 // 参考图增删导致即梦文生图/图生图切换时，重新渲染参数面板以更新模型下拉。
 function syncJimengModelPillForRefs(){
     if(_jimengModelRefreshing) return;
-    if(!isJimengProviderId(settings.provider_id) || settings.engine !== 'api' || settings.apiKind === 'video'){
+    if(!isJimengProviderId(settings.provider_id) || settings.engine !== 'api' || settings.apiKind !== 'image'){
         _jimengLastEditMode = null;
         return;
     }
@@ -2549,12 +4167,8 @@ const JIMENG_VIDEO_MODELS_BY_COMMAND = {
 function jimengVideoCommand(){
     const node = activeComposerNode() || selectedNode();
     const refs = node ? visibleReferenceImagesFor(node) : [];
-    const imageRefs = imageRefsOnly(refs);
-    const hasVideoRef = videoRefsOnly(refs).length > 0 || Boolean(manualSmartVideoLink(settings));
-    if(settings.videoMultimodal || hasVideoRef) return 'multimodal2video';
-    if(imageRefs.length >= 2) return settings.videoUseFrameRoles ? 'frames2video' : 'multiframe2video';
-    if(imageRefs.length >= 1) return 'image2video';
-    return 'text2video';
+    const profile = capabilityProfileFor(settings.videoProvider, settings.videoModel, 'video_generation');
+    return videoExecutionModeFor(profile, refs, settings, Boolean(manualSmartVideoLink(settings)));
 }
 function filterJimengVideoModels(models){
     if(!isJimengProviderId(settings.videoProvider)) return models;
@@ -2594,14 +4208,25 @@ function sanitizeSmartApiSelection(target=settings){
         const models = providerImageModels(target.provider_id);
         if(models.length && !models.includes(target.model)) target.model = models[0] || '';
     }
-    if((target.engine || 'api') === 'api' && (target.apiKind || 'image') !== 'video'){
+    if((target.engine || 'api') === 'api' && (target.apiKind || 'image') === 'image'){
         const allowAuto = isGptImageAutoSizeModel(target.model);
         if(!target.resolution) target.resolution = allowAuto ? defaultSmartApiResolution(target.model) : '1k';
         if(!allowAuto && target.resolution === 'auto') target.resolution = '1k';
     }
-    if(target.videoProvider){
+    if(!target.videoProvider) target.videoModel = '';
+    else {
         const models = providerVideoModels(target.videoProvider);
         if(models.length && !models.includes(target.videoModel)) target.videoModel = models[0] || '';
+    }
+    if(!target.audioProvider) target.audioModel = '';
+    else {
+        const models = providerAudioModels(target.audioProvider);
+        if(models.length && !models.includes(target.audioModel)) target.audioModel = models[0] || '';
+    }
+    if(!target.musicProvider) target.musicModel = '';
+    else {
+        const models = providerAudioModels(target.musicProvider);
+        if(models.length && !models.includes(target.musicModel)) target.musicModel = models[0] || '';
     }
     return target;
 }
@@ -2609,13 +4234,19 @@ function modelscopeProvider(){
     return (apiProviders || []).find(p => p.id === 'modelscope' && p.enabled !== false) || null;
 }
 function modelscopeImageModels(){
-    return modelscopeProvider()?.image_models || ['Tongyi-MAI/Z-Image-Turbo'];
+    return modelscopeProvider()?.image_models || [];
 }
 const DEFAULT_VIDEO_MODELS = ['veo3-fast','veo3','sora','runway','kling','pika','minimax-video','wan-v2','seedance-1.0-pro','jimeng-vide-3.0','jimeng-video-3.0-pro'];
 function videoApiProviders(){
     const fromConfig = (apiProviders || []).filter(p => p.enabled !== false && p.id !== 'volcengine' && (p.video_models || []).length);
     if(fromConfig.length) return fromConfig;
     return [{id:'comfly', name:'Comfly', video_models:DEFAULT_VIDEO_MODELS, enabled:true}];
+}
+function audioApiProviders(){
+    return (apiProviders || []).filter(provider => provider.enabled !== false && (provider.audio_models || []).length);
+}
+function providerAudioModels(providerId){
+    return [...new Set((audioApiProviders().find(provider => provider.id === providerId)?.audio_models || []).filter(Boolean))];
 }
 function videoProviderById(providerId){
     if(providerId === 'volcengine') return volcengineProvider();
@@ -2644,13 +4275,43 @@ function renderVideoProviderControl(providers){
     </div>`;
 }
 function renderVideoModelControl(models){
+    const refs = visibleReferenceImagesFor(activeSettingsSubject());
+    const profiles = capabilityModelsForProvider(settings.videoProvider, 'video_generation', capabilityInputCounts('video'), models, capabilityInputRoles(refs, true));
+    const byId = new Map(profiles.map(item => [item.model_id, item]));
     return `<div class="smart-control model-control">
         <button class="smart-pill" type="button"><i data-lucide="film"></i><span class="sub">${escapeHtml(settings.videoModel || tr('smart.model'))}</span></button>
         <div class="smart-popover compact-popover">
             <div class="smart-popover-title">${escapeHtml(tr('smart.videoModel'))}</div>
             <div class="model-list">
-                ${models.map(m => `<button type="button" class="direct-option ${m === settings.videoModel ? 'active' : ''}" data-smart-param="videoModel" data-smart-value="${escapeHtml(m)}"><span>${escapeHtml(m)}</span></button>`).join('') || `<div class="muted-note">${escapeHtml(tr('smart.noVideoModel'))}</div>`}
+                ${models.map(m => `<button type="button" class="direct-option ${m === settings.videoModel ? 'active' : ''}" data-smart-param="videoModel" data-smart-value="${escapeHtml(m)}"><span>${escapeHtml(capabilityModelLabel(byId.get(m), m))}</span></button>`).join('') || `<div class="muted-note">${escapeHtml(tr('smart.noVideoModel'))}</div>`}
             </div>
+        </div>
+    </div>`;
+}
+function renderAudioProviderControl(providers){
+    const current = (providers || []).find(provider => provider.id === settings.audioProvider);
+    return `<div class="smart-control provider-control">
+        <button class="smart-pill" type="button"><i data-lucide="plug-zap"></i><span class="sub">${escapeHtml(current?.name || settings.audioProvider || tr('smart.platform'))}</span></button>
+        <div class="smart-popover compact-popover"><div class="smart-popover-title">${escapeHtml(tr('smart.audioPlatform'))}</div><div class="model-list">
+            ${providers.map(provider => `<button type="button" class="direct-option ${provider.id === settings.audioProvider ? 'active' : ''}" data-smart-param="audioProvider" data-smart-value="${escapeAttr(provider.id)}"><span>${escapeHtml(provider.name || provider.id)}</span></button>`).join('') || `<div class="muted-note">${escapeHtml(tr('smart.noAudioPlatform'))}</div>`}
+        </div></div>
+    </div>`;
+}
+function renderAudioModelControl(models, profiles){
+    const byId = new Map((profiles || []).map(profile => [profile.model_id, profile]));
+    return `<div class="smart-control model-control">
+        <button class="smart-pill" type="button"><i data-lucide="audio-lines"></i><span class="sub">${escapeHtml(settings.audioModel || tr('smart.model'))}</span></button>
+        <div class="smart-popover compact-popover"><div class="smart-popover-title">${escapeHtml(tr('smart.audioModel'))}</div><div class="model-list">
+            ${models.map(model => `<button type="button" class="direct-option ${model === settings.audioModel ? 'active' : ''}" data-smart-param="audioModel" data-smart-value="${escapeAttr(model)}"><span>${escapeHtml(capabilityModelLabel(byId.get(model), model))}</span></button>`).join('') || `<div class="muted-note">${escapeHtml(tr('smart.noAudioModel'))}</div>`}
+        </div></div>
+    </div>`;
+}
+function renderAudioSpeakerControl(hasReferenceAudio){
+    if(hasReferenceAudio) return `<div class="smart-capability-note"><i data-lucide="waveform"></i><span>${escapeHtml(tr('smart.audioReferenceActive'))}</span></div>`;
+    return `<div class="smart-control capability-param-control">
+        <button class="smart-pill" type="button"><i data-lucide="mic-2"></i><span class="sub">${escapeHtml(settings.audioSpeaker || tr('smart.audioSpeaker'))}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
+        <div class="smart-popover compact-popover"><div class="smart-popover-title">${escapeHtml(tr('smart.audioSpeaker'))}</div>
+            <input type="text" data-param="audioSpeaker" value="${escapeAttr(settings.audioSpeaker || '')}" placeholder="${escapeAttr(tr('smart.audioSpeakerPlaceholder'))}">
         </div>
     </div>`;
 }
@@ -2706,24 +4367,19 @@ function renderVideoToggleControl(key, label){
     const on = !!settings[key];
     return `<button type="button" class="setting-check ${on ? 'active' : ''}" data-toggle-param="${escapeHtml(key)}"><span class="check-box"></span><span>${escapeHtml(label)}</span></button>`;
 }
-function renderTempShUploadControl(){
-    return `<button type="button" class="smart-pill cloud-upload-pill" data-temp-sh-upload-video title="上传当前输入图片或视频到云端直链"><i data-lucide="upload-cloud"></i><span>上传云端</span></button>`;
-}
-function renderManualVideoUrlControl(){
-    return `<button type="button" class="smart-pill manual-video-url-pill" data-manual-video-url title="手动输入媒体 URL"><i data-lucide="link"></i><span>输入网址</span></button>`;
-}
-// 可信素材模式：打开后可选择素材来源——素材库认证链接 / 自行上传云端 / 自行输入网址。
-function renderVideoTrustedAssetControl(){
-    const on = !!settings.videoTrustedAsset;
-    let html = renderVideoToggleControl('videoTrustedAsset', tr('smart.videoTrustedAsset'));
-    if(!on) return html;
-    const src = ['library','cloud','manual'].includes(settings.videoTrustedSource) ? settings.videoTrustedSource : 'library';
-    html += `<div class="trusted-source-row">
-        <button type="button" class="smart-pill trusted-src-pill ${src === 'library' ? 'active' : ''}" data-trusted-source="library" title="使用素材库中已注册的认证素材链接（asset://）"><i data-lucide="library"></i><span>素材库链接</span></button>
-        <button type="button" class="smart-pill trusted-src-pill ${src === 'cloud' ? 'active' : ''}" data-trusted-source="cloud" title="把当前输入图片/视频上传到云端直链"><i data-lucide="upload-cloud"></i><span>上传云端</span></button>
-        <button type="button" class="smart-pill trusted-src-pill ${src === 'manual' ? 'active' : ''}" data-trusted-source="manual" title="手动输入媒体 URL 或 asset:// 地址"><i data-lucide="link"></i><span>输入网址</span></button>
-    </div>`;
-    return html;
+function renderVideoInputModeControl(profile, refs=[]){
+    const images = imageRefsOnly(refs);
+    if(images.length !== 2 || videoRefsOnly(refs).length || audioRefsOnly(refs).length) return '';
+    const inputs = profile?.inputs || {};
+    const supportsFrames = Number(inputs.first_frame?.max || 0) >= 1 && Number(inputs.last_frame?.max || 0) >= 1;
+    if(!supportsFrames) return '';
+    const useFrames = Boolean(settings.videoUseFrameRoles);
+    const label = capabilityUiText('图片用途', 'Image role');
+    const options = [
+        ['reference', capabilityUiText('普通参考图', 'Reference images')],
+        ['frames', capabilityUiText('首尾帧', 'First / last frames')]
+    ].map(([value, text]) => `<button type="button" class="direct-option ${useFrames === (value === 'frames') ? 'active' : ''}" data-video-input-mode="${value}"><span>${escapeHtml(text)}</span></button>`).join('');
+    return renderExecutionChoiceControl(label, 'images', 'video-input-mode-control', options, false, false, useFrames ? capabilityUiText('首尾帧', 'First / last frames') : capabilityUiText('普通参考图', 'Reference images'));
 }
 function optionHtml(value, label, selected){
     return `<option value="${escapeHtml(value)}" ${String(value) === String(selected) ? 'selected' : ''}>${escapeHtml(label ?? value)}</option>`;
@@ -2762,7 +4418,7 @@ function apiImageSize(ratioValue, resolutionValue, customRatioValue='', customSi
 function normalizeApiSizeSettings(prefix=''){
     const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
     const resKey = prefix ? `${prefix}Resolution` : 'resolution';
-    const allowAuto = !prefix && settings.engine === 'api' && settings.apiKind !== 'video' && isGptImageAutoSizeModel(settings.model);
+    const allowAuto = !prefix && settings.engine === 'api' && settings.apiKind === 'image' && isGptImageAutoSizeModel(settings.model);
     if(!settings[resKey]) settings[resKey] = allowAuto ? defaultSmartApiResolution(settings.model) : '1k';
     if(!allowAuto && settings[resKey] === 'auto') settings[resKey] = '1k';
     if(settings[resKey] === 'auto' && !settings[ratioKey]) settings[ratioKey] = 'square';
@@ -2809,22 +4465,21 @@ function scheduleDynamicParamsRefresh(delay=120){
     }
 }
 function controlTypeKey(el){
-    return el ? Array.from(el.classList).find(c => c !== 'smart-control' && c.endsWith('-control')) || '' : '';
+    return el?.dataset?.controlKey || (el ? Array.from(el.classList).find(c => c !== 'smart-control' && c.endsWith('-control')) || '' : '');
 }
-// 记住重渲染前哪个控件的弹层是打开的：pinned=点击药丸锁定，interacting=悬浮打开后点了里面的参数。
-// 重渲染会重建 DOM、丢掉这两个状态，所以渲染后要按原样恢复，否则点一下就收起来了。
+// 只记住用户点击后明确打开的弹层，重渲染后恢复同一个控件。
 function openControlState(){
-    const el = dynamicParams?.querySelector('.smart-control.pinned, .smart-control.interacting');
+    const el = dynamicParams?.querySelector('.smart-control.pinned');
     const key = controlTypeKey(el);
     if(!key) return null;
-    return { key, pinned: el.classList.contains('pinned'), interacting: el.classList.contains('interacting') };
+    return { key };
 }
 function restoreOpenControl(state){
     if(!state) return;
     const match = dynamicParams?.querySelector(`.smart-control.${state.key}`);
     if(!match) return;
-    if(state.pinned) match.classList.add('pinned');
-    if(state.interacting) match.classList.add('interacting');
+    match.classList.add('pinned');
+    match.querySelector(':scope > .smart-pill')?.setAttribute('aria-expanded', 'true');
 }
 function dynamicParamsScrollSnapshot(){
     if(!dynamicParams) return null;
@@ -2861,16 +4516,30 @@ function restoreDynamicParamsScroll(snapshot){
     requestAnimationFrame(apply);
 }
 function renderDynamicParams(){
+    const editableState = captureCanvasEditableState(document.activeElement);
+    renderDynamicParamsContent();
+    if(editableState) restoreCanvasEditableState(editableState);
+}
+function renderDynamicParamsContent(){
     if(!dynamicParams) return;
     const keepOpen = openControlState();
     const scrollState = dynamicParamsScrollSnapshot();
+    const subject = activeSettingsSubject();
+    if(!subject){
+        dynamicParams.innerHTML = '';
+        dynamicParams.hidden = true;
+        return;
+    }
+    dynamicParams.hidden = false;
     settings.engine = ['api','volcengine','modelscope','comfy','runninghub'].includes(settings.engine) ? settings.engine : 'api';
-    settings.apiKind = settings.apiKind === 'video' ? 'video' : 'image';
+    settings = SMART_NODE_CONTRACT.normalizeExecutionSettings(subject, settings);
     clearVolcengineSelectionOutsideVolcengine(settings);
-    engineSelect.value = settings.engine;
     syncApiKindToggleVisibility();
-    if(settings.engine === 'api'){
-        if(settings.apiKind === 'video') renderApiVideoParams();
+    if(subject?.type === SMART_NODE_TYPES.textGenerator) renderTextGenerationParams(subject);
+    else if(settings.engine === 'api'){
+        if(settings.apiKind === 'music') renderApiMusicParams();
+        else if(settings.apiKind === 'audio') renderApiAudioParams();
+        else if(settings.apiKind === 'video') renderApiVideoParams();
         else renderApiParams();
     }
     else if(settings.engine === 'volcengine'){
@@ -2886,23 +4555,124 @@ function renderDynamicParams(){
     updatePromptPlaceholder();
     persistActiveSmartSettings();
     if(window.lucide) lucide.createIcons();
+    requestAnimationFrame(() => {
+        const active = activeComposerNode();
+        if(active && composer?.classList?.contains('open')) positionComposerForNode(active);
+    });
+}
+function textGenerationRequestForNode(node=activeSettingsSubject()){
+    if(!node) return SMART_NODE_CONTRACT.createTextGenerationRequest('', [], []);
+    const inputs = textGenerationMediaForNode(node);
+    return SMART_NODE_CONTRACT.createTextGenerationRequest(
+        node.promptDraftText || (activeComposerNode()?.id === node.id ? promptPlainText() : ''),
+        inputs.texts,
+        inputs.media
+    );
+}
+function textGenerationMediaForNode(node){
+    const texts = [];
+    const media = [];
+    upstreamConnectionsForKinds(node, ['input']).forEach(connection => {
+        const source = nodes.find(item => item.id === connection.from);
+        if(!source) return;
+        const sourceMedia = imagesForNode(source).filter(item => {
+            return item?.url || SMART_NODE_CONTRACT.textContentForMediaItem(item);
+        });
+        if(!sourceMedia.length){
+            const fallbackText = textForNode(source).trim();
+            if(fallbackText) texts.push(fallbackText);
+            return;
+        }
+        sourceMedia.forEach(item => {
+            const kind = SMART_NODE_CONTRACT.mediaKindForReference(item);
+            const text = SMART_NODE_CONTRACT.textContentForMediaItem(item);
+            if(kind === 'text'){
+                if(text) texts.push(text);
+                return;
+            }
+            if(['image', 'video', 'audio'].includes(kind) && item?.url) media.push({...item, kind});
+        });
+    });
+    return {texts, media};
+}
+function textGenerationCandidateInputCounts(request){
+    return {...(request?.inputCounts || {}), text:1};
+}
+function verifiedTextGenerationModels(node=activeSettingsSubject()){
+    const request = textGenerationRequestForNode(node);
+    const inputCounts = textGenerationCandidateInputCounts(request);
+    const models = window.SmartModelCapabilities?.modelsForVerifiedInputs(
+        modelCapabilityCatalog,
+        'text_generation',
+        inputCounts,
+        request.inputRoles,
+        capabilityParameterIntent(settings.textProvider, settings.textModel, 'text_generation')
+    ) || [];
+    return models.filter(model => {
+        const enabledIds = configuredCapabilityModelIds(model.provider_id, 'text_generation');
+        return enabledIds.has(String(model.model_id || '').trim());
+    });
+}
+function renderTextGenerationParams(node=activeSettingsSubject()){
+    const request = textGenerationRequestForNode(node);
+    const inputCounts = textGenerationCandidateInputCounts(request);
+    const models = verifiedTextGenerationModels(node);
+    const parameterIntent = capabilityParameterIntent(settings.textProvider, settings.textModel, 'text_generation');
+    const providerIds = [...new Set(models.map(model => model.provider_id))];
+    if(!settings.textProvider) {
+        settings.textProvider = providerIds[0] || '';
+        settings.textFamilyId = '';
+        settings.textModel = '';
+    }
+    const selection = resolveCapabilityFamilySelection(settings.textProvider, 'text_generation', inputCounts, settings.textFamilyId, settings.textModel, '', request.inputRoles, parameterIntent);
+    settings.textFamilyId = selection.family?.family_id || (selection.invalidSelection ? selection.requestedId : '');
+    settings.textModel = selection.profile?.model_id || '';
+    const parameterBundle = renderCapabilityParameterBundle(selection.profile);
+    dynamicParams.innerHTML = renderExecutionConfigPanel(`<div class="text-generation-params">
+        ${renderTextExecutionPlatformControl(models, inputCounts)}
+        ${renderCapabilityFamilyControl(selection.families, 'textFamilyId', settings.textFamilyId, 'box')}
+        ${renderCapabilityVariantControl(selection, 'textModel')}
+        ${renderTextProviderCompatibilityNote(models, inputCounts)}
+        ${!models.length ? `<div class="smart-capability-note warning text-generation-empty"><i data-lucide="triangle-alert"></i><span>${escapeHtml(tr('smart.noVerifiedTextModel'))}</span></div>` : ''}
+        ${capabilityFamilySelectionNote(selection)}
+        ${capabilityVariantSelectionNote(selection)}
+        <label class="text-generation-toggle"><input type="checkbox" data-text-system-toggle ${settings.textSystemEnabled ? 'checked' : ''}><span>${escapeHtml(tr('smart.enableSystemPrompt'))}</span></label>
+        ${settings.textSystemEnabled ? `<div class="text-generation-system-row">
+            <textarea data-text-system-prompt placeholder="${escapeAttr(tr('smart.systemPromptPlaceholder'))}">${escapeHtml(settings.textSystemPrompt || '')}</textarea>
+            <button class="text-generation-template-btn" type="button" data-text-system-template title="${escapeAttr(tr('smart.systemTemplateSkill'))}" aria-label="${escapeAttr(tr('smart.systemTemplateSkill'))}"><i data-lucide="library"></i></button>
+        </div>` : ''}
+        ${parameterBundle?.markup ? `<div class="capability-fields text-capability-fields capability-layout-${escapeAttr(parameterBundle.layout.mode)}" data-capability-layout data-layout-key="${escapeAttr(parameterBundle.layout.key)}" data-layout-mode="${escapeAttr(parameterBundle.layout.mode)}">${parameterBundle.markup}</div>` : ''}
+    </div>`, selection.profile, 'text-execution-config', parameterBundle?.settingsControl || '');
 }
 function renderApiParams(){
-    const providers = imageProviders();
-    if(!settings.provider_id || !providers.some(p => p.id === settings.provider_id)) settings.provider_id = providers[0]?.id || '';
-    const models = filterJimengImageModels(providerImageModels(settings.provider_id));
-    if(!settings.model || !models.includes(settings.model)) settings.model = models[0] || '';
+    const inputCounts = capabilityInputCounts('image');
+    const inputRoles = capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true);
+    const parameterIntent = capabilityParameterIntent(settings.provider_id, settings.model, 'image_generation');
+    const providers = capabilityProvidersFor('image_generation', inputCounts, imageProviders(), inputRoles, parameterIntent);
+    if(!settings.provider_id) {
+        settings.provider_id = providers[0]?.id || '';
+        settings.imageFamilyId = '';
+        settings.model = '';
+    }
+    const selection = resolveCapabilityFamilySelection(settings.provider_id, 'image_generation', inputCounts, settings.imageFamilyId, settings.model, '', inputRoles, parameterIntent);
+    settings.imageFamilyId = selection.family?.family_id || (selection.invalidSelection ? selection.requestedId : '');
+    settings.model = selection.profile?.model_id || '';
+    const profile = selection.profile;
     // 切换平台/模型时保留用户已选的分辨率（记忆），normalizeApiSizeSettings 只会修正非法的 auto。
     normalizeApiSizeSettings('');
-    const outpaintLocked = settings.outpaintResolutionLocked === true;
-    dynamicParams.innerHTML = `
-        ${renderProviderControl(providers)}
-        ${renderModelControl(models)}
-        ${renderSizePickerControl('', true)}
-        ${renderQualityControl()}
-        ${renderCountVisualControl()}
-        ${isJimengProviderId(settings.provider_id) ? renderJimengUpscaleControl() : ''}
-    `;
+    const profileControls = renderCapabilityParameters(profile, 'image');
+    const compatibleControls = profile?.validation_mode === 'strict'
+        ? ''
+        : `${renderSizePickerControl('', true)}${renderQualityControl()}${renderCountVisualControl()}`;
+    dynamicParams.innerHTML = renderExecutionConfigPanel(`
+        ${renderExecutionPlatformControl('image', providers)}
+        ${renderCapabilityFamilyControl(selection.families, 'imageFamilyId', settings.imageFamilyId, 'image')}
+        ${renderCapabilityVariantControl(selection, 'model')}
+        ${capabilityFamilySelectionNote(selection)}
+        ${capabilityVariantSelectionNote(selection)}
+        ${profileControls.markup || compatibleControls}
+        ${capabilityStatusNote(profile)}
+    `, profile, 'image-execution-config', profileControls.settingsControl);
 }
 function renderJimengUpscaleControl(){
     const current = JIMENG_UPSCALE_RESOLUTIONS.includes(settings.jimengUpscaleRes) ? settings.jimengUpscaleRes : '2k';
@@ -2914,25 +4684,86 @@ function renderJimengUpscaleControl(){
     </div>`;
 }
 function renderApiVideoParams(){
-    const providers = videoApiProviders();
-    if(!settings.videoProvider || !providers.some(p => p.id === settings.videoProvider)) settings.videoProvider = providers[0]?.id || 'comfly';
-    const models = filterJimengVideoModels(providerVideoModels(settings.videoProvider));
-    if(!settings.videoModel || !models.includes(settings.videoModel)) settings.videoModel = models[0] || 'veo3-fast';
-    dynamicParams.innerHTML = `
-        ${renderVideoProviderControl(providers)}
-        ${renderVideoModelControl(models)}
-        ${renderVideoResolutionControl()}
-        ${renderVideoAspectControl()}
-        ${renderVideoDurationControl()}
-        ${renderVideoToggleControl('videoEnhancePrompt', tr('smart.videoEnhancePrompt'))}
-        ${renderVideoToggleControl('videoEnableUpsample', tr('smart.videoUpsample'))}
-        ${renderVideoToggleControl('videoGenerateAudio', tr('smart.videoGenerateAudio'))}
-        ${renderVideoToggleControl('videoCameraFixed', tr('smart.videoCameraFixed'))}
-        ${renderVideoToggleControl('videoWatermark', tr('smart.videoWatermark'))}
-        ${renderVideoToggleControl('videoMultimodal', tr('smart.videoMultimodal'))}
-        ${renderVideoToggleControl('videoUseFrameRoles', tr('smart.videoUseFrameRoles'))}
-        ${isJimengProviderId(settings.videoProvider) ? '' : renderVideoTrustedAssetControl()}
-    `;
+    const inputCounts = capabilityInputCounts('video');
+    const refs = visibleReferenceImagesFor(activeSettingsSubject());
+    const inputRoles = videoCapabilityInputRoles(refs, settings, true);
+    const parameterIntent = capabilityParameterIntent(settings.videoProvider, settings.videoModel, 'video_generation');
+    const currentProfile = capabilityProfileFor(settings.videoProvider, settings.videoModel, 'video_generation');
+    parameterIntent.__execution_mode = videoExecutionModeFor(currentProfile, refs, settings, Boolean(manualSmartVideoLink(settings)));
+    const providers = capabilityProvidersFor('video_generation', inputCounts, videoApiProviders(), inputRoles, parameterIntent);
+    if(!settings.videoProvider) {
+        settings.videoProvider = providers[0]?.id || '';
+        settings.videoFamilyId = '';
+        settings.videoModel = '';
+    }
+    const selection = resolveCapabilityFamilySelection(settings.videoProvider, 'video_generation', inputCounts, settings.videoFamilyId, settings.videoModel, '', inputRoles, parameterIntent);
+    settings.videoFamilyId = selection.family?.family_id || (selection.invalidSelection ? selection.requestedId : '');
+    settings.videoModel = selection.profile?.model_id || '';
+    const profile = selection.profile;
+    const profileControls = renderCapabilityParameters(profile, 'video');
+    dynamicParams.innerHTML = renderExecutionConfigPanel(`
+        ${renderExecutionPlatformControl('video', providers)}
+        ${renderCapabilityFamilyControl(selection.families, 'videoFamilyId', settings.videoFamilyId, 'film')}
+        ${renderCapabilityVariantControl(selection, 'videoModel')}
+        ${capabilityFamilySelectionNote(selection)}
+        ${capabilityVariantSelectionNote(selection)}
+        ${renderVideoInputModeControl(profile, refs)}
+        ${profileControls.markup}
+        ${capabilityStatusNote(profile)}
+    `, profile, 'video-execution-config', profileControls.settingsControl);
+}
+function renderApiAudioParams(){
+    const inputCounts = capabilityInputCounts('audio');
+    const inputRoles = capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true);
+    const parameterIntent = capabilityParameterIntent(settings.audioProvider, settings.audioModel, 'audio_generation');
+    const providers = capabilityProvidersFor('audio_generation', inputCounts, audioApiProviders(), inputRoles, parameterIntent);
+    if(!settings.audioProvider) {
+        settings.audioProvider = providers[0]?.id || '';
+        settings.audioFamilyId = '';
+        settings.audioModel = '';
+    }
+    const selection = resolveCapabilityFamilySelection(settings.audioProvider, 'audio_generation', inputCounts, settings.audioFamilyId, settings.audioModel, '', inputRoles, parameterIntent);
+    settings.audioFamilyId = selection.family?.family_id || (selection.invalidSelection ? selection.requestedId : '');
+    settings.audioModel = selection.profile?.model_id || '';
+    const profile = selection.profile;
+    const hasReferenceAudio = inputCounts.audio > 0;
+    if(hasReferenceAudio) settings.audioSpeaker = '';
+    const profileControls = renderCapabilityParameters(profile, 'audio');
+    dynamicParams.innerHTML = renderExecutionConfigPanel(`
+        ${renderExecutionPlatformControl('audio', providers)}
+        ${renderCapabilityFamilyControl(selection.families, 'audioFamilyId', settings.audioFamilyId, 'audio-lines')}
+        ${renderCapabilityVariantControl(selection, 'audioModel')}
+        ${capabilityFamilySelectionNote(selection)}
+        ${capabilityVariantSelectionNote(selection)}
+        ${profile?.parameters?.speaker ? renderAudioSpeakerControl(hasReferenceAudio) : ''}
+        ${profileControls.markup}
+        ${capabilityStatusNote(profile)}
+    `, profile, 'audio-execution-config', profileControls.settingsControl);
+}
+function renderApiMusicParams(){
+    const inputCounts = capabilityInputCounts('music');
+    const inputRoles = capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true);
+    const parameterIntent = capabilityParameterIntent(settings.musicProvider, settings.musicModel, 'music_generation');
+    const providers = capabilityProvidersFor('music_generation', inputCounts, audioApiProviders(), inputRoles, parameterIntent);
+    if(!settings.musicProvider) {
+        settings.musicProvider = providers[0]?.id || '';
+        settings.musicFamilyId = '';
+        settings.musicModel = '';
+    }
+    const selection = resolveCapabilityFamilySelection(settings.musicProvider, 'music_generation', inputCounts, settings.musicFamilyId, settings.musicModel, '', inputRoles, parameterIntent);
+    settings.musicFamilyId = selection.family?.family_id || (selection.invalidSelection ? selection.requestedId : '');
+    settings.musicModel = selection.profile?.model_id || '';
+    const profile = selection.profile;
+    const profileControls = renderCapabilityParameters(profile, 'music');
+    dynamicParams.innerHTML = renderExecutionConfigPanel(`
+        ${renderExecutionPlatformControl('music', providers)}
+        ${renderCapabilityFamilyControl(selection.families, 'musicFamilyId', settings.musicFamilyId, 'music-2')}
+        ${renderCapabilityVariantControl(selection, 'musicModel')}
+        ${capabilityFamilySelectionNote(selection)}
+        ${capabilityVariantSelectionNote(selection)}
+        ${profileControls.markup}
+        ${capabilityStatusNote(profile)}
+    `, profile, 'music-execution-config', profileControls.settingsControl);
 }
 function renderVolcengineParams(){
     const provider = volcengineProvider();
@@ -2943,7 +4774,7 @@ function renderVolcengineParams(){
     normalizeApiSizeSettings('');
     const outpaintLocked = settings.outpaintResolutionLocked === true;
     dynamicParams.innerHTML = `
-        ${renderProviderControl(providers)}
+        ${renderExecutionPlatformControl('image')}
         ${renderModelControl(models)}
         ${renderSizePickerControl('', true)}
         ${renderQualityControl()}
@@ -2957,8 +4788,9 @@ function renderVolcengineVideoParams(){
     settings.videoProvider = 'volcengine';
     if(!settings.videoModel || !models.includes(settings.videoModel)) settings.videoModel = models[0] || 'seedance-1.0-pro';
     dynamicParams.innerHTML = `
-        ${renderVideoProviderControl(providers)}
+        ${renderExecutionPlatformControl('video')}
         ${renderVideoModelControl(models)}
+        ${renderExecutionModeFallbackControl()}
         ${renderVideoResolutionControl()}
         ${renderVideoAspectControl()}
         ${renderVideoDurationControl()}
@@ -2969,7 +4801,6 @@ function renderVolcengineVideoParams(){
         ${renderVideoToggleControl('videoWatermark', tr('smart.videoWatermark'))}
         ${renderVideoToggleControl('videoMultimodal', tr('smart.videoMultimodal'))}
         ${renderVideoToggleControl('videoUseFrameRoles', tr('smart.videoUseFrameRoles'))}
-        ${renderVideoTrustedAssetControl()}
     `;
 }
 function renderRunningHubParams(){
@@ -2994,20 +4825,224 @@ function renderRunningHubParams(){
         `;
         return;
     }
-    const mediaFields = fields.filter(f => ['image','video','audio'].includes(rhFieldRole(f))).length;
-    const promptFields = fields.filter(f => rhFieldRole(f) === 'prompt').length;
+    const mediaFields = fields.filter(f => ['text','image','video','audio'].includes(rhFieldKind(f))).length;
+    const settingFields = fields.filter(f => !['text','image','video','audio'].includes(rhFieldKind(f)));
+    const refs = rhConnectedMediaRefs();
+    settings.rhInputBindings = runningHubBindingsForNode(activeSettingsSubject(), refs, fields, settings.rhInputBindings || {});
+    ensureRunningHubSchemaSnapshot(fields);
     dynamicParams.innerHTML = `
-        ${renderRhConfigControl(ref)}
-        ${renderRhPaymentControl()}
-        ${renderRhMachineControl()}
-        <div class="rh-mini-summary">${escapeHtml(mediaFields)} 素材 · ${escapeHtml(promptFields)} 提示词</div>
-        ${fields.length ? fields.filter(f => !['image','video','audio','prompt'].includes(rhFieldRole(f))).map(renderRhSettingField).join('') : `<div class="muted-note">${escapeHtml(tr('smart.rhNeedFields'))}</div>`}
+        <div class="rh-ai-app-params">
+            <div class="rh-ai-app-param-head">
+                <strong>应用参数</strong>
+                <span>${escapeHtml(mediaFields)} 个输入 · ${escapeHtml(settingFields.length)} 个参数</span>
+            </div>
+            <div class="rh-ai-app-context-list">
+                <div class="rh-ai-app-param-row rh-ai-app-context-row">
+                    <span class="rh-ai-app-param-label">AI 应用</span>
+                    <div class="rh-ai-app-param-control">${renderRhConfigControl(ref)}</div>
+                </div>
+                <div class="rh-ai-app-param-row rh-ai-app-context-row">
+                    <span class="rh-ai-app-param-label">计费方式</span>
+                    <div class="rh-ai-app-param-control">${renderRhPaymentControl()}</div>
+                </div>
+            </div>
+            ${renderRhSchemaStatus(fields)}
+            <div class="rh-ai-app-param-list">
+                ${fields.length ? fields.map(field => renderRhAiAppFieldRow(field, fields, refs)).join('') : `<div class="muted-note">${escapeHtml(tr('smart.rhNeedFields'))}</div>`}
+            </div>
+        </div>
     `;
 }
+function rhSchemaDiffForSettings(fields, sourceSettings=settings){
+    const snapshot = sourceSettings?.rhSchemaSnapshot;
+    if(!Array.isArray(snapshot) || !snapshot.length) return null;
+    return SMART_NODE_CONTRACT.diffRunningHubSchema(snapshot, fields);
+}
+function ensureRunningHubSchemaSnapshot(fields, sourceSettings=settings){
+    if(!Array.isArray(fields) || !fields.length || !sourceSettings) return;
+    if(Array.isArray(sourceSettings.rhSchemaSnapshot) && sourceSettings.rhSchemaSnapshot.length) return;
+    sourceSettings.rhSchemaSnapshot = SMART_NODE_CONTRACT.runningHubSchemaSnapshot(fields);
+    if(sourceSettings === settings) persistActiveSmartSettings();
+    scheduleSave();
+}
+function renderRhSchemaStatus(fields){
+    const diff = rhSchemaDiffForSettings(fields);
+    if(!diff?.changed) return '';
+    const total = diff.removed.length + diff.added.length + diff.typeChanged.length + diff.requiredChanged.length + diff.orderChanged.length;
+    return `<div class="rh-schema-status" role="alert">
+        <div class="rh-schema-status-main"><i data-lucide="triangle-alert"></i><span>${escapeHtml(trf('smart.rhSchemaChanged', {n:total}))}</span></div>
+        <div class="rh-schema-status-detail">${escapeHtml(tr('smart.rhSchemaChangedHint'))}</div>
+        <button type="button" class="rh-schema-accept" data-rh-schema-accept="1">${escapeHtml(tr('smart.rhSchemaAccept'))}</button>
+    </div>`;
+}
+function rhConnectedMediaRefs(){
+    const node = activeSettingsSubject();
+    return node ? runningHubRefsForNode(node, defaultReferenceImagesFor(node)) : [];
+}
+function connectionTargetFieldKey(connection){
+    return String(connection?.targetFieldKey || connection?.target_field_key || '').trim();
+}
+function runningHubSourceRefs(node, options={}){
+    if(!node) return [];
+    let refs = isSmartMaterialNode(node) || isSmartResultGroupNode(node) ? imagesForNode(node) : [];
+    if(!refs.length && node.type === 'smart-prompt'){
+        const text = textForNode(node).trim();
+        if(text) refs = [{kind:'text', text, content:text, nodeId:node.id, imageIndex:0, name:node.title || '文本输入'}];
+    }
+    if(node.type === 'smart-loop' || node.type === 'smart-group'){
+        const text = textForNode(node).trim();
+        if(text) refs = [{kind:'text', text, content:text, nodeId:node.id, imageIndex:0, name:node.title || '文本输入'}, ...refs];
+    }
+    const sourceResultId = String(options?.sourceResultId || '').trim();
+    const sourceMediaKey = String(options?.sourceMediaKey || '').trim();
+    return refs.filter((item, index) => {
+        if(!item?.url && !SMART_NODE_CONTRACT.textContentForMediaItem(item)) return false;
+        if(sourceResultId && String(item?.resultId || item?.result_id || '') !== sourceResultId) return false;
+        if(sourceMediaKey && SMART_NODE_CONTRACT.mediaReferenceKey(item, index) !== sourceMediaKey) return false;
+        return ['text','image','video','audio'].includes(mediaKindForItem(item));
+    });
+}
+function runningHubSourceKind(node, options={}){
+    const refs = runningHubSourceRefs(node, options);
+    return refs.length === 1 ? mediaKindForItem(refs[0]) : '';
+}
+function syncRunningHubInputBindings(node){
+    if(!node || node.type !== SMART_NODE_TYPES.aiApp) return;
+    const sourceSettings = smartSettingsForNode(node);
+    const fields = rhActiveFields(sourceSettings);
+    const refs = runningHubRefsForNode(node, defaultReferenceImagesFor(node));
+    sourceSettings.rhInputBindings = runningHubBindingsForNode(node, refs, fields, sourceSettings.rhInputBindings || {});
+    node.runSettings = settingsForStorage(sourceSettings);
+    if(activeSettingsSubject()?.id === node.id) settings.rhInputBindings = {...sourceSettings.rhInputBindings};
+}
+function closeRunningHubFieldPicker(cancelPending=false){
+    runningHubFieldPicker?.remove?.();
+    runningHubFieldPicker = null;
+    runningHubFieldPickerOpeningEvent = null;
+    if(cancelPending){
+        runningHubConnectionQueue = null;
+        discardPendingUndo();
+    }
+}
+function runningHubConnectionQueueEntries(fromIds, sourceResultIds={}, fallbackSourceResultId=''){
+    return (fromIds || []).flatMap(fromId => {
+        const source = nodes.find(node => node.id === fromId);
+        const sourceResultId = String(sourceResultIds?.[fromId] || fallbackSourceResultId || '').trim();
+        return runningHubSourceRefs(source, {sourceResultId}).map((item, index) => ({
+            fromId,
+            sourceResultId,
+            sourceMediaKey:SMART_NODE_CONTRACT.mediaReferenceKey(item, index),
+            sourceMediaIndex:index
+        }));
+    });
+}
+function startRunningHubConnectionQueue(fromIds, toId, sourceResultIds={}, fallbackSourceResultId='', event=null){
+    const entries = runningHubConnectionQueueEntries(fromIds, sourceResultIds, fallbackSourceResultId);
+    if(!entries.length) return false;
+    runningHubConnectionQueue = {entries, toId, event, index:0};
+    advanceRunningHubConnectionQueue();
+    return true;
+}
+function advanceRunningHubConnectionQueue(){
+    const queue = runningHubConnectionQueue;
+    if(!queue) return;
+    if(queue.index >= queue.entries.length){
+        runningHubConnectionQueue = null;
+        commitPendingUndo();
+        render();
+        scheduleSave();
+        return;
+    }
+    const entry = queue.entries[queue.index];
+    const outcome = connectInputNodeWithTargetField(entry.fromId, queue.toId, {
+        sourceResultId:entry.sourceResultId,
+        sourceMediaKey:entry.sourceMediaKey,
+        sourceMediaIndex:entry.sourceMediaIndex
+    }, queue.event);
+    if(outcome === true){
+        queue.index += 1;
+        advanceRunningHubConnectionQueue();
+        return;
+    }
+    if(outcome === 'pending') return;
+    queue.index += 1;
+    advanceRunningHubConnectionQueue();
+}
+function connectInputNodeWithTargetField(fromId, toId, options={}, event=null){
+    const from = nodes.find(node => node.id === fromId);
+    const to = nodes.find(node => node.id === toId);
+    if(!from || !to || to.type !== SMART_NODE_TYPES.aiApp) return connectInputNode(fromId, toId, options);
+    const fields = rhActiveFields(smartSettingsForNode(to));
+    const sourceRefs = runningHubSourceRefs(from, options);
+    if(!sourceRefs.length) return false;
+    const compatibleRefs = sourceRefs.filter(ref => fields.some(field => rhFieldKind(field) === mediaKindForItem(ref)));
+    if(!compatibleRefs.length) return false;
+    if(sourceRefs.length > 1 && !options?.sourceMediaKey){
+        return startRunningHubConnectionQueue([fromId], toId, {[fromId]:options?.sourceResultId || ''}, '', event) ? 'pending' : false;
+    }
+    const kind = runningHubSourceKind(from, options);
+    const plan = SMART_NODE_CONTRACT.runningHubTargetFieldPlan(fields, kind, canvas?.connections || [], toId);
+    if(plan.mode === 'none') return false;
+    if(plan.mode === 'auto'){
+        const connected = connectInputNode(fromId, toId, {...options, targetFieldKey:plan.targetFieldKey});
+        if(connected) syncRunningHubInputBindings(to);
+        return connected;
+    }
+    closeRunningHubFieldPicker();
+    const picker = document.createElement('div');
+    picker.className = 'smart-rh-field-picker';
+    const kindLabel = kind === 'text' ? capabilityUiText('文本','text') : kind === 'video' ? capabilityUiText('视频','video') : kind === 'audio' ? capabilityUiText('音频','audio') : capabilityUiText('图片','image');
+    const sourceName = String(sourceRefs[0]?.name || rhMediaKindLabel(kind, Number(options?.sourceMediaIndex) || 0)).trim();
+    const pickerTitle = capabilityUiText(`选择“${sourceName}”对应的${kindLabel}输入`, `Choose the ${kindLabel} input for “${sourceName}”`);
+    picker.innerHTML = `<div class="smart-rh-field-picker-title">${escapeHtml(pickerTitle)}</div>${plan.choices.map(choice => `<button type="button" data-rh-target-field="${escapeAttr(choice.key)}"><i data-lucide="${kind === 'text' ? 'file-text' : kind === 'video' ? 'film' : kind === 'audio' ? 'audio-lines' : 'image'}"></i><span>${escapeHtml(choice.label)}</span>${choice.occupied ? `<small>${escapeHtml(capabilityUiText('替换','Replace'))}</small>` : ''}</button>`).join('')}`;
+    const point = event ? {x:event.clientX + 10, y:event.clientY + 10} : {x:window.innerWidth / 2, y:window.innerHeight / 2};
+    picker.style.left = `${Math.max(12, Math.min(window.innerWidth - 250, point.x))}px`;
+    picker.style.top = `${Math.max(12, Math.min(window.innerHeight - 220, point.y))}px`;
+    picker.querySelectorAll('[data-rh-target-field]').forEach(button => {
+        button.onclick = click => {
+            click.preventDefault();
+            click.stopPropagation();
+            const targetFieldKey = button.dataset.rhTargetField || '';
+            const previous = (canvas?.connections || []).find(connection => connection.to === toId && connectionTargetFieldKey(connection) === targetFieldKey);
+            if(previous && plan.mode === 'replace'){
+                canvas.connections = canvas.connections.filter(connection => connection !== previous);
+                const stillConnected = canvas.connections.some(connection => connection.from === previous.from && connection.to === toId && (connection.kind || 'flow') === 'input');
+                if(!stillConnected) to.inputNodeIds = (to.inputNodeIds || []).filter(id => id !== previous.from);
+            }
+            const connected = connectInputNode(fromId, toId, {...options, targetFieldKey});
+            closeRunningHubFieldPicker();
+            if(connected){
+                syncRunningHubInputBindings(to);
+                if(runningHubConnectionQueue){
+                    runningHubConnectionQueue.index += 1;
+                    advanceRunningHubConnectionQueue();
+                } else {
+                    commitPendingUndo();
+                    render();
+                    scheduleSave();
+                }
+            }
+        };
+    });
+    document.body.appendChild(picker);
+    runningHubFieldPicker = picker;
+    runningHubFieldPickerOpeningEvent = event;
+    refreshIcons();
+    return 'pending';
+}
+function rhMediaKindLabel(kind, index){
+    const key = kind === 'text' ? 'smart.rhTextInput' : kind === 'video' ? 'smart.rhVideoInput' : kind === 'audio' ? 'smart.rhAudioInput' : 'smart.rhImageInput';
+    return trf(key, {n:index + 1});
+}
+function rhFieldDisplayLabel(field, fields){
+    const kind = rhFieldKind(field);
+    const sameKind = sortRunningHubFields(fields).filter(item => rhFieldKind(item) === kind);
+    const index = Math.max(0, sameKind.findIndex(item => rhParamKey(item.nodeId, item.fieldName) === rhParamKey(field.nodeId, field.fieldName)));
+    const original = String(field?.label || field?.fieldName || '').trim();
+    return original && !['text','image','video','audio'].includes(original.toLowerCase()) ? original : rhMediaKindLabel(kind, index);
+}
 function renderRhConfigControl(ref){
-    const models = runningHubEntries('model');
     const apps = runningHubEntries('app');
-    const workflows = runningHubEntries('workflow');
     const selected = ref ? runningHubEntryKey(ref.kind, ref.id) : '';
     const groupHtml = (kind, entries, label) => entries.length ? `
         <div class="model-list-label rh-list-label">${escapeHtml(label)}<span class="count">${entries.length}</span></div>
@@ -3023,7 +5058,7 @@ function renderRhConfigControl(ref){
         <div class="smart-popover compact-popover rh-picker-popover">
             <div class="smart-popover-title">${escapeHtml(tr('smart.rhConfig'))}</div>
             <div class="model-list rh-config-list">
-                ${groupHtml('model', models, '模型 API')}${groupHtml('app', apps, 'AI 应用')}${groupHtml('workflow', workflows, '工作流') || ''}
+                ${groupHtml('app', apps, tr('smart.rhApps')) || `<div class="muted-note">${escapeHtml(tr('smart.rhNoConfig'))}</div>`}
             </div>
         </div>
     </div>`;
@@ -3041,32 +5076,25 @@ function renderRhPaymentControl(){
         </div>
     </div>`;
 }
-function renderRhMachineControl(){
-    const value = settings.rhInstanceType === 'plus' ? 'plus' : '';
-    const labels = {'':'24G', plus:'48G'};
-    return `<div class="smart-control rh-machine-control">
-        <button class="smart-pill" type="button"><i data-lucide="cpu"></i><span>${escapeHtml(labels[value])}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
-        <div class="smart-popover compact-popover rh-picker-popover">
-            <div class="smart-popover-title">${escapeHtml(tr('smart.rhMachine'))}</div>
-            <div class="model-list">
-                ${Object.entries(labels).map(([key, label]) => `<button type="button" class="direct-option ${key === value ? 'active' : ''}" data-smart-param="rhInstanceType" data-smart-value="${escapeHtml(key)}"><span>${escapeHtml(label)}</span></button>`).join('')}
-            </div>
-        </div>
-    </div>`;
-}
 function renderMsParams(){
-    settings.msgenModel = MS_GEN_MODELS[settings.msgenModel] ? settings.msgenModel : 'zimage';
-    if(!settings.msCustomModel) settings.msCustomModel = modelscopeImageModels()[0] || 'Tongyi-MAI/Z-Image-Turbo';
+    const models = modelscopeImageModels();
+    const refs = visibleReferenceImagesFor(activeSettingsSubject());
+    const profiles = capabilityModelsForProvider('modelscope', 'image_generation', capabilityInputCounts('image'), models, capabilityInputRoles(refs, true));
+    const compatibleModels = profiles.map(item => item.model_id);
+    const requestedModel = settings.msCustomModel;
+    if(requestedModel && !models.includes(requestedModel)) settings.msCustomModel = '';
+    else if(!requestedModel) settings.msCustomModel = compatibleModels[0] || '';
     normalizeApiSizeSettings('ms');
     dynamicParams.innerHTML = `
-        ${renderMsFunctionControl()}
-        ${renderMsCustomModelPill()}
+        ${renderExecutionPlatformControl('image')}
+        ${renderModelScopeModelControl(models)}
         ${renderSizePickerControl('ms', false)}
         ${renderCountVisualControl()}
     `;
 }
 function renderComfyParams(){
-    settings.comfyMode = ['text','enhance','edit','custom'].includes(settings.comfyMode) ? settings.comfyMode : 'text';
+    const localWorkflowNode = activeSettingsSubject()?.type === SMART_NODE_TYPES.comfyWorkflow;
+    settings.comfyMode = localWorkflowNode ? 'custom' : (['text','enhance','edit','custom'].includes(settings.comfyMode) ? settings.comfyMode : 'text');
     const modeOptions = [
         ['text', tr('canvas.comfyModeText') || '文生图'],
         ['enhance', tr('canvas.comfyModeEnhance') || '图片增强'],
@@ -3095,7 +5123,7 @@ function renderComfyParams(){
         html += fields.length ? fields.map(renderComfySettingField).join('') : (settings.comfyWorkflow ? '' : `<div class="muted-note">${escapeHtml(tr('smart.noWorkflow'))}</div>`);
     }
     dynamicParams.innerHTML = `
-        <div class="smart-control comfy-mode-control">
+        ${localWorkflowNode ? '' : `<div class="smart-control comfy-mode-control">
             <button class="smart-pill" type="button"><i data-lucide="workflow"></i><span>${escapeHtml(modeOptions.find(([v]) => v === settings.comfyMode)?.[1] || 'ComfyUI')}</span></button>
             <div class="smart-popover compact-popover">
                 <div class="smart-popover-title">${escapeHtml(tr('smart.comfyMode'))}</div>
@@ -3103,7 +5131,7 @@ function renderComfyParams(){
                     ${modeOptions.map(([value, label]) => `<button type="button" class="direct-option ${value === settings.comfyMode ? 'active' : ''}" data-smart-param="comfyMode" data-smart-value="${escapeHtml(value)}"><span>${escapeHtml(label)}</span></button>`).join('')}
                 </div>
             </div>
-        </div>
+        </div>`}
         ${html}
     `;
 }
@@ -3240,12 +5268,15 @@ function renderProviderControl(providers){
     </div>`;
 }
 function renderModelControl(models){
+    const refs = visibleReferenceImagesFor(activeSettingsSubject());
+    const profiles = capabilityModelsForProvider(settings.provider_id, 'image_generation', capabilityInputCounts('image'), models, capabilityInputRoles(refs, true));
+    const byId = new Map(profiles.map(item => [item.model_id, item]));
     return `<div class="smart-control model-control">
         <button class="smart-pill" type="button"><i data-lucide="sparkles"></i><span class="sub">${escapeHtml(settings.model || tr('smart.model'))}</span></button>
         <div class="smart-popover compact-popover">
             <div class="smart-popover-title">${escapeHtml(tr('smart.imageModel'))}</div>
             <div class="model-list">
-                ${models.map(m => `<button type="button" class="direct-option ${m === settings.model ? 'active' : ''}" data-smart-param="model" data-smart-value="${escapeHtml(m)}"><span>${escapeHtml(m)}</span></button>`).join('') || `<div class="muted-note">${escapeHtml(tr('smart.noImageModel'))}</div>`}
+                ${models.map(m => `<button type="button" class="direct-option ${m === settings.model ? 'active' : ''}" data-smart-param="model" data-smart-value="${escapeHtml(m)}"><span>${escapeHtml(capabilityModelLabel(byId.get(m), m))}</span></button>`).join('') || `<div class="muted-note">${escapeHtml(tr('smart.noImageModel'))}</div>`}
             </div>
         </div>
     </div>`;
@@ -3279,6 +5310,25 @@ function renderMsCustomModelPill(){
         </div>
     </div>`;
 }
+function renderModelScopeModelControl(models){
+    const refs = visibleReferenceImagesFor(activeSettingsSubject());
+    const profiles = capabilityModelsForProvider('modelscope', 'image_generation', capabilityInputCounts('image'), models, capabilityInputRoles(refs, true));
+    const compatibleModels = profiles.map(item => item.model_id);
+    const byId = new Map(profiles.map(item => [item.model_id, item]));
+    const selected = settings.msCustomModel || compatibleModels[0] || '';
+    const selectedProfile = byId.get(selected) || capabilityProfileFor('modelscope', selected, 'image_generation');
+    const invalidSelection = Boolean(selected && models.includes(selected) && !compatibleModels.includes(selected));
+    const emptyMessage = models.length ? tr('smart.noVerifiedImageModel') : tr('smart.noMsModel');
+    return `<div class="smart-control model-control">
+        <button class="smart-pill" type="button"><i data-lucide="sparkles"></i><span class="sub">${escapeHtml(selected ? capabilityModelLabel(selectedProfile, selected) : tr('smart.model'))}</span></button>
+        <div class="smart-popover compact-popover">
+            <div class="smart-popover-title">${escapeHtml(tr('smart.imageModel'))}</div>
+            <div class="model-list">
+                ${compatibleModels.map(model => `<button type="button" class="direct-option ${model === selected ? 'active' : ''}" data-smart-param="msCustomModel" data-smart-value="${escapeAttr(model)}"><span>${escapeHtml(capabilityModelLabel(byId.get(model), model))}</span></button>`).join('') || `<div class="muted-note">${escapeHtml(emptyMessage)}</div>`}
+            </div>
+        </div>
+    </div>${invalidSelection ? `<div class="smart-capability-note warning"><i data-lucide="triangle-alert"></i><span>${escapeHtml(tr('smart.familyInputMismatch'))}</span></div>` : ''}`;
+}
 function renderRatioControl(prefix='', includeSource=false){
     const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
     const resKey = prefix ? `${prefix}Resolution` : 'resolution';
@@ -3302,7 +5352,7 @@ function renderResolutionControl(prefix=''){
     const resKey = prefix ? `${prefix}Resolution` : 'resolution';
     const options = (!prefix && settings.engine === 'api') ? ['auto','1k','2k','4k','custom'] : ['1k','2k','4k','custom'];
     const current = settings[resKey] || ((!prefix && settings.engine === 'api') ? defaultSmartApiResolution(settings.model) : '1k');
-    const allowAuto = !prefix && settings.engine === 'api' && settings.apiKind !== 'video' && isGptImageAutoSizeModel(settings.model);
+    const allowAuto = !prefix && settings.engine === 'api' && settings.apiKind === 'image' && isGptImageAutoSizeModel(settings.model);
     return `<div class="smart-control resolution-control">
         <button class="smart-pill" type="button"><i data-lucide="monitor"></i><span>${escapeHtml(resolutionLabel(prefix))}</span></button>
         <div class="smart-popover compact-popover">
@@ -3350,7 +5400,7 @@ function renderSizePickerControl(prefix='', includeSource=false){
     const currentRes = settings[resKey] || ((!prefix && settings.engine === 'api') ? defaultSmartApiResolution(settings.model) : '1k');
     const currentRatio = settings[ratioKey] || 'square';
     const currentCustomRatio = settings[customRatioKey] || (currentRatio === 'source' ? sourceImageRatioLabel(prefix) : '');
-    const allowAuto = !prefix && settings.engine === 'api' && settings.apiKind !== 'video' && isGptImageAutoSizeModel(settings.model);
+    const allowAuto = !prefix && settings.engine === 'api' && settings.apiKind === 'image' && isGptImageAutoSizeModel(settings.model);
     const ratios = [
         ['square','1:1','正方形'], ['portrait','2:3','竖图'], ['landscape','3:2','横图'], ['portrait43','3:4','竖图'], ['landscape43','4:3','横图'],
         ['story','9:16','竖屏'], ['wide','16:9','宽屏'], ['ultrawide','21:9','超宽'], ['ultratall','9:21','超竖'],
@@ -3425,14 +5475,16 @@ function renderQualityControl(){
         </div>
     </div>`;
 }
-function renderCountVisualControl(){
-    const value = Number(settings.count || 1);
+function renderCountVisualControl(maxCount=8){
+    const limit = Math.max(1, Math.min(8, Number(maxCount) || 8));
+    const value = Math.max(1, Math.min(limit, Number(settings.count || 1)));
+    settings.count = value;
     return `<div class="smart-control count-control">
         <button class="smart-pill" type="button"><i data-lucide="copy"></i><span>${value}${tr('smart.countUnit') ? ' ' + escapeHtml(tr('smart.countUnit')) : ''}</span></button>
         <div class="smart-popover compact-popover" style="min-width:170px">
             <div class="smart-popover-title">${escapeHtml(tr('smart.count'))}</div>
             <div class="count-grid">
-                ${[1,2,3,4,5,6,7,8].map(n => `<button type="button" class="count-cell ${n === value ? 'active' : ''}" data-smart-param="count" data-smart-value="${n}">${n}</button>`).join('')}
+                ${Array.from({length:limit}, (_, index) => index + 1).map(n => `<button type="button" class="count-cell ${n === value ? 'active' : ''}" data-smart-param="count" data-smart-value="${n}">${n}</button>`).join('')}
             </div>
         </div>
     </div>`;
@@ -3509,6 +5561,8 @@ function rhParamKey(nodeId, fieldName){
 }
 function rhFieldKind(field){
     const type = String(field?.fieldType || '').trim().toUpperCase();
+    if(['STRING','TEXT'].includes(type)) return 'text';
+    if(['SELECT','SWITCH','COMBO','DROPDOWN'].includes(type)) return 'select';
     if(type === 'IMAGE') return 'image';
     if(type === 'VIDEO') return 'video';
     if(type === 'AUDIO') return 'audio';
@@ -3523,7 +5577,7 @@ function rhFieldKind(field){
 }
 function rhFieldRole(field){
     const kind = rhFieldKind(field);
-    if(['image','video','audio','number','slider','boolean'].includes(kind)) return kind;
+    if(['image','video','audio','number','slider','boolean','select'].includes(kind)) return kind;
     const text = `${field?.fieldName || ''} ${field?.label || ''} ${field?.group || ''}`.toLowerCase();
     if(/prompt|positive|negative|text|caption|description|关键词|提示词|正向|负向/.test(text)) return 'prompt';
     return 'text';
@@ -3590,11 +5644,17 @@ function rhParamValue(field, media=null, sourceSettings=settings, fields=null, r
     const key = rhParamKey(field.nodeId, field.fieldName);
     const param = sourceSettings.rhParams[key];
     const kind = rhFieldKind(field);
-    if(['image','video','audio'].includes(kind)){
+    if(['text','image','video','audio'].includes(kind)){
+        const bound = media?.boundByField?.[key];
+        if(kind === 'text' && bound) return SMART_NODE_CONTRACT.textContentForMediaItem(bound);
+        if(bound?.url) return bound.url;
         const idx = rhFieldIndexes(fields || rhActiveFields(sourceSettings))[key] || 0;
-        const up = media?.[kind]?.[idx]?.url || '';
+        const upstreamItem = media?.[kind]?.[idx];
+        const up = kind === 'text' ? SMART_NODE_CONTRACT.textContentForMediaItem(upstreamItem) : upstreamItem?.url || '';
         if(rhCurrentKind(sourceSettings) === 'workflow' && kind === 'image' && field.required !== true && !up) return '';
-        return up || param?.value || rhDefaultValue(field);
+        if(up) return up;
+        if(rhFieldRole(field) === 'prompt') return param?.value ?? (media?.prompt || rhDefaultValue(field));
+        return param?.value ?? rhDefaultValue(field);
     }
     if(rhRandomEnabled(field) && smartRhRandomActiveFor(sourceSettings, key)){
         if(randomValues[key] === undefined) randomValues[key] = smartRhRandomValue(field);
@@ -3620,17 +5680,24 @@ function rhDefaultPromptSuggestion(){
     }
     return '';
 }
+function smartPromptPlaceholder(){
+    if(settings.apiKind === 'text') return capabilityUiText('输入要发送给模型的指令...','Enter instructions for the model...');
+    if(settings.apiKind === 'video') return capabilityUiText('描述你想生成或编辑的视频...','Describe the video you want to generate or edit...');
+    if(settings.apiKind === 'audio') return capabilityUiText('输入需要朗读的文本，或描述需要的语音、音色与音效...','Enter text to speak, or describe the speech, voice, or sound effect you need...');
+    if(settings.apiKind === 'music') return capabilityUiText('描述歌曲、纯音乐或配乐，也可以填写歌词方向...','Describe a song, instrumental, or soundtrack, including lyric direction if needed...');
+    return tr('smart.promptPlaceholder');
+}
 function updatePromptPlaceholder(){
     if(!promptInput) return;
     const suggestion = rhDefaultPromptSuggestion();
-    promptInput.dataset.placeholder = suggestion || tr('smart.promptPlaceholder');
+    promptInput.dataset.placeholder = suggestion || smartPromptPlaceholder();
 }
 function rhFieldIndexes(fields){
-    const counters = {image:0, video:0, audio:0};
+    const counters = {text:0, image:0, video:0, audio:0};
     const map = {};
     sortRunningHubFields(fields).forEach(field => {
         const kind = rhFieldKind(field);
-        if(['image','video','audio'].includes(kind)){
+        if(['text','image','video','audio'].includes(kind)){
             map[rhParamKey(field.nodeId, field.fieldName)] = counters[kind]++;
         }
     });
@@ -3704,14 +5771,58 @@ async function currentRunningHubWorkflowConfig(sourceSettings=settings){
     };
 }
 function rhMediaForRun(prompt, refs){
-    const cleanRefs = (refs || []).filter(ref => ref?.url);
+    const cleanRefs = (refs || []).filter(ref => ref?.url || SMART_NODE_CONTRACT.textContentForMediaItem(ref));
     return {
         refs:cleanRefs,
+        text:cleanRefs.filter(ref => mediaKindForItem(ref) === 'text'),
         image:imageRefsOnly(cleanRefs),
         video:videoRefsOnly(cleanRefs),
         audio:audioRefsOnly(cleanRefs),
         prompt:String(prompt || '').trim()
     };
+}
+function runningHubTextRefsForNode(node){
+    if(!node) return [];
+    const refs = [];
+    upstreamConnectionsForKinds(node, ['input']).forEach(connection => {
+        const source = nodes.find(item => item.id === connection.from);
+        if(!source) return;
+        if(isSmartMaterialNode(source)){
+            imagesForNode(source).forEach((item, index) => {
+                const text = SMART_NODE_CONTRACT.textContentForMediaItem(item);
+                if(text) refs.push({...item, kind:'text', text, nodeId:source.id, imageIndex:index, targetFieldKey:connectionTargetFieldKey(connection)});
+            });
+            return;
+        }
+        const text = textForNode(source).trim();
+        if(text) refs.push({kind:'text', text, content:text, nodeId:source.id, imageIndex:0, name:source.title || '文本输入', targetFieldKey:connectionTargetFieldKey(connection)});
+    });
+    return refs;
+}
+function runningHubRefsForNode(node, refs){
+    const combined = [...(refs || []), ...runningHubTextRefsForNode(node)];
+    const seen = new Set();
+    return combined.filter((item, index) => {
+        if(!item?.url && !SMART_NODE_CONTRACT.textContentForMediaItem(item)) return false;
+        const key = SMART_NODE_CONTRACT.mediaReferenceKey(item, index);
+        if(!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+function runningHubBindingsFromConnections(node, refs, fields){
+    if(!node) return {};
+    return SMART_NODE_CONTRACT.runningHubBindingsFromConnections(node.id, fields, refs, canvas?.connections || []);
+}
+function runningHubBindingsForNode(node, refs, fields, existing={}){
+    const explicit = runningHubBindingsFromConnections(node, refs, fields);
+    return SMART_NODE_CONTRACT.reconcileRunningHubInputBindings(fields, refs, {...(existing || {}), ...explicit});
+}
+function rhPrepareMediaBindings(media, sourceSettings, fields, node=null){
+    const refs = media?.refs || [];
+    sourceSettings.rhInputBindings = runningHubBindingsForNode(node, refs, fields, sourceSettings?.rhInputBindings || {});
+    media.boundByField = SMART_NODE_CONTRACT.runningHubBoundMedia(fields, refs, sourceSettings.rhInputBindings);
+    return media;
 }
 function tempShUploadedUrlFor(url, sourceSettings=settings){
     const source = String(url || '');
@@ -3940,7 +6051,7 @@ async function rhBuildWorkflowRequestExtras(media, nodeInfoList, sourceSettings=
         if(!['image','video','audio'].includes(kind)) continue;
         const key = rhParamKey(field.nodeId, field.fieldName);
         const idx = indexes[key] || 0;
-        const hasInput = Boolean(media[kind]?.[idx]?.url);
+        const hasInput = Boolean(media.boundByField?.[key]?.url || media[kind]?.[idx]?.url);
         const kindLabel = kind === 'image' ? '图片' : kind === 'video' ? '视频' : '音频';
         if(field.required === true && !hasInput) throw new Error(`RunningHub 工作流缺少必选${kindLabel}：${rhRequiredLabel(field)}`);
         if(field.required !== true && !hasInput) missingOptional.push(field);
@@ -3964,7 +6075,7 @@ async function rhUploadValueIfNeeded(value, sourceSettings=settings){
     const res = await fetch('/api/runninghub/upload-asset', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({url:text, useWallet:(sourceSettings || settings).rhPayment === 'wallet'})
+        body:JSON.stringify({url:text, useWallet:(sourceSettings || settings).rhPayment === 'wallet', region:runningHubRegion()})
     });
     const data = await res.json();
     if(!res.ok || data.success === false) throw new Error(data.detail || data.error || tr('smart.rhUploadFailed'));
@@ -3983,15 +6094,66 @@ async function rhBuildNodeInfoList(media, sourceSettings=settings, randomValues=
         if(mode === 'workflow' && !Object.prototype.hasOwnProperty.call(explicitParams, key) && rhLooksLikeComplexDefault(field) && !['image','video','audio'].includes(kind) && rhFieldRole(field) !== 'prompt') continue;
         if(mode === 'workflow' && ['image','video','audio'].includes(kind)){
             const idx = indexes[key] || 0;
-            if(field.required !== true && !media[kind]?.[idx]?.url) continue;
+            const input = media?.boundByField?.[key] || media?.[kind]?.[idx];
+            if(field.required !== true && !input?.url) continue;
         }
         let value = rhParamValue(field, media, sourceSettings, fields, randomValues);
         if(rhFieldRole(field) === 'prompt' && !String(value || '').trim()) value = rhDefaultValue(field);
+        if(field.required === true && !String(value ?? '').trim()) throw new Error(`RunningHub AI 应用缺少必填输入：${rhRequiredLabel(field)}`);
         if(['image','video','audio'].includes(kind)) value = await rhUploadValueIfNeeded(value, sourceSettings);
         if(['number','slider'].includes(kind) && String(value ?? '').trim() !== '' && !Number.isNaN(Number(value))) value = Number(value);
         result.push({nodeId:field.nodeId, fieldName:field.fieldName, fieldValue:value});
     }
     return result;
+}
+function renderRhAiAppFieldRow(field, fields=rhActiveFields(), refs=rhConnectedMediaRefs()){
+    const kind = rhFieldKind(field);
+    if(!['text','image','video','audio'].includes(kind)) return renderRhSettingField(field);
+    const mediaFields = fields.filter(item => ['text','image','video','audio'].includes(rhFieldKind(item)));
+    const key = rhParamKey(field.nodeId, field.fieldName);
+    const bound = SMART_NODE_CONTRACT.runningHubBoundMedia(mediaFields, refs, settings.rhInputBindings || {});
+    const connected = bound[key];
+    const icon = kind === 'text' ? 'file-text' : kind === 'video' ? 'film' : kind === 'audio' ? 'audio-lines' : 'image';
+    const label = rhFieldDisplayLabel(field, mediaFields);
+    return `<div class="rh-ai-app-param-row rh-ai-app-media-row ${connected || rhUserParamValue(field) ? 'is-mapped' : 'is-missing'}" title="${escapeAttr(label)}">
+        <span class="rh-ai-app-param-label rh-ai-app-media-label"><i data-lucide="${icon}"></i><span>${escapeHtml(label)}</span>${field.required === true ? `<em>${escapeHtml(tr('smart.rhInputRequired'))}</em>` : ''}</span>
+        <div class="rh-ai-app-media-control">
+            ${connected ? renderRhConnectedInputControl(connected, kind) : renderRhDirectInputControl(field, key, kind)}
+        </div>
+    </div>`;
+}
+function renderRhConnectedInputControl(item, kind){
+    const text = kind === 'text' ? SMART_NODE_CONTRACT.textContentForMediaItem(item) : '';
+    const name = String(item?.name || (text ? text.slice(0, 80) : smartImageNameFromUrl(item?.url || '')) || `${kind} 输入`).trim();
+    const preview = kind === 'image' && item?.url
+        ? `<img src="${escapeAttr(item.url)}" alt="">`
+        : kind === 'video' && item?.url
+            ? `<video src="${escapeAttr(item.url)}" muted preload="metadata"></video>`
+            : `<i data-lucide="${kind === 'text' ? 'file-text' : kind === 'audio' ? 'audio-lines' : 'link-2'}"></i>`;
+    return `<div class="rh-ai-app-connected-card" title="${escapeAttr(name)}">
+        <span class="rh-ai-app-connected-preview">${preview}</span>
+        <span class="rh-ai-app-connected-copy"><strong>${escapeHtml(name)}</strong><small>已连接</small></span>
+        <i data-lucide="link-2" class="rh-ai-app-connected-link"></i>
+    </div>`;
+}
+function renderRhDirectInputControl(field, key, kind){
+    const value = rhUserParamValue(field) || rhDefaultValue(field);
+    if(kind === 'text'){
+        const compact = String(value || '').trim().length > 0 && String(value).length <= 24 && !String(value).includes('\n');
+        return `<textarea class="rh-ai-app-direct-text ${compact ? 'is-compact' : ''}" data-rh-direct-text="${escapeAttr(key)}" placeholder="${escapeAttr(field?.label || field?.fieldName || '输入文本')}">${escapeHtml(value)}</textarea>`;
+    }
+    const accept = kind === 'video' ? 'video/*' : kind === 'audio' ? 'audio/*' : 'image/*';
+    const kindLabel = kind === 'video' ? '视频' : kind === 'audio' ? '音频' : '图片';
+    const fileName = settings.rhParams?.[key]?.media?.name || (value ? smartImageNameFromUrl(value) : '');
+    return `<div class="rh-ai-app-direct-media ${value ? 'has-value' : ''}">
+        <div class="rh-ai-app-direct-media-main">
+            <i data-lucide="${kind === 'video' ? 'film' : kind === 'audio' ? 'audio-lines' : 'image'}"></i>
+            <span>${escapeHtml(fileName || `选择${kindLabel}`)}</span>
+            <button type="button" data-rh-direct-upload="${escapeAttr(key)}" title="上传${escapeAttr(kindLabel)}"><i data-lucide="upload"></i></button>
+            <input type="file" data-rh-direct-file="${escapeAttr(key)}" data-kind="${escapeAttr(kind)}" accept="${accept}" hidden>
+        </div>
+        <input class="rh-ai-app-direct-url" type="url" data-rh-direct-url="${escapeAttr(key)}" value="${escapeAttr(value)}" placeholder="或粘贴${escapeAttr(kindLabel)}地址">
+    </div>`;
 }
 function renderRhSettingField(field){
     const key = rhParamKey(field.nodeId, field.fieldName);
@@ -4001,44 +6163,50 @@ function renderRhSettingField(field){
     const options = rhExtractFieldOptions(field);
     if(kind === 'boolean'){
         const active = String(value).toLowerCase() === 'true';
-        return `<button type="button" class="setting-check ${active ? 'active' : ''}" data-rh-bool="${escapeHtml(key)}"><span class="check-box"></span><span>${escapeHtml(label)}</span></button>`;
+        return `<div class="rh-ai-app-param-row" title="${escapeAttr(label)}">
+            <span class="rh-ai-app-param-label">${escapeHtml(label)}</span>
+            <button type="button" class="setting-check rh-ai-app-bool ${active ? 'active' : ''}" data-rh-bool="${escapeHtml(key)}"><span class="check-box"></span><span>${escapeHtml(active ? '是' : '否')}</span></button>
+        </div>`;
     }
     if(kind === 'slider'){
         const min = Number.isFinite(Number(field.min)) ? Number(field.min) : 0;
         const max = Number.isFinite(Number(field.max)) && Number(field.max) > min ? Number(field.max) : 1;
         const step = Number.isFinite(Number(field.step)) && Number(field.step) > 0 ? Number(field.step) : 0.01;
         const numericValue = Number.isFinite(Number(value)) ? Number(value) : min;
-        return `<div class="smart-control rh-slider-control" title="${escapeHtml(label)}">
-            <button class="smart-pill" type="button"><span class="sub">${escapeHtml(label)}</span><span class="rh-slider-pill-value">${escapeHtml(numericValue)}</span></button>
-            <div class="smart-popover compact-popover rh-picker-popover rh-param-popover rh-slider-popover">
-                <div class="smart-popover-title"><span>${escapeHtml(label)}</span><span class="rh-slider-value">${escapeHtml(numericValue)}</span></div>
+        return `<div class="rh-ai-app-param-row" title="${escapeAttr(label)}">
+            <span class="rh-ai-app-param-label">${escapeHtml(label)}</span>
+            <div class="smart-control rh-ai-app-slider">
                 <input type="range" class="smart-range rh-slider-input" data-rh-param="${escapeHtml(key)}" data-rh-type="slider" min="${escapeHtml(min)}" max="${escapeHtml(max)}" step="${escapeHtml(step)}" value="${escapeHtml(numericValue)}">
+                <span class="rh-slider-value">${escapeHtml(numericValue)}</span>
             </div>
         </div>`;
     }
     if(options?.length){
-        const curLabel = String(value || options[0] || label);
-        return `<div class="smart-control rh-dropdown-control" title="${escapeHtml(label)}">
-            <button class="smart-pill" type="button"><span class="sub">${escapeHtml(curLabel)}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
-            <div class="smart-popover compact-popover rh-picker-popover rh-param-popover">
-                <div class="smart-popover-title">${escapeHtml(label)}</div>
-                <div class="model-list rh-param-list">
-                    ${options.map(o => `<button type="button" class="direct-option ${String(o) === String(value) ? 'active' : ''}" data-rh-pick="${escapeHtml(key)}" data-rh-value="${escapeHtml(o)}"><span>${escapeHtml(o)}</span></button>`).join('') || `<div class="muted-note">${escapeHtml(tr('smart.noOption'))}</div>`}
-                </div>
-            </div>
+        const optionLabel = option => String(field?.optionLabels?.[String(option)] ?? option);
+        const currentValue = String(value ?? options[0] ?? '');
+        return `<div class="rh-ai-app-param-row" title="${escapeAttr(label)}">
+            <label class="rh-ai-app-param-label" for="rh-param-${escapeAttr(key)}">${escapeHtml(label)}</label>
+            <select id="rh-param-${escapeAttr(key)}" class="rh-ai-app-param-select" data-rh-param="${escapeAttr(key)}">
+                ${options.map(option => `<option value="${escapeAttr(option)}" ${String(option) === currentValue ? 'selected' : ''}>${escapeHtml(optionLabel(option))}</option>`).join('')}
+            </select>
         </div>`;
     }
     const type = kind === 'number' ? 'number' : 'text';
-    const inputHtml = `<input type="${type}" data-rh-param="${escapeHtml(key)}" value="${escapeHtml(value)}">`;
+    const inputHtml = `<input class="rh-ai-app-param-input" type="${type}" data-rh-param="${escapeHtml(key)}" value="${escapeHtml(value)}">`;
     if(kind === 'number' && rhRandomEnabled(field)){
         const active = smartRhRandomActive(key);
-        return `<div class="num-with-dice" title="${escapeHtml(label)}">
-            <span class="num-label">${escapeHtml(label)}</span>
-            ${inputHtml}
-            <button type="button" class="dice-btn ${active ? 'active' : ''}" data-rh-random="${escapeHtml(key)}" title="${escapeHtml(active ? tr('smart.diceOn') : tr('smart.diceOff'))}"><i data-lucide="dice-5"></i></button>
+        return `<div class="rh-ai-app-param-row" title="${escapeAttr(label)}">
+            <span class="rh-ai-app-param-label">${escapeHtml(label)}</span>
+            <div class="rh-ai-app-param-input-wrap">
+                ${inputHtml}
+                <button type="button" class="dice-btn ${active ? 'active' : ''}" data-rh-random="${escapeHtml(key)}" title="${escapeHtml(active ? tr('smart.diceOn') : tr('smart.diceOff'))}"><i data-lucide="dice-5"></i></button>
+            </div>
         </div>`;
     }
-    return `<div class="num-compact ${type === 'text' ? 'rh-text-param' : ''}" title="${escapeHtml(label)}"><span class="num-label">${escapeHtml(label)}</span>${inputHtml}</div>`;
+    return `<div class="rh-ai-app-param-row" title="${escapeAttr(label)}">
+        <span class="rh-ai-app-param-label">${escapeHtml(label)}</span>
+        ${inputHtml}
+    </div>`;
 }
 function comfyRandomEnabledField(field){ return field?.type === 'number' && field.random_enabled === true; }
 function smartComfyRandomActive(fieldId){
@@ -4072,11 +6240,13 @@ function smartComfyRandomValue(field){
     return Math.floor(value);
 }
 function setDynamicSetting(key, value){
-    const numericKeys = new Set(['count','width','height','videoDuration','enhanceStrength','enhanceUpscaleRes','editUpscaleRes','customRatioWidth','customRatioHeight','customWidth','customHeight','msCustomRatioWidth','msCustomRatioHeight','msCustomWidth','msCustomHeight']);
-    const layoutKeys = new Set(['provider_id','model','resolution','ratio','msgenModel','msCustomModel','msResolution','msRatio','videoProvider','videoModel','videoAspect','videoResolution','comfyMode','comfyWorkflow','quality','count','enhanceUpscaleRes','editUpscaleRes','jimengUpscaleRes','rhConfigKey','rhPayment','rhInstanceType']);
+    const numericKeys = new Set(['count','width','height','videoDuration','audioSampleRate','audioSpeechRate','audioLoudnessRate','audioPitchRate','enhanceStrength','enhanceUpscaleRes','editUpscaleRes','customRatioWidth','customRatioHeight','customWidth','customHeight','msCustomRatioWidth','msCustomRatioHeight','msCustomWidth','msCustomHeight']);
+    const layoutKeys = new Set(['provider_id','model','imageFamilyId','capabilityAspectRatio','resolution','ratio','msgenModel','msCustomModel','msResolution','msRatio','videoProvider','videoModel','videoFamilyId','videoAspect','videoResolution','audioProvider','audioModel','audioFamilyId','audioFormat','audioSampleRate','musicProvider','musicModel','musicFamilyId','comfyMode','comfyWorkflow','quality','count','enhanceUpscaleRes','editUpscaleRes','jimengUpscaleRes','rhConfigKey','rhPayment','rhInstanceType']);
     settings[key] = numericKeys.has(key) && value !== '' ? Number(value) : value;
-    if(key === 'provider_id') settings.model = '';
-    if(key === 'videoProvider') settings.videoModel = '';
+    if(key === 'provider_id'){ settings.model = ''; settings.imageFamilyId = ''; }
+    if(key === 'videoProvider'){ settings.videoModel = ''; settings.videoFamilyId = ''; }
+    if(key === 'audioProvider'){ settings.audioModel = ''; settings.audioFamilyId = ''; }
+    if(key === 'musicProvider'){ settings.musicModel = ''; settings.musicFamilyId = ''; }
     if(key === 'videoMultimodal') settings._videoMultimodalUserSet = true;
     if(key === 'videoMultimodal' && settings.videoMultimodal) settings.videoUseFrameRoles = false;
     normalizeSmartVideoModeSettings(settings, key === 'videoUseFrameRoles');
@@ -4121,6 +6291,8 @@ function setDynamicSetting(key, value){
     if(key === 'rhConfigKey'){
         settings.rhParams = {};
         settings.rhRandomActive = {};
+        settings.rhInputBindings = {};
+        settings.rhSchemaSnapshot = [];
     }
     persistActiveSmartSettings();
     rememberRecentSmartSettings(settings, activeSettingsSubject());
@@ -4128,47 +6300,472 @@ function setDynamicSetting(key, value){
     scheduleSave();
 }
 function closeAllSmartPopovers(){
-    document.querySelectorAll('.smart-control.pinned, .smart-control.interacting').forEach(c => c.classList.remove('pinned', 'interacting'));
+    hideCapabilityParameterTooltip();
+    document.querySelectorAll('.smart-control.pinned').forEach(control => {
+        control.classList.remove('pinned');
+        control.classList.remove('popover-below');
+        control.style.removeProperty('--smart-popover-available');
+        control.style.removeProperty('--smart-popover-shift-x');
+        control.querySelector(':scope > .smart-pill')?.setAttribute('aria-expanded', 'false');
+    });
 }
-// 悬浮打开弹层后点了里面的参数：标记 interacting，让它熬过重渲染不收起；鼠标真正离开该控件时才关闭。
-function markControlInteracting(el){
-    const ctrl = el?.closest?.('.smart-control');
-    if(ctrl && !ctrl.classList.contains('pinned')) ctrl.classList.add('interacting');
+function positionPinnedSmartPopover(control){
+    if(!control?.classList?.contains('pinned')) return;
+    const popover = control.querySelector(':scope > .smart-popover');
+    if(!popover) return;
+    control.style.removeProperty('--smart-popover-shift-x');
+    const visual = window.visualViewport;
+    const viewportLeft = Number(visual?.offsetLeft) || 0;
+    const viewportTop = Number(visual?.offsetTop) || 0;
+    const viewportWidth = Number(visual?.width) || window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportHeight = Number(visual?.height) || window.innerHeight || document.documentElement.clientHeight || 0;
+    const viewportRight = viewportLeft + viewportWidth;
+    const viewportBottom = viewportTop + viewportHeight;
+    const margin = 10;
+    const gap = 8;
+    const scale = safeScale(viewport?.scale);
+    const controlRect = control.getBoundingClientRect();
+    const popoverRect = popover.getBoundingClientRect();
+    const availableAbove = Math.max(0, controlRect.top - viewportTop - margin - gap);
+    const availableBelow = Math.max(0, viewportBottom - controlRect.bottom - margin - gap);
+    const desiredHeight = Math.max(0, popoverRect.height);
+    const openBelow = desiredHeight > availableAbove && (desiredHeight <= availableBelow || availableBelow > availableAbove);
+    const available = openBelow ? availableBelow : availableAbove;
+    control.classList.toggle('popover-below', openBelow);
+    control.style.setProperty('--smart-popover-available', `${Math.max(24, Math.floor(available / scale))}px`);
+    const positionedRect = popover.getBoundingClientRect();
+    let shiftX = 0;
+    if(positionedRect.left < viewportLeft + margin) shiftX = viewportLeft + margin - positionedRect.left;
+    if(positionedRect.right + shiftX > viewportRight - margin) shiftX += viewportRight - margin - (positionedRect.right + shiftX);
+    control.style.setProperty('--smart-popover-shift-x', `${shiftX / scale}px`);
+}
+function capabilityOptionButtons(container){
+    return [...(container?.children || [])].filter(item => item.matches?.('.capability-option'));
+}
+function capabilityOptionId(button){
+    if(button?.hasAttribute?.('data-capability-unset')) return '__platform_default__';
+    return String(button?.dataset?.capabilityValue ?? button?.dataset?.smartValue ?? '').trim();
+}
+function capabilityOptionInsertionTarget(container, clientX, clientY, draggedItem){
+    const items = capabilityOptionButtons(container).filter(item => item !== draggedItem);
+    if(!items.length) return null;
+    const centers = items.map(item => {
+        const rect = item.getBoundingClientRect();
+        return {item, rect, centerX:rect.left + rect.width / 2, centerY:rect.top + rect.height / 2};
+    });
+    const maxWidth = Math.max(...centers.map(entry => entry.rect.width), 1);
+    const maxHeight = Math.max(...centers.map(entry => entry.rect.height), 1);
+    const xTolerance = Math.max(6, maxWidth * .28);
+    const yTolerance = Math.max(6, maxHeight * .28);
+    const sameColumn = centers.every(entry => Math.abs(entry.centerX - centers[0].centerX) <= xTolerance);
+    const sameRow = centers.every(entry => Math.abs(entry.centerY - centers[0].centerY) <= yTolerance);
+    if(sameColumn){
+        return centers.find(entry => clientY < entry.centerY)?.item || null;
+    }
+    if(sameRow){
+        return centers.find(entry => clientX < entry.centerX)?.item || null;
+    }
+    const rows = [];
+    centers.forEach(({item, rect}) => {
+        const currentRow = rows.find(row => Math.abs(row.top - rect.top) <= Math.max(4, Math.min(row.height, rect.height) * .35));
+        if(currentRow){
+            currentRow.items.push({item, rect});
+            currentRow.top = Math.min(currentRow.top, rect.top);
+            currentRow.bottom = Math.max(currentRow.bottom, rect.bottom);
+            currentRow.height = currentRow.bottom - currentRow.top;
+        } else {
+            rows.push({items:[{item, rect}], top:rect.top, bottom:rect.bottom, height:rect.height});
+        }
+    });
+    rows.sort((left, right) => left.top - right.top);
+    if(rows.length === items.length) return items.find(item => {
+        const rect = item.getBoundingClientRect();
+        return clientY < rect.top + rect.height / 2;
+    }) || null;
+    if(rows.length === 1) return items.find(item => {
+        const rect = item.getBoundingClientRect();
+        return clientX < rect.left + rect.width / 2;
+    }) || null;
+    const row = rows.find((candidate, index) => {
+        const next = rows[index + 1];
+        return !next || clientY < (candidate.bottom + next.top) / 2;
+    }) || rows[rows.length - 1];
+    row.items.sort((left, right) => left.rect.left - right.rect.left);
+    const beforeEntry = row.items.find(entry => clientX < entry.rect.left + entry.rect.width / 2);
+    if(beforeEntry) return beforeEntry.item;
+    const lastItem = row.items[row.items.length - 1]?.item;
+    const lastIndex = items.indexOf(lastItem);
+    return items[lastIndex + 1] || null;
+}
+function animateCapabilityOptionShift(container, mutate){
+    const items = capabilityOptionButtons(container).filter(item => item !== smartCapabilityOptionDragState?.item);
+    items.forEach(item => smartCapabilityOptionShiftAnimations.get(item)?.cancel?.());
+    const previous = new Map(items.map(item => [item, item.getBoundingClientRect()]));
+    mutate();
+    items.forEach(item => {
+        const before = previous.get(item);
+        const after = item.getBoundingClientRect();
+        const deltaX = before.left - after.left;
+        const deltaY = before.top - after.top;
+        if(Math.abs(deltaX) < .5 && Math.abs(deltaY) < .5) return;
+        smartCapabilityOptionShiftAnimations.get(item)?.cancel?.();
+        const animation = item.animate([
+            {transform:`translate3d(${deltaX}px, ${deltaY}px, 0)`},
+            {transform:'translate3d(0, 0, 0)'}
+        ], {duration:170, easing:'cubic-bezier(.22, 1, .36, 1)'});
+        smartCapabilityOptionShiftAnimations.set(item, animation);
+        animation.addEventListener('finish', () => smartCapabilityOptionShiftAnimations.delete(item), {once:true});
+        animation.addEventListener('cancel', () => smartCapabilityOptionShiftAnimations.delete(item), {once:true});
+    });
+}
+function positionCapabilityOptionDragPreview(state, clientX, clientY){
+    if(!state?.preview) return;
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    const left = Math.max(8, Math.min(clientX - state.offsetX, viewportWidth - state.visualWidth - 8));
+    const top = Math.max(8, Math.min(clientY - state.offsetY, viewportHeight - state.visualHeight - 8));
+    state.preview.style.left = `${left}px`;
+    state.preview.style.top = `${top}px`;
+}
+function cleanupCapabilityOptionDrag(commit){
+    const state = smartCapabilityOptionDragState;
+    if(!state) return;
+    smartCapabilityOptionDragState = null;
+    if(state.frame) cancelAnimationFrame(state.frame);
+    window.removeEventListener('pointermove', moveCapabilityOptionDrag, true);
+    window.removeEventListener('pointerup', finishCapabilityOptionDrag, true);
+    window.removeEventListener('pointercancel', cancelCapabilityOptionDrag, true);
+    window.removeEventListener('blur', cancelCapabilityOptionDrag, true);
+    try { state.handle.releasePointerCapture?.(state.pointerId); } catch(e) {}
+    state.preview?.remove();
+    state.item.classList.remove('capability-option-drop-placeholder');
+    state.container.classList.remove('is-option-reordering');
+    document.body.classList.remove('capability-option-reordering');
+    if(!commit){
+        state.originalOrder.forEach(item => state.container.appendChild(item));
+        return;
+    }
+    const nextItems = capabilityOptionButtons(state.container);
+    saveCapabilityOptionOrder(state.container.dataset.capabilityOptionScope, nextItems.map(capabilityOptionId));
+}
+function applyCapabilityOptionDragPosition(state, clientX, clientY){
+    if(!state) return;
+    const before = capabilityOptionInsertionTarget(state.container, clientX, clientY, state.item);
+    const remaining = capabilityOptionButtons(state.container).filter(item => item !== state.item);
+    const desiredIndex = before ? remaining.indexOf(before) : remaining.length;
+    const currentIndex = capabilityOptionButtons(state.container).indexOf(state.item);
+    if(desiredIndex === currentIndex) return;
+    animateCapabilityOptionShift(state.container, () => {
+        if(before) state.container.insertBefore(state.item, before);
+        else state.container.appendChild(state.item);
+    });
+    state.moved = true;
+}
+function moveCapabilityOptionDrag(event){
+    const state = smartCapabilityOptionDragState;
+    if(!state || event.pointerId !== state.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    state.latestPoint = {x:event.clientX, y:event.clientY};
+    positionCapabilityOptionDragPreview(state, event.clientX, event.clientY);
+    if(state.frame) return;
+    state.frame = requestAnimationFrame(() => {
+        state.frame = 0;
+        if(!smartCapabilityOptionDragState || !state.latestPoint) return;
+        applyCapabilityOptionDragPosition(state, state.latestPoint.x, state.latestPoint.y);
+    });
+}
+function finishCapabilityOptionDrag(event){
+    const state = smartCapabilityOptionDragState;
+    if(!state || event.pointerId !== state.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if(state.frame) cancelAnimationFrame(state.frame);
+    state.frame = 0;
+    applyCapabilityOptionDragPosition(state, event.clientX, event.clientY);
+    cleanupCapabilityOptionDrag(true);
+}
+function cancelCapabilityOptionDrag(event){
+    const state = smartCapabilityOptionDragState;
+    if(!state || (event?.pointerId !== undefined && event.pointerId !== state.pointerId)) return;
+    cleanupCapabilityOptionDrag(false);
+}
+function startCapabilityOptionDrag(event, handle){
+    if(event.button !== 0 || smartCapabilityOptionDragState) return;
+    const item = handle.closest('.capability-option');
+    const container = item?.parentElement?.closest?.('[data-capability-option-sort]');
+    if(!item || !container) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = item.getBoundingClientRect();
+    const preview = item.cloneNode(true);
+    preview.classList.remove('active', 'capability-option-drop-placeholder');
+    preview.classList.add('capability-option-drag-preview');
+    preview.setAttribute('aria-hidden', 'true');
+    preview.querySelectorAll('[id]').forEach(child => child.removeAttribute('id'));
+    const naturalWidth = Math.max(1, item.offsetWidth || rect.width);
+    const naturalHeight = Math.max(1, item.offsetHeight || rect.height);
+    const visualScale = Math.max(.1, Math.min(4, rect.width / naturalWidth || 1));
+    preview.style.width = `${naturalWidth}px`;
+    preview.style.height = `${naturalHeight}px`;
+    preview.style.transform = `scale(${visualScale})`;
+    document.body.appendChild(preview);
+    smartCapabilityOptionDragState = {
+        item,
+        container,
+        handle,
+        preview,
+        pointerId:event.pointerId,
+        offsetX:event.clientX - rect.left,
+        offsetY:event.clientY - rect.top,
+        visualWidth:rect.width,
+        visualHeight:rect.height,
+        originalOrder:capabilityOptionButtons(container),
+        moved:false
+    };
+    item.classList.add('capability-option-drop-placeholder');
+    container.classList.add('is-option-reordering');
+    document.body.classList.add('capability-option-reordering');
+    positionCapabilityOptionDragPreview(smartCapabilityOptionDragState, event.clientX, event.clientY);
+    try { handle.setPointerCapture?.(event.pointerId); } catch(e) {}
+    window.addEventListener('pointermove', moveCapabilityOptionDrag, {capture:true, passive:false});
+    window.addEventListener('pointerup', finishCapabilityOptionDrag, {capture:true, passive:false});
+    window.addEventListener('pointercancel', cancelCapabilityOptionDrag, true);
+    window.addEventListener('blur', cancelCapabilityOptionDrag, true);
+}
+function bindCapabilityOptionSort(){
+    dynamicParams.querySelectorAll('[data-capability-option-sort]').forEach(container => {
+        const scope = container.dataset.capabilityOptionScope || '';
+        const stored = smartCanvasPersonalizationStore().parameterOptionOrder[scope];
+        const buttons = capabilityOptionButtons(container);
+        if(Array.isArray(stored) && stored.length){
+            const positions = new Map(stored.map((id, index) => [String(id), index]));
+            buttons.sort((left, right) => (positions.get(capabilityOptionId(left)) ?? Number.MAX_SAFE_INTEGER) - (positions.get(capabilityOptionId(right)) ?? Number.MAX_SAFE_INTEGER));
+            buttons.forEach(button => container.appendChild(button));
+        }
+        capabilityOptionButtons(container).forEach(button => {
+            button.classList.add('capability-option-sortable');
+            let handle = button.querySelector(':scope > [data-capability-option-drag-handle]');
+            if(!handle){
+                handle = document.createElement('span');
+                handle.className = 'capability-option-drag-handle';
+                handle.dataset.capabilityOptionDragHandle = '';
+                handle.title = capabilityUiText('拖动调整选项顺序','Drag to reorder options');
+                handle.innerHTML = '<i data-lucide="grip-vertical"></i>';
+                button.prepend(handle);
+            }
+            handle.addEventListener('pointerdown', event => startCapabilityOptionDrag(event, handle));
+            handle.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+            });
+        });
+    });
+}
+function bindPreferenceSortDrag(){
+    dynamicParams.querySelectorAll('[data-preference-sort-handle]').forEach(handle => {
+        handle.addEventListener('dragstart', event => {
+            const button = handle.closest('[data-preference-id]');
+            const list = button?.closest('.model-list');
+            if(!button || !list) return;
+            smartPreferenceDragState = {button, list, scope:handle.dataset.preferenceScope || ''};
+            smartPreferenceDragMoved = false;
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', button.dataset.preferenceId || '');
+            button.classList.add('preference-dragging');
+        });
+        handle.addEventListener('dragend', () => {
+            if(smartPreferenceDragState?.button) smartPreferenceDragState.button.classList.remove('preference-dragging');
+            if(smartPreferenceDragState) smartPreferenceDragMoved = true;
+            smartPreferenceDragState = null;
+            setTimeout(() => { smartPreferenceDragMoved = false; }, 0);
+        });
+    });
+    dynamicParams.querySelectorAll('.model-list').forEach(list => {
+        list.addEventListener('dragover', event => {
+            if(!smartPreferenceDragState || smartPreferenceDragState.list !== list) return;
+            event.preventDefault();
+            const target = event.target.closest?.('[data-preference-id]');
+            list.querySelectorAll('.preference-drop-target').forEach(item => item.classList.remove('preference-drop-target'));
+            if(target && target !== smartPreferenceDragState.button) target.classList.add('preference-drop-target');
+        });
+        list.addEventListener('drop', event => {
+            if(!smartPreferenceDragState || smartPreferenceDragState.list !== list) return;
+            event.preventDefault();
+            const state = smartPreferenceDragState;
+            smartPreferenceDragState = null;
+            const target = event.target.closest?.('[data-preference-id]');
+            if(!target || target === state.button) return;
+            const buttons = [...list.querySelectorAll('[data-preference-id]')];
+            const targetIndex = buttons.indexOf(target);
+            const before = event.clientY < target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2;
+            const remaining = buttons.filter(button => button !== state.button);
+            let index = targetIndex - (buttons.indexOf(state.button) < targetIndex ? 1 : 0) + (before ? 0 : 1);
+            index = Math.max(0, Math.min(remaining.length, index));
+            remaining.splice(index, 0, state.button);
+            remaining.forEach(button => list.appendChild(button));
+            saveSmartPreferenceOrder(state.scope, remaining.map(button => button.dataset.preferenceId));
+            smartPreferenceDragMoved = true;
+            list.querySelectorAll('.preference-drop-target').forEach(item => item.classList.remove('preference-drop-target'));
+        });
+    });
 }
 function bindDynamicParams(){
-    dynamicParams.querySelectorAll('.smart-control').forEach(ctrl => {
-        // 悬浮态的多选：鼠标移出整个控件（含上方弹层，弹层是 DOM 子节点）才解除，途中点参数不收起。
-        ctrl.onmouseleave = () => ctrl.classList.remove('interacting');
+    dynamicParams.querySelector('[data-smart-price-jump]')?.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const button = event.currentTarget;
+        const providerId = button.dataset.providerId || '';
+        const modelId = button.dataset.modelId || '';
+        const nodeType = button.dataset.nodeType || '';
+        openSmartPriceComparison({providerId, modelId, nodeType, profile:priceProfileFor(providerId, modelId, nodeType)});
+    });
+    dynamicParams.querySelectorAll('[data-capability-help]').forEach(button => {
+        button.onpointerenter = () => showCapabilityParameterTooltip(button);
+        button.onpointerleave = hideCapabilityParameterTooltip;
+        button.onfocus = () => showCapabilityParameterTooltip(button);
+        button.onblur = hideCapabilityParameterTooltip;
+    });
+    bindCapabilityOptionSort();
+    bindPreferenceSortDrag();
+    dynamicParams.querySelector('.capability-settings-list')?.addEventListener('scroll', hideCapabilityParameterTooltip, {passive:true});
+    dynamicParams.querySelectorAll('[data-execution-platform-option]').forEach(button => {
+        button.onclick = event => {
+            if(smartPreferenceDragMoved) return;
+            event.preventDefault();
+            event.stopPropagation();
+            closeAllSmartPopovers();
+            selectExecutionPlatform(button.dataset.executionPlatformOption || '');
+        };
+    });
+    dynamicParams.querySelectorAll('[data-execution-family-option]').forEach(button => {
+        button.onclick = event => {
+            if(smartPreferenceDragMoved) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const key = button.dataset.executionSetting;
+            settings[key] = button.dataset.executionFamilyOption || '';
+            if(key === 'imageFamilyId') settings.model = '';
+            if(key === 'videoFamilyId') settings.videoModel = '';
+            if(key === 'audioFamilyId') settings.audioModel = '';
+            if(key === 'musicFamilyId') settings.musicModel = '';
+            if(key === 'textFamilyId') settings.textModel = '';
+            closeAllSmartPopovers();
+            ensureExecutionSelectionDefaults(settings, activeSettingsSubject());
+            persistActiveSmartSettings();
+            renderDynamicParams();
+            scheduleSave();
+            render();
+        };
+    });
+    dynamicParams.querySelectorAll('[data-execution-variant-option]').forEach(button => {
+        button.onclick = event => {
+            if(smartPreferenceDragMoved) return;
+            event.preventDefault();
+            event.stopPropagation();
+            settings[button.dataset.executionSetting] = button.dataset.executionVariantOption || '';
+            closeAllSmartPopovers();
+            persistActiveSmartSettings();
+            renderDynamicParams();
+            scheduleSave();
+            render();
+        };
+    });
+    dynamicParams.querySelectorAll('[data-text-provider-option]').forEach(button => {
+        button.onclick = event => {
+            if(smartPreferenceDragMoved) return;
+            event.preventDefault();
+            event.stopPropagation();
+            settings.textProvider = button.dataset.textProviderOption || '';
+            settings.textModel = '';
+            settings.textFamilyId = '';
+            closeAllSmartPopovers();
+            ensureExecutionSelectionDefaults(settings, activeSettingsSubject());
+            persistActiveSmartSettings();
+            renderDynamicParams();
+            scheduleSave();
+        };
+    });
+    dynamicParams.querySelector('[data-text-model]')?.addEventListener('change', event => {
+        settings.textModel = event.target.value || '';
+        persistActiveSmartSettings();
+        scheduleSave();
+        render();
+    });
+    dynamicParams.querySelector('[data-text-system-toggle]')?.addEventListener('change', event => {
+        settings.textSystemEnabled = Boolean(event.target.checked);
+        persistActiveSmartSettings();
+        renderDynamicParams();
+        scheduleSave();
+    });
+    dynamicParams.querySelector('[data-text-system-prompt]')?.addEventListener('input', event => {
+        settings.textSystemPrompt = event.target.value || '';
+        persistActiveSmartSettings();
+        scheduleSave();
+    });
+    dynamicParams.querySelector('[data-text-system-template]')?.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        persistActiveSmartSettings();
+        openPromptTemplatePanel(activeComposerNode()?.id || '', promptTemplateSelectedId, {target:'system'});
     });
     dynamicParams.querySelectorAll('.smart-control > .smart-pill').forEach(pill => {
+        pill.setAttribute('aria-expanded', pill.parentElement.classList.contains('pinned') ? 'true' : 'false');
         pill.onclick = event => {
             event.preventDefault();
             event.stopPropagation();
+            if(pill.disabled) return;
             const ctrl = pill.parentElement;
             const wasPinned = ctrl.classList.contains('pinned');
             closeAllSmartPopovers();
-            if(!wasPinned) ctrl.classList.add('pinned');
+            if(!wasPinned){
+                ctrl.classList.add('pinned');
+                pill.setAttribute('aria-expanded', 'true');
+                requestAnimationFrame(() => positionPinnedSmartPopover(ctrl));
+            }
         };
     });
     dynamicParams.querySelectorAll('[data-smart-param]').forEach(btn => {
         btn.onclick = event => {
             event.preventDefault();
             event.stopPropagation();
-            markControlInteracting(btn);
+            closeAllSmartPopovers();
             setDynamicSetting(btn.dataset.smartParam, btn.dataset.smartValue);
             if(btn.dataset.smartParam === 'videoDuration') renderDynamicParams();
+        };
+    });
+    dynamicParams.querySelectorAll('[data-video-input-mode]').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            closeAllSmartPopovers();
+            settings.videoUseFrameRoles = btn.dataset.videoInputMode === 'frames';
+            settings.videoMultimodal = false;
+            settings._videoMultimodalUserSet = false;
+            normalizeSmartVideoModeSettings(settings, settings.videoUseFrameRoles);
+            persistActiveSmartSettings();
+            renderDynamicParams();
+            scheduleSave();
+        };
+    });
+    dynamicParams.querySelectorAll('[data-smart-platform]').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            if(btn.disabled) return;
+            selectExecutionPlatform(btn.dataset.smartPlatform || '');
         };
     });
     dynamicParams.querySelectorAll('[data-size-scope]').forEach(btn => {
         btn.onclick = event => {
             event.preventDefault();
             event.stopPropagation();
-            markControlInteracting(btn);
+            closeAllSmartPopovers();
             const prefix = btn.dataset.sizePrefix || '';
             const scope = btn.dataset.sizeScope;
             const resKey = prefix ? `${prefix}Resolution` : 'resolution';
             const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
-            const allowAuto = !prefix && settings.engine === 'api' && settings.apiKind !== 'video' && isGptImageAutoSizeModel(settings.model);
+            const allowAuto = !prefix && settings.engine === 'api' && settings.apiKind === 'image' && isGptImageAutoSizeModel(settings.model);
             if(scope === 'auto'){
                 if(!allowAuto) return;
                 settings[resKey] = 'auto';
@@ -4193,6 +6790,83 @@ function bindDynamicParams(){
             if(input.dataset.param === 'videoDuration' && event?.type === 'change') renderDynamicParams();
         };
     });
+    const currentCapabilityProfile = () => {
+        if(settings.apiKind === 'text'){
+            const request = textGenerationRequestForNode();
+            return resolveCapabilityFamilySelection(settings.textProvider, 'text_generation', textGenerationCandidateInputCounts(request), settings.textFamilyId, settings.textModel, '', request.inputRoles).profile;
+        }
+        if(settings.apiKind === 'video') return resolveCapabilityFamilySelection(settings.videoProvider, 'video_generation', capabilityInputCounts('video'), settings.videoFamilyId, settings.videoModel, '', capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true)).profile;
+        if(settings.apiKind === 'audio') return resolveCapabilityFamilySelection(settings.audioProvider, 'audio_generation', capabilityInputCounts('audio'), settings.audioFamilyId, settings.audioModel, '', capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true)).profile;
+        if(settings.apiKind === 'music') return resolveCapabilityFamilySelection(settings.musicProvider, 'music_generation', capabilityInputCounts('music'), settings.musicFamilyId, settings.musicModel, '', capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true)).profile;
+        return resolveCapabilityFamilySelection(settings.provider_id, 'image_generation', capabilityInputCounts('image'), settings.imageFamilyId, settings.model, '', capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true)).profile;
+    };
+    dynamicParams.querySelectorAll('[data-capability-option]').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const type = btn.dataset.capabilityType || 'enum';
+            const raw = btn.dataset.capabilityValue;
+            const value = type === 'boolean' ? raw === 'true' : type === 'integer' ? Math.round(Number(raw)) : type === 'number' ? Number(raw) : raw;
+            setCapabilityParameter(currentCapabilityProfile(), btn.dataset.capabilityParam, value);
+            closeAllSmartPopovers();
+            renderDynamicParams();
+        };
+    });
+    dynamicParams.querySelectorAll('[data-capability-unset]').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const profile = currentCapabilityProfile();
+            setCapabilityParameter(profile, btn.dataset.capabilityParam, CAPABILITY_PARAMETER_UNSET);
+            closeAllSmartPopovers();
+            renderDynamicParams();
+        };
+    });
+    dynamicParams.querySelectorAll('[data-capability-enable]').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const profile = currentCapabilityProfile();
+            const spec = profile?.parameters?.[btn.dataset.capabilityParam] || {};
+            const type = String(spec.type || 'text').toLowerCase();
+            const raw = btn.dataset.capabilityValue;
+            const value = type === 'integer' ? Math.round(Number(raw)) : type === 'number' ? Number(raw) : raw;
+            setCapabilityParameter(profile, btn.dataset.capabilityParam, value);
+            renderDynamicParams();
+        };
+    });
+    dynamicParams.querySelectorAll('[data-capability-step]').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const profile = currentCapabilityProfile();
+            const key = btn.dataset.capabilityParam;
+            const current = Number(capabilityParameterValues(profile)[key] ?? 0);
+            const delta = Number(btn.dataset.capabilityDelta || 1) * Number(btn.dataset.capabilityStep || 1);
+            const minimum = Number(btn.dataset.capabilityMin);
+            let next = current + delta;
+            if(btn.dataset.capabilityMin !== '' && Number.isFinite(minimum)) next = Math.max(minimum, next);
+            if(btn.dataset.capabilityType === 'integer') next = Math.round(next);
+            setCapabilityParameter(profile, key, next);
+            renderDynamicParams();
+        };
+    });
+    dynamicParams.querySelectorAll('input[data-capability-param],select[data-capability-param],textarea[data-capability-param]').forEach(input => {
+        const update = event => {
+            event?.stopPropagation?.();
+            const profile = currentCapabilityProfile();
+            const type = input.dataset.capabilityType || 'text';
+            const value = input.value === CAPABILITY_PARAMETER_UNSET ? CAPABILITY_PARAMETER_UNSET
+                : type === 'boolean' ? Boolean(input.checked)
+                    : (type === 'integer' ? Math.round(Number(input.value)) : type === 'number' ? Number(input.value) : input.value);
+            setCapabilityParameter(profile, input.dataset.capabilityParam, value);
+            const output = input.closest('.capability-range-field')?.querySelector('output');
+            if(output) output.textContent = String(value);
+            refreshCapabilityModelHelp(profile);
+        };
+        input.onclick = event => event.stopPropagation();
+        input.oninput = input.onchange = update;
+    });
     dynamicParams.querySelectorAll('[data-toggle-param]').forEach(btn => {
         btn.onclick = event => {
             event.preventDefault();
@@ -4204,23 +6878,6 @@ function bindDynamicParams(){
             persistActiveSmartSettings();
             renderDynamicParams();
             scheduleSave();
-        };
-    });
-    dynamicParams.querySelectorAll('[data-trusted-source]').forEach(btn => {
-        btn.onclick = async event => {
-            event.preventDefault();
-            event.stopPropagation();
-            const src = btn.dataset.trustedSource;
-            settings.videoTrustedSource = ['library','cloud','manual'].includes(src) ? src : 'library';
-            persistActiveSmartSettings();
-            renderDynamicParams();
-            scheduleSave();
-            try {
-                if(src === 'cloud') await uploadCurrentSmartVideosToCloud();
-                else if(src === 'manual') await setCurrentSmartManualVideoUrl();
-            } catch(e) {
-                toast((e.message || '操作失败').slice(0, 180));
-            }
         };
     });
     dynamicParams.querySelectorAll('[data-comfy-bool]').forEach(btn => {
@@ -4259,7 +6916,7 @@ function bindDynamicParams(){
             const popover = btn.closest('.smart-popover');
             const control = btn.closest('.smart-control');
             const pillSub = control?.querySelector('.smart-pill .sub');
-            if(pillSub) pillSub.textContent = value;
+            if(pillSub) pillSub.textContent = btn.textContent.trim();
             if(popover){
                 popover.querySelectorAll(`[data-comfy-pick="${fieldId}"]`).forEach(b => b.classList.toggle('active', b.dataset.comfyValue === value));
             }
@@ -4343,11 +7000,89 @@ function bindDynamicParams(){
             toggleSmartRhRandom(btn.dataset.rhRandom);
         };
     });
+    dynamicParams.querySelectorAll('[data-rh-direct-text],[data-rh-direct-url]').forEach(input => {
+        input.onclick = event => event.stopPropagation();
+        input.oninput = input.onchange = event => {
+            event.stopPropagation();
+            const key = input.dataset.rhDirectText || input.dataset.rhDirectUrl;
+            settings.rhParams = settings.rhParams || {};
+            const current = settings.rhParams[key] || {};
+            settings.rhParams[key] = {...current, value:input.value};
+            persistActiveSmartSettings();
+            scheduleSave();
+        };
+    });
+    dynamicParams.querySelectorAll('[data-rh-direct-upload]').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            dynamicParams.querySelector(`[data-rh-direct-file="${CSS.escape(btn.dataset.rhDirectUpload)}"]`)?.click();
+        };
+    });
+    dynamicParams.querySelectorAll('[data-rh-direct-file]').forEach(input => {
+        input.onchange = async event => {
+            event.stopPropagation();
+            const file = input.files?.[0];
+            if(!file) return;
+            const key = input.dataset.rhDirectFile;
+            const expectedKind = input.dataset.kind || 'image';
+            if(mediaKindForFile(file) !== expectedKind){
+                toast(`请选择${expectedKind === 'video' ? '视频' : expectedKind === 'audio' ? '音频' : '图片'}文件`);
+                input.value = '';
+                return;
+            }
+            input.disabled = true;
+            try {
+                const uploaded = (await addFilesToLocalAssetLibrary([file]))[0];
+                if(!uploaded?.url) throw new Error('素材上传失败');
+                settings.rhParams = settings.rhParams || {};
+                const current = settings.rhParams[key] || {};
+                settings.rhParams[key] = {...current, value:uploaded.url, media:{id:uploaded.id || '', name:uploaded.name || file.name, kind:expectedKind}};
+                persistActiveSmartSettings();
+                renderDynamicParams();
+                scheduleSave();
+            } catch(error) {
+                toast(error?.message || '素材上传失败');
+            } finally {
+                input.disabled = false;
+            }
+        };
+    });
+    dynamicParams.querySelectorAll('[data-rh-schema-accept]').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const fields = rhActiveFields();
+            settings.rhSchemaSnapshot = SMART_NODE_CONTRACT.runningHubSchemaSnapshot(fields);
+            settings.rhInputBindings = SMART_NODE_CONTRACT.reconcileRunningHubInputBindings(fields, rhConnectedMediaRefs(), settings.rhInputBindings || {});
+            persistActiveSmartSettings();
+            renderDynamicParams();
+            scheduleSave();
+        };
+    });
 }
 async function loadConfig(){
     try {
-        const cfg = await fetch('/api/config').then(r => r.json());
-        apiProviders = Array.isArray(cfg.api_providers) ? cfg.api_providers : [];
+        const [cfg, catalog, pricing] = await Promise.all([
+            fetch('/api/config').then(r => r.json()),
+            fetch('/api/model-capabilities', {cache:'no-store'}).then(async r => {
+                if(!r.ok) throw new Error(await smartResponseErrorMessage(r, '能力档案加载失败'));
+                return r.json();
+            }).catch(error => {
+                modelCapabilityLoadError = error?.message || '能力档案加载失败';
+                return {schema_version:0, providers:[]};
+            }),
+            fetch('/api/model-pricing').then(async r => r.ok ? r.json() : null).catch(() => null)
+        ]);
+        apiProviders = Array.isArray(cfg.api_providers)
+            ? cfg.api_providers.map(provider => SMART_NODE_CONTRACT.hydrateRunningHubProviderApps(provider))
+            : [];
+        modelCapabilityCatalog = Array.isArray(catalog?.providers) ? catalog : {schema_version:0, providers:[]};
+        modelPricingCatalog = pricing && typeof pricing === 'object' ? pricing : {schema_version:0, default_status:'pending', entries:{}, unit_definitions:{}};
+        if(smartPriceComparisonPanel?.classList.contains('open')){
+            populatePriceComparisonFilters();
+            renderPriceComparisonTable();
+        }
         comfyInstanceCount = Math.max(1, (Array.isArray(cfg.comfy_instances) ? cfg.comfy_instances : []).filter(Boolean).length || 1);
         // 提供商配置已就绪即先渲染参数面板，避免等工作流/RunningHub 预取完成后参数才「突然刷新出来」。
         sanitizeSmartApiSelection(settings);
@@ -4394,18 +7129,21 @@ function defaultPromptTemplateGroups(){
         {id:'character', name:tr('smart.tplCatCharacter')},
         {id:'product', name:tr('smart.tplCatProduct')},
         {id:'lighting', name:tr('smart.tplCatLighting')},
-        {id:'mine', name:tr('smart.tplCatMine')}
+        {id:'mine', name:tr('smart.tplCatMine')},
+        {id:PROMPT_UNCATEGORIZED_CATEGORY_ID, name:tr('smart.tplCatUncategorized')}
     ];
 }
 function loadPromptTemplateGroups(){
     try {
-        const list = JSON.parse(localStorage.getItem(PROMPT_TEMPLATE_GROUPS_KEY) || '[]');
+        const stored = localStorage.getItem(PROMPT_TEMPLATE_GROUPS_KEY);
+        const list = JSON.parse(stored || '[]');
         const valid = Array.isArray(list) ? list.filter(g => g?.id && g?.name) : [];
-        const defaults = defaultPromptTemplateGroups();
-        promptTemplateGroups = defaults.map(group => valid.find(g => g.id === group.id) || group);
-        valid.filter(g => !promptTemplateGroups.some(x => x.id === g.id)).forEach(g => promptTemplateGroups.push(g));
+        promptTemplateGroups = stored === null ? defaultPromptTemplateGroups() : valid;
+        if(!promptTemplateGroups.some(group => group.id === PROMPT_UNCATEGORIZED_CATEGORY_ID)){
+            promptTemplateGroups.push({id:PROMPT_UNCATEGORIZED_CATEGORY_ID, name:tr('smart.tplCatUncategorized')});
+        }
     } catch(e) {
-        promptTemplateGroups = defaultPromptTemplateGroups();
+        promptTemplateGroups = [{id:PROMPT_UNCATEGORIZED_CATEGORY_ID, name:tr('smart.tplCatUncategorized')}];
     }
 }
 function savePromptTemplateGroups(){
@@ -4473,11 +7211,10 @@ function promptTemplateItems(){
         id:`mine:${p.id}`,
         sourceId:p.id,
         name:p.name || tr('smart.promptPresetUnnamed'),
-        // 系统库分组以后端为准（custom=“我的”），本地旧预设归到 custom 分组下展示，避免无对应标签。
-        category:(p.category && p.category !== 'mine') ? p.category : 'custom',
-        scene:'我的提示词预设',
-        positive:p.text || '',
-        negative:'',
+        category:(p.category && p.category !== 'mine') ? p.category : PROMPT_UNCATEGORIZED_CATEGORY_ID,
+        scene:p.scene || '我的提示词预设',
+        positive:p.text || p.positive || '',
+        negative:p.negative || '',
         params:{},
         builtin:false
     }));
@@ -4485,11 +7222,12 @@ function promptTemplateItems(){
 }
 function promptTemplateText(template, mode='positive'){
     const positive = String(template?.positive || '').trim();
-    if(mode === 'positive' || !template?.builtin) return positive;
     const negative = String(template?.negative || '').trim();
     const params = Object.entries(template?.params || {})
         .map(([key, value]) => `${key}: ${value}`)
         .join('\n');
+    if(mode === 'positive') return positive;
+    if(mode === 'negative') return negative;
     return [positive, negative ? `Negative prompt:\n${negative}` : '', params ? `Params:\n${params}` : ''].filter(Boolean).join('\n\n');
 }
 function promptTemplateName(template){
@@ -4530,7 +7268,8 @@ function promptTemplateCategoryLabel(category){
         product:tr('smart.tplCatProduct'),
         lighting:tr('smart.tplCatLighting'),
         custom:tr('smart.tplCatMine'),
-        mine:tr('smart.tplCatMine')
+        mine:tr('smart.tplCatMine'),
+        [PROMPT_UNCATEGORIZED_CATEGORY_ID]:tr('smart.tplCatUncategorized')
     };
     return builtin[category] || promptTemplateGroups.find(g => g.id === category)?.name || category;
 }
@@ -4539,6 +7278,69 @@ function promptTemplateSelectedItem(){
 }
 function currentPromptPreset(id){
     return promptPresets.find(p => p.id === id) || null;
+}
+function rememberPromptTemplateEditor(target){
+    if(!target || !target.matches?.('textarea, input, [contenteditable="true"]')) return;
+    if(target === promptInput){
+        promptTemplateFocusedEditor = {kind:'composer'};
+        return;
+    }
+    const nodeEl = target.closest?.('.image-node[data-id]');
+    const nodeId = nodeEl?.dataset.id || '';
+    if(target.matches('.prompt-node-text') && nodeId){
+        promptTemplateFocusedEditor = {kind:'prompt-node', nodeId};
+        return;
+    }
+    if(target.matches('.prompt-llm-instruction') && nodeId){
+        promptTemplateFocusedEditor = {kind:'llm-instruction', nodeId};
+        return;
+    }
+    if(target.matches('.prompt-llm-system') && nodeId){
+        promptTemplateFocusedEditor = {kind:'llm-system', nodeId};
+        return;
+    }
+    if(target.matches('[data-capability-param]') && nodeId){
+        promptTemplateFocusedEditor = {kind:'capability-param', nodeId, key:target.dataset.capabilityParam || ''};
+        return;
+    }
+    if(target.matches('.media-text-inline-editor') && nodeId){
+        const media = target.closest('[data-image-index]');
+        promptTemplateFocusedEditor = {kind:'text-material-inline', nodeId, imageIndex:Number(media?.dataset.imageIndex || 0)};
+        return;
+    }
+    if(target.matches('[data-text-editor-input]') && smartTextEditorState?.nodeId){
+        promptTemplateFocusedEditor = {kind:'text-material-modal', nodeId:smartTextEditorState.nodeId, imageIndex:Number(smartTextEditorState.imageIndex || 0)};
+    }
+}
+function promptTemplateEditorValue(){
+    const focused = promptTemplateFocusedEditor;
+    if(focused?.kind === 'composer') return promptPlainText();
+    if(focused?.kind === 'prompt-node'){
+        const node = nodes.find(item => item.id === focused.nodeId);
+        return String(world.querySelector(`.image-node[data-id="${CSS.escape(focused.nodeId)}"] .prompt-node-text`)?.value ?? node?.text ?? '');
+    }
+    if(focused?.kind === 'llm-instruction'){
+        const node = nodes.find(item => item.id === focused.nodeId);
+        return String(world.querySelector(`.image-node[data-id="${CSS.escape(focused.nodeId)}"] .prompt-llm-instruction`)?.value ?? node?.llmInstruction ?? '');
+    }
+    if(focused?.kind === 'llm-system'){
+        const node = nodes.find(item => item.id === focused.nodeId);
+        return String(world.querySelector(`.image-node[data-id="${CSS.escape(focused.nodeId)}"] .prompt-llm-system`)?.value ?? node?.llmSystemPrompt ?? '');
+    }
+    if(focused?.kind === 'capability-param'){
+        const input = world.querySelector(`.image-node[data-id="${CSS.escape(focused.nodeId)}"] [data-capability-param="${CSS.escape(focused.key)}"]`);
+        return String(input?.value ?? '');
+    }
+    if(focused?.kind === 'text-material-inline'){
+        return String(world.querySelector(`.image-node[data-id="${CSS.escape(focused.nodeId)}"] .media-text-inline-editor`)?.value ?? '');
+    }
+    if(focused?.kind === 'text-material-modal'){
+        return String(document.querySelector('[data-text-editor-input]')?.value ?? '');
+    }
+    return promptInput ? promptPlainText() : '';
+}
+function notifyPromptLibraryUpdated(){
+    try { localStorage.setItem('prompt_library_updated_at', String(Date.now())); } catch(_) {}
 }
 function defaultPromptPresetName(text){
     return (String(text || '').trim().split(/\r?\n/)[0] || tr('smart.promptPresetDefault')).slice(0, 28);
@@ -4562,7 +7364,7 @@ function resetPromptPresetDeleteState(){
 function createPromptPresetFromNode(node, {openPanel=true, openTemplatePanel=false}={}){
     const text = String(node?.text || '').trim();
     if(!text){ toast(tr('smart.promptPresetEmpty')); return null; }
-    const preset = {id:uid('preset'), name:defaultPromptPresetName(text), text, createdAt:Date.now(), updatedAt:Date.now()};
+    const preset = {id:uid('preset'), name:defaultPromptPresetName(text), text, category:PROMPT_UNCATEGORIZED_CATEGORY_ID, createdAt:Date.now(), updatedAt:Date.now()};
     promptPresets.unshift(preset);
     savePromptPresets();
     if(node) node.promptPresetId = preset.id;
@@ -4570,7 +7372,7 @@ function createPromptPresetFromNode(node, {openPanel=true, openTemplatePanel=fal
     scheduleSave();
     if(openPanel) openPromptPresetPanel(node?.id || '', preset.id, {status:tr('smart.promptPresetSavedNew'), tone:'ok'});
     if(openTemplatePanel) {
-        promptTemplateCategory = 'mine';
+        promptTemplateCategory = PROMPT_UNCATEGORIZED_CATEGORY_ID;
         promptTemplateSelectedId = `mine:${preset.id}`;
         promptTemplateEditing = true;
         openPromptTemplatePanel(node?.id || '', promptTemplateSelectedId);
@@ -4580,7 +7382,7 @@ function createPromptPresetFromNode(node, {openPanel=true, openTemplatePanel=fal
 function createPromptPresetFromComposer(){
     const text = promptPlainText();
     if(!text){ toast(tr('smart.promptPresetEmpty')); return null; }
-    const preset = {id:uid('preset'), name:defaultPromptPresetName(text), text, category:'mine', createdAt:Date.now(), updatedAt:Date.now()};
+    const preset = {id:uid('preset'), name:defaultPromptPresetName(text), text, category:PROMPT_UNCATEGORIZED_CATEGORY_ID, createdAt:Date.now(), updatedAt:Date.now()};
     promptPresets.unshift(preset);
     savePromptPresets();
     savePromptDraftForCurrent();
@@ -4610,6 +7412,7 @@ function renderPromptPresetPanel(selectedId='', message=''){
 }
 function openPromptPresetPanel(nodeId='', presetId='', options={}){
     if(!promptPresetPanel) return;
+    setSmartNodeOverlayOwner(promptPresetPanel, nodeId);
     promptPresetPanel.dataset.nodeId = nodeId || '';
     const node = nodes.find(n => n.id === nodeId);
     const preferred = presetId || node?.promptPresetId || promptPresets[0]?.id || '';
@@ -4629,6 +7432,7 @@ function openPromptPresetPanel(nodeId='', presetId='', options={}){
 }
 function closePromptPresetPanel(){
     promptPresetPanel?.classList.remove('open');
+    setSmartNodeOverlayOwner(promptPresetPanel, '');
     resetPromptPresetDeleteState();
 }
 function promptTemplateScrollSnapshot(){
@@ -4663,7 +7467,7 @@ function renderPromptTemplatePanel(options={}){
     if(promptTemplateCategory !== 'all' && !activeGroups.some(g => g.id === promptTemplateCategory)) promptTemplateCategory = 'all';
     const categories = [{id:'all', name:tr('smart.tplAll')}, ...activeGroups.map(group => ({...group, name:promptTemplateCategoryLabel(group.id)}))];
     const groupCounts = allTemplates.reduce((map, item) => {
-        map[item.category || 'mine'] = (map[item.category || 'mine'] || 0) + 1;
+        map[item.category || PROMPT_UNCATEGORIZED_CATEGORY_ID] = (map[item.category || PROMPT_UNCATEGORIZED_CATEGORY_ID] || 0) + 1;
         return map;
     }, {all:allTemplates.length});
     promptTemplateCats.innerHTML = promptTemplateGroupEditMode ? `
@@ -4679,16 +7483,24 @@ function renderPromptTemplatePanel(options={}){
                 </div>
             </div>
             <div class="prompt-template-group-list">
-                ${activeGroups.map(group => `
-                    <div class="prompt-template-group-row has-delete">
-                        <button type="button" class="group-name ${group.id === promptTemplateCategory ? 'active' : ''}" data-template-cat="${escapeHtml(group.id)}">
+                ${activeGroups.map(group => {
+                    const protectedGroup = group.id === PROMPT_UNCATEGORIZED_CATEGORY_ID;
+                    const editingGroup = promptTemplateGroupDraft?.mode === 'rename' && promptTemplateGroupDraft.id === group.id;
+                    return `
+                    <div class="prompt-template-group-row ${protectedGroup ? 'is-protected' : 'has-delete'}">
+                        ${editingGroup ? `<input class="group-name group-name-edit" data-template-group-edit-input value="${escapeAttr(promptTemplateGroupDraft.value || '')}" placeholder="分组名称">` : `<button type="button" class="group-name ${group.id === promptTemplateCategory ? 'active' : ''}" data-template-cat="${escapeHtml(group.id)}">
                             <span>${escapeHtml(promptTemplateCategoryLabel(group.id))}</span>
                             <small>${groupCounts[group.id] || 0}</small>
-                        </button>
-                        <button type="button" class="group-tool" data-template-cat-edit="${escapeHtml(group.id)}" title="${escapeAttr(tr('smart.tplRename'))}"><i data-lucide="pencil"></i></button>
-                        <button type="button" class="group-tool danger" data-template-cat-delete="${escapeHtml(group.id)}" title="${escapeAttr(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>
+                        </button>`}
+                        ${protectedGroup ? '<span class="group-protected" title="不可删除"><i data-lucide="lock"></i></span>' : `
+                            <button type="button" class="group-tool" data-template-cat-edit="${escapeHtml(group.id)}" title="${escapeAttr(tr('smart.tplRename'))}"><i data-lucide="pencil"></i></button>
+                            <button type="button" class="group-tool danger" data-template-cat-delete="${escapeHtml(group.id)}" title="${escapeAttr(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>
+                        `}
                     </div>
-                `).join('')}
+                `; }).join('')}
+                ${promptTemplateGroupDraft?.mode === 'new' ? `<div class="prompt-template-group-row is-draft">
+                    <input class="group-name group-name-edit" data-template-group-edit-input value="${escapeAttr(promptTemplateGroupDraft.value || '')}" placeholder="${escapeAttr(tr('smart.tplNewGroupDefault'))}">
+                </div>` : ''}
             </div>
         </div>
     ` : `
@@ -4712,7 +7524,7 @@ function renderPromptTemplatePanel(options={}){
     if(items.length && !items.some(item => item.id === promptTemplateSelectedId)) promptTemplateSelectedId = items[0].id;
     const selected = items.find(item => item.id === promptTemplateSelectedId) || items[0] || null;
     const selectedPreset = selected?.builtin || selected?.remote
-        ? {id:selected.id, name:selected.name || '', text:selected.positive || '', category:selected.category || 'storyboard', builtin:Boolean(selected.builtin)}
+        ? {...selected, id:selected.id, name:selected.name || '', text:selected.positive || '', category:selected.category || PROMPT_UNCATEGORIZED_CATEGORY_ID, builtin:Boolean(selected.builtin)}
         : (selected ? currentPromptPreset(selected.sourceId) : null);
     const target = promptTemplatePanel.dataset.target || 'node';
     const node = nodes.find(n => n.id === promptTemplatePanel.dataset.nodeId);
@@ -4732,14 +7544,14 @@ function renderPromptTemplatePanel(options={}){
                     <span class="prompt-template-source">${escapeHtml(item.builtin ? tr('smart.tplBuiltin') : tr('smart.tplMine'))}</span>
                 </span>
                 <span class="prompt-template-scene">${escapeHtml(promptTemplateScene(item) || item.positive || '')}</span>
-                <span class="prompt-template-tag">${escapeHtml(promptTemplateCategoryLabel(item.category || 'mine'))}</span>
+                <span class="prompt-template-tag">${escapeHtml(promptTemplateCategoryLabel(item.category || PROMPT_UNCATEGORIZED_CATEGORY_ID))}</span>
             </button>`).join('') : `<div class="prompt-template-list-empty">${escapeHtml(tr('smart.tplNoMatches'))}</div>`}
         </div>
         <div class="prompt-template-detail">
             ${selected ? `
                 <div class="prompt-template-detail-head">
                     <div>
-                        <strong>${escapeHtml(promptTemplateName(selected) || '')}</strong>
+                        ${editMode ? `<input class="prompt-template-title-input" data-template-edit-name value="${escapeAttr(selectedPreset.name || '')}" placeholder="${escapeAttr(tr('smart.tplName'))}">` : `<strong>${escapeHtml(promptTemplateName(selected) || '')}</strong>`}
                         <span>${escapeHtml(promptTemplateCategoryLabel(selected.category || ''))} · ${escapeHtml(selected.builtin ? tr('smart.tplBuiltinTemplate') : tr('smart.tplMineTemplate'))}</span>
                     </div>
                     ${editMode ? '' : `
@@ -4751,17 +7563,23 @@ function renderPromptTemplatePanel(options={}){
                 </div>
             ${editMode ? `
                 <div class="prompt-template-edit-fields">
-                    <label>${escapeHtml(tr('smart.tplName'))}</label>
-                    <input data-template-edit-name value="${escapeAttr(selectedPreset.name || '')}" placeholder="${escapeAttr(tr('smart.tplName'))}">
                     <label>${escapeHtml(tr('smart.tplGroup'))}</label>
                     <select data-template-edit-category>
-                        ${activeGroups.map(group => `<option value="${escapeAttr(group.id)}" ${group.id === (selectedPreset.category || selected?.category || 'mine') ? 'selected' : ''}>${escapeHtml(promptTemplateCategoryLabel(group.id))}</option>`).join('')}
+                        ${activeGroups.map(group => `<option value="${escapeAttr(group.id)}" ${group.id === (selectedPreset.category || selected?.category || PROMPT_UNCATEGORIZED_CATEGORY_ID) ? 'selected' : ''}>${escapeHtml(promptTemplateCategoryLabel(group.id))}</option>`).join('')}
                     </select>
-                    <label>${escapeHtml(tr('smart.tplContent'))}</label>
-                    <textarea data-template-edit-text placeholder="${escapeAttr(tr('smart.tplContent'))}">${escapeHtml(selectedPreset.text || '')}</textarea>
+                    <label>${escapeHtml(tr('smart.tplScene'))}</label>
+                    <textarea data-template-edit-scene rows="2" placeholder="${escapeAttr(tr('smart.tplScene'))}">${escapeHtml(selectedPreset.scene || '')}</textarea>
+                    <label>${escapeHtml(tr('smart.tplPositive'))}</label>
+                    <textarea data-template-edit-positive placeholder="${escapeAttr(tr('smart.tplPositive'))}">${escapeHtml(selectedPreset.positive || selectedPreset.text || '')}</textarea>
+                    <label>${escapeHtml(tr('smart.tplNegative'))}</label>
+                    <textarea data-template-edit-negative placeholder="${escapeAttr(tr('smart.tplNegative'))}">${escapeHtml(selectedPreset.negative || '')}</textarea>
                 </div>
             ` : `
                 <div class="prompt-template-preview-content">
+                ${selected?.scene ? `<div class="prompt-template-section">
+                    <label>${escapeHtml(tr('smart.tplScene'))}</label>
+                    <p>${escapeHtml(selected.scene)}</p>
+                </div>` : ''}
                 <div class="prompt-template-section">
                     <label>${escapeHtml(tr('smart.tplPositive'))}</label>
                     <p>${escapeHtml(selected?.positive || '')}</p>
@@ -4783,6 +7601,7 @@ function renderPromptTemplatePanel(options={}){
                     <button type="button" class="primary" data-template-edit-save><i data-lucide="save"></i><span>${escapeHtml(tr('common.save'))}</span></button>
                 ` : `
                     <button type="button" data-template-apply="positive"><i data-lucide="corner-down-left"></i><span>${escapeHtml(tr('smart.tplApplyPositive'))}</span></button>
+                    <button type="button" data-template-apply="negative" ${selected?.negative ? '' : 'disabled'}><i data-lucide="corner-down-right"></i><span>${escapeHtml(tr('smart.tplApplyNegative'))}</span></button>
                     <button type="button" class="primary" data-template-apply="full"><i data-lucide="wand-sparkles"></i><span>${escapeHtml(tr('smart.tplApplyFull'))}</span></button>
                 `}
             </div>
@@ -4803,7 +7622,8 @@ function syncComposerTemplateButton(){
 }
 async function openPromptTemplatePanel(nodeId='', templateId='', options={}){
     if(!promptTemplatePanel) return;
-    const target = options.target === 'composer' ? 'composer' : 'node';
+    setSmartNodeOverlayOwner(promptTemplatePanel, nodeId);
+    const target = ['composer','system','text-material'].includes(options.target) ? options.target : 'node';
     promptTemplatePanel.dataset.target = target;
     promptTemplatePanel.dataset.nodeId = nodeId || '';
     if(promptTemplatePanel.parentElement !== shell) shell.appendChild(promptTemplatePanel);
@@ -4826,12 +7646,43 @@ async function openPromptTemplatePanel(nodeId='', templateId='', options={}){
 }
 function closePromptTemplatePanel(){
     promptTemplatePanel?.classList.remove('open');
+    setSmartNodeOverlayOwner(promptTemplatePanel, '');
+    promptTemplateGroupDraft = null;
     syncComposerTemplateButton();
     render();
 }
 function applyPromptTemplateToNode(mode='positive'){
     const template = promptTemplateItems().find(item => item.id === promptTemplateSelectedId);
     if(!template) return;
+    if(promptTemplatePanel?.dataset.target === 'system'){
+        const node = nodes.find(item => item.id === promptTemplatePanel?.dataset.nodeId);
+        if(!node || node.type !== SMART_NODE_TYPES.textGenerator) return;
+        const text = promptTemplateText(template, mode);
+        const activeLibrary = activePromptLibrary();
+        node.runSettings = smartSettingsForNode(node);
+        node.runSettings.textSystemEnabled = true;
+        node.runSettings.textSystemPrompt = text;
+        node.runSettings.textSystemTemplateId = template.sourceId || template.id || '';
+        node.runSettings.textSystemTemplateSnapshot = {
+            id:template.sourceId || template.id || '',
+            name:promptTemplateName(template),
+            text,
+            libraryKind:activeLibrary.kind || activeLibrary.type || 'prompt',
+            appliedAt:Date.now()
+        };
+        if((activeLibrary.kind || activeLibrary.type) === 'skill'){
+            node.runSettings.textSystemSkillId = template.sourceId || template.id || '';
+            node.runSettings.textSystemSkillSnapshot = cloneSmartSettings(node.runSettings.textSystemTemplateSnapshot);
+        } else {
+            delete node.runSettings.textSystemSkillId;
+            delete node.runSettings.textSystemSkillSnapshot;
+        }
+        if(activeComposerNode()?.id === node.id) settings = cloneSmartSettings(node.runSettings);
+        closePromptTemplatePanel();
+        renderDynamicParams();
+        scheduleSave();
+        return;
+    }
     if(promptTemplatePanel?.dataset.target === 'composer'){
         const text = promptTemplateText(template, mode);
         setPromptText(text);
@@ -4839,6 +7690,20 @@ function applyPromptTemplateToNode(mode='positive'){
         savePromptDraftForCurrent();
         renderInputThumbsRow(selectedNode());
         closePromptTemplatePanel();
+        scheduleSave();
+        return;
+    }
+    if(promptTemplatePanel?.dataset.target === 'text-material'){
+        const node = nodes.find(item => item.id === promptTemplatePanel?.dataset.nodeId);
+        const item = node?.images?.[0];
+        if(!node || !item || mediaKindForItem(item) !== 'text') return;
+        const text = promptTemplateText(template, mode);
+        item.text = text;
+        item.content = text;
+        item.name = item.name || '未命名文本.md';
+        node.title = item.name;
+        closePromptTemplatePanel();
+        render();
         scheduleSave();
         return;
     }
@@ -4854,24 +7719,23 @@ async function saveCurrentPromptAsTemplate(){
     const library = activePromptLibrary();
     // 系统库 readonly=false，也允许新增条目（走后端，与素材库管理同步）。
     if(library.readonly){ toast('请选择可编辑的提示词库'); return; }
-    const text = promptTemplatePanel?.dataset.target === 'composer'
-        ? promptPlainText()
-        : String(nodes.find(n => n.id === promptTemplatePanel?.dataset.nodeId)?.text || '').trim();
+    const text = promptTemplateEditorValue();
     if(!text){ toast(tr('smart.promptPresetEmpty')); return; }
     try {
         const data = await fetch('/api/prompt-libraries/items', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({library_id:library.id, name:defaultPromptPresetName(text), category:promptTemplateCategory === 'all' ? 'custom' : promptTemplateCategory, positive:text, scene:'我的提示词预设'})
+            body:JSON.stringify({library_id:library.id, name:defaultPromptPresetName(text), category:promptTemplateCategory === 'all' ? PROMPT_UNCATEGORIZED_CATEGORY_ID : promptTemplateCategory, positive:text, negative:'', scene:'我的提示词预设'})
         }).then(async r => {
             if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '保存失败');
             return r.json();
         });
         promptLibraries = data.library?.libraries || promptLibraries;
         activePromptLibraryId = library.id;
-        promptTemplateCategory = data.item?.category || 'custom';
+        promptTemplateCategory = data.item?.category || PROMPT_UNCATEGORIZED_CATEGORY_ID;
         promptTemplateSelectedId = data.item?.id || '';
         promptTemplateEditing = true;
+        notifyPromptLibraryUpdated();
         renderPromptTemplatePanel({preserveScroll:false});
     } catch(err) {
         toast(err.message || '保存失败');
@@ -4881,12 +7745,12 @@ async function createBlankPromptTemplate(){
     const library = activePromptLibrary();
     // 系统库 readonly=false，也允许新建空白条目（走后端，与素材库管理同步）。
     if(library.readonly){ toast('请选择可编辑的提示词库'); return; }
-    const category = promptTemplateCategory && promptTemplateCategory !== 'all' ? promptTemplateCategory : 'custom';
+    const category = promptTemplateCategory && promptTemplateCategory !== 'all' ? promptTemplateCategory : PROMPT_UNCATEGORIZED_CATEGORY_ID;
     try {
         const data = await fetch('/api/prompt-libraries/items', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({library_id:library.id, name:tr('smart.tplNewTemplateName'), category, positive:'新提示词', scene:'我的提示词预设'})
+            body:JSON.stringify({library_id:library.id, name:tr('smart.tplNewTemplateName'), category, positive:'新提示词', negative:'', scene:'我的提示词预设'})
         }).then(async r => {
             if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '创建失败');
             return r.json();
@@ -4896,6 +7760,7 @@ async function createBlankPromptTemplate(){
         promptTemplateCategory = category;
         promptTemplateSelectedId = data.item?.id || '';
         promptTemplateEditing = true;
+        notifyPromptLibraryUpdated();
         renderPromptTemplatePanel({preserveScroll:false});
     } catch(err) {
         toast(err.message || '创建失败');
@@ -4905,21 +7770,24 @@ async function savePromptTemplateEdit(){
     const item = promptTemplateSelectedItem();
     if(!item) return;
     const name = promptTemplatePanel.querySelector('[data-template-edit-name]')?.value?.trim() || '';
-    const text = promptTemplatePanel.querySelector('[data-template-edit-text]')?.value?.trim() || '';
-    const category = promptTemplatePanel.querySelector('[data-template-edit-category]')?.value || 'mine';
-    if(!name || !text){ toast(tr('smart.tplRequired')); return; }
+    const scene = promptTemplatePanel.querySelector('[data-template-edit-scene]')?.value?.trim() || '';
+    const positive = promptTemplatePanel.querySelector('[data-template-edit-positive]')?.value?.trim() || '';
+    const negative = promptTemplatePanel.querySelector('[data-template-edit-negative]')?.value?.trim() || '';
+    const category = promptTemplatePanel.querySelector('[data-template-edit-category]')?.value || PROMPT_UNCATEGORIZED_CATEGORY_ID;
+    if(!name || !positive){ toast(tr('smart.tplRequired')); return; }
     if(item.remote){
         try {
             const data = await fetch(`/api/prompt-libraries/items/${encodeURIComponent(item.id)}`, {
                 method:'PATCH',
                 headers:{'Content-Type':'application/json'},
-                body:JSON.stringify({library_id:item.libraryId || activePromptLibrary().id, name, category, positive:text, scene:item.scene || '', negative:item.negative || ''})
+                body:JSON.stringify({library_id:item.libraryId || activePromptLibrary().id, name, category, positive, negative, scene})
             }).then(async r => {
                 if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '保存失败');
                 return r.json();
             });
             promptLibraries = data.library?.libraries || promptLibraries;
             promptTemplateSelectedId = data.item?.id || item.id;
+            notifyPromptLibraryUpdated();
         } catch(err) {
             toast(err.message || '保存失败');
             return;
@@ -4929,7 +7797,9 @@ async function savePromptTemplateEdit(){
         promptTemplateOverrides.editedBuiltins[item.id] = {
             ...(promptTemplateOverrides.editedBuiltins[item.id] || {}),
             name,
-            positive:text,
+            positive,
+            negative,
+            scene,
             category
         };
         savePromptTemplateOverrides();
@@ -4937,9 +7807,9 @@ async function savePromptTemplateEdit(){
         const preset = currentPromptPreset(item.sourceId);
         if(!preset) return;
         const idx = promptPresets.findIndex(p => p.id === preset.id);
-        if(idx >= 0) promptPresets[idx] = {...promptPresets[idx], name, text, category, updatedAt:Date.now()};
+        if(idx >= 0) promptPresets[idx] = {...promptPresets[idx], name, text:positive, negative, scene, category, updatedAt:Date.now()};
         savePromptPresets();
-        nodes.forEach(node => { if(node.promptPresetId === preset.id) node.text = text; });
+        nodes.forEach(node => { if(node.promptPresetId === preset.id) node.text = positive; });
     }
     promptTemplateEditing = false;
     renderPromptTemplatePanel();
@@ -4956,6 +7826,7 @@ async function deletePromptTemplate(){
                 return r.json();
             });
             promptLibraries = data.library?.libraries || promptLibraries;
+            notifyPromptLibraryUpdated();
         } catch(err) {
             toast(err.message || '删除失败');
             return;
@@ -4974,70 +7845,94 @@ async function deletePromptTemplate(){
     render();
     scheduleSave();
 }
-async function createPromptTemplateGroup(){
-    const name = window.prompt(tr('smart.tplNewGroupPrompt'), tr('smart.tplNewGroupDefault'));
-    if(!String(name || '').trim()) return;
+function beginPromptTemplateGroupDraft(mode='new', groupId=''){
     const lib = activePromptLibrary();
-    // 系统库（readonly=false）也走后端新增分组，与素材库管理同步。
-    if(lib && !lib.readonly){
-        try {
-            const data = await fetch('/api/prompt-libraries/categories', {
-                method:'POST', headers:{'Content-Type':'application/json'},
-                body:JSON.stringify({name:String(name).trim().slice(0, 24), library_id:lib.id})
-            }).then(async r => { if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '新增分组失败'); return r.json(); });
-            promptLibraries = data.library?.libraries || promptLibraries;
-            promptTemplateCategory = data.category?.id || promptTemplateCategory;
-            renderPromptTemplatePanel({preserveScroll:false});
-        } catch(err){ if(typeof setStatus === 'function') setStatus(err.message || '新增分组失败'); }
+    if(!lib || lib.readonly) return;
+    const group = activePromptTemplateGroups().find(item => item.id === groupId);
+    promptTemplateGroupDraft = {
+        mode,
+        id:mode === 'new' ? `new:${Date.now()}` : groupId,
+        value:mode === 'new' ? tr('smart.tplNewGroupDefault') : group?.name || ''
+    };
+    renderPromptTemplatePanel({preserveScroll:false});
+    requestAnimationFrame(() => {
+        const input = promptTemplatePanel?.querySelector('[data-template-group-edit-input]');
+        input?.focus();
+        input?.select();
+    });
+}
+async function savePromptTemplateGroupDraft(){
+    const draft = promptTemplateGroupDraft;
+    if(!draft) return;
+    const input = promptTemplatePanel?.querySelector('[data-template-group-edit-input]');
+    const name = String(input?.value || draft.value || '').trim().slice(0, 24);
+    if(!name){
+        promptTemplateGroupDraft = null;
+        renderPromptTemplatePanel({preserveScroll:false});
         return;
     }
-    const group = {id:uid('tpl_group'), name:String(name).trim().slice(0, 24)};
-    promptTemplateGroups.push(group);
-    savePromptTemplateGroups();
-    promptTemplateCategory = group.id;
+    const lib = activePromptLibrary();
+    try {
+        if(lib && !lib.readonly){
+            const endpoint = draft.mode === 'new'
+                ? '/api/prompt-libraries/categories'
+                : `/api/prompt-libraries/categories/${encodeURIComponent(draft.id)}`;
+            const data = await fetch(endpoint, {
+                method:draft.mode === 'new' ? 'POST' : 'PATCH',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify(draft.mode === 'new' ? {name, library_id:lib.id} : {name, library_id:lib.id})
+            }).then(async response => {
+                if(!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || '分组保存失败');
+                return response.json();
+            });
+            promptLibraries = data.library?.libraries || promptLibraries;
+            if(draft.mode === 'new') promptTemplateCategory = data.category?.id || promptTemplateCategory;
+            notifyPromptLibraryUpdated();
+        } else if(draft.mode === 'new') {
+            const group = {id:uid('tpl_group'), name};
+            promptTemplateGroups.push(group);
+            promptTemplateCategory = group.id;
+            savePromptTemplateGroups();
+        } else {
+            const group = promptTemplateGroups.find(item => item.id === draft.id);
+            if(group) group.name = name;
+            savePromptTemplateGroups();
+        }
+        promptTemplateGroupDraft = null;
+        renderPromptTemplatePanel({preserveScroll:false});
+    } catch(error){
+        setPromptPresetStatus(error.message || '分组保存失败', 'warn');
+    }
+}
+function cancelPromptTemplateGroupDraft(){
+    promptTemplateGroupDraft = null;
     renderPromptTemplatePanel({preserveScroll:false});
 }
-async function renamePromptTemplateGroup(groupId){
-    const lib = activePromptLibrary();
-    const group = activePromptTemplateGroups().find(g => g.id === groupId);
-    if(!group) return;
-    const name = window.prompt(tr('smart.tplGroupNamePrompt'), group.name || '');
-    if(!String(name || '').trim()) return;
-    // 系统库的内置分组也走后端重命名（后端已放开内置分组限制），两端同步。
-    if(lib && !lib.readonly){
-        try {
-            const data = await fetch(`/api/prompt-libraries/categories/${encodeURIComponent(groupId)}`, {
-                method:'PATCH', headers:{'Content-Type':'application/json'},
-                body:JSON.stringify({name:String(name).trim().slice(0, 24), library_id:lib.id})
-            }).then(async r => { if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '重命名失败'); return r.json(); });
-            promptLibraries = data.library?.libraries || promptLibraries;
-            renderPromptTemplatePanel();
-        } catch(err){ if(typeof setStatus === 'function') setStatus(err.message || '重命名失败'); }
-        return;
-    }
-    group.name = String(name).trim().slice(0, 24);
-    savePromptTemplateGroups();
-    renderPromptTemplatePanel();
+async function createPromptTemplateGroup(){
+    beginPromptTemplateGroupDraft('new');
+}
+function renamePromptTemplateGroup(groupId){
+    if(groupId === PROMPT_UNCATEGORIZED_CATEGORY_ID) return;
+    beginPromptTemplateGroupDraft('rename', groupId);
 }
 async function deletePromptTemplateGroup(groupId){
     const lib = activePromptLibrary();
-    // 系统库的内置分组也走后端删除（后端已放开限制并把孤立条目改挂到剩余分组），两端同步。
+    if(groupId === PROMPT_UNCATEGORIZED_CATEGORY_ID) return;
     if(lib && !lib.readonly){
-        if(!window.confirm(tr('smart.tplDeleteGroupConfirm'))) return;
         try {
             const data = await fetch(`/api/prompt-libraries/categories/${encodeURIComponent(groupId)}`, {method:'DELETE'})
                 .then(async r => { if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '删除失败'); return r.json(); });
             promptLibraries = data.library?.libraries || promptLibraries;
             if(promptTemplateCategory === groupId) promptTemplateCategory = 'all';
+            notifyPromptLibraryUpdated();
             renderPromptTemplatePanel({preserveScroll:false});
         } catch(err){ if(typeof setStatus === 'function') setStatus(err.message || '删除失败'); }
         return;
     }
-    if(!window.confirm(tr('smart.tplDeleteGroupConfirm'))) return;
     promptTemplateGroups = promptTemplateGroups.filter(g => g.id !== groupId);
-    promptPresets = promptPresets.map(p => p.category === groupId ? {...p, category:'mine'} : p);
+    promptPresets = promptPresets.map(p => p.category === groupId ? {...p, category:PROMPT_UNCATEGORIZED_CATEGORY_ID} : p);
     Object.entries(promptTemplateOverrides.editedBuiltins || {}).forEach(([id, item]) => {
-        if(item?.category === groupId) promptTemplateOverrides.editedBuiltins[id] = {...item, category:'mine'};
+        if(item?.category === groupId) promptTemplateOverrides.editedBuiltins[id] = {...item, category:PROMPT_UNCATEGORIZED_CATEGORY_ID};
     });
     if(promptTemplateCategory === groupId) promptTemplateCategory = 'all';
     savePromptTemplateGroups();
@@ -5102,28 +7997,24 @@ function itemsForAssetSmartClass(optionId=''){
     });
 }
 function workflowAssetCategories(){
-    return assetCategories('workflow');
+    const library = assetLibraries().find(item => item.id === activeWorkflowAssetLibraryId) || null;
+    return (library?.categories || []).filter(cat => (cat.type || 'image') === 'workflow');
+}
+function workflowAssetLibraries(){
+    return assetLibraries().filter(library => (library.categories || []).some(cat => (cat.type || 'image') === 'workflow'));
 }
 function assetLibraries(){
     return Array.isArray(assetLibrary.libraries) && assetLibrary.libraries.length ? assetLibrary.libraries : [{id:'default', name:'默认资产库', categories:assetLibrary.categories || []}];
 }
 function localAssetFolderCategories(){
-    const result = [];
-    const walk = node => {
-        if(!node) return;
-        const isRoot = (node.id || node.path || '__root__') === '__root__';
-        result.push({
-            id: node.id || (node.path ? node.path : '__root__'),
-            name: node.name || (node.path ? node.path.split('/').pop() : '全部上传'),
-            type: 'image',
-            items: (isRoot ? (localAssetLibrary.items || []) : (node.items || [])).filter(item => assetMediaKind(item) === 'image'),
-            readonly: true,
-            source: 'local',
-        });
-        (node.children || []).forEach(walk);
-    };
-    walk(localAssetLibrary.tree || {id:'__root__', name:'全部上传', items:localAssetLibrary.items || [], children:[]});
-    return result;
+    return [{
+        id:'__temporary__',
+        name:'全部临时素材',
+        type:'image',
+        items:localAssetLibrary.items || [],
+        readonly:true,
+        source:'local'
+    }];
 }
 function assetLibraryIsLocal(){
     return activeAssetLibraryId === LOCAL_ASSET_LIBRARY_ID;
@@ -5131,13 +8022,17 @@ function assetLibraryIsLocal(){
 function currentAssetSourceLibraries(){
     return [
         ...assetLibraries(),
-        {id:LOCAL_ASSET_LIBRARY_ID, name:'本地素材', categories:localAssetFolderCategories(), readonly:true, source:'local'}
+        {id:LOCAL_ASSET_LIBRARY_ID, name:'临时素材', categories:localAssetFolderCategories(), readonly:true, source:'local'}
     ];
 }
 function activeAssetLibrary(){
     if(assetLibraryIsLocal()) return currentAssetSourceLibraries().find(lib => lib.id === LOCAL_ASSET_LIBRARY_ID);
     const libs = assetLibraries();
     return libs.find(lib => lib.id === activeAssetLibraryId) || libs[0] || null;
+}
+function activeWorkflowAssetLibrary(){
+    const libs = workflowAssetLibraries();
+    return libs.find(lib => lib.id === activeWorkflowAssetLibraryId) || libs[0] || null;
 }
 function activeAssetCategory(){
     const cats = assetCategories('image');
@@ -5165,11 +8060,17 @@ function setActiveAssetTabCategory(categoryId=''){
 }
 async function loadAssetLibrary(){
     try {
-        const [data, localData] = await Promise.all([
+        const [data, localData, resultData] = await Promise.all([
             fetch('/api/asset-library').then(r => r.json()),
-            fetch('/api/local-assets').then(r => r.ok ? r.json() : {items:[], tree:null}).catch(() => ({items:[], tree:null}))
+            fetch('/api/local-assets').then(r => r.ok ? r.json() : {items:[], tree:null}).catch(() => ({items:[], tree:null})),
+            fetch('/api/results?kind=all').then(r => r.ok ? r.json() : {items:[], canvases:[], counts:{}}).catch(() => ({items:[], canvases:[], counts:{}}))
         ]);
         localAssetLibrary = {items:Array.isArray(localData.items) ? localData.items : [], tree:localData.tree || null};
+        generationResults = {
+            items:Array.isArray(resultData.items) ? resultData.items : [],
+            canvases:Array.isArray(resultData.canvases) ? resultData.canvases : [],
+            counts:resultData.counts || {}
+        };
         setAssetLibraryFromResponse(data, {render:false});
         renderAssetLibrary();
     } catch(e) {
@@ -5246,6 +8147,7 @@ function markSmartNodeComplete(node, meta=null){
     if(!node.runStartedAt) node.runStartedAt = meta?.createdAt || node.runFinishedAt;
     node.runElapsedMs = Math.max(0, Number(node.runFinishedAt || nowMs()) - Number(node.runStartedAt || node.runFinishedAt || nowMs()));
     node.runTimerHidden = meta?.hideTimer === true || keepHidden;
+    if(smartNodeHasDisplayResult(node)) delete node.isRunPlaceholder;
     return node;
 }
 function completedDownstreamOutputForNode(sourceNode){
@@ -5413,12 +8315,18 @@ function applyMergedServerCanvas(serverCanvas){
     const cleanedState = clearCompletedNodeBusyStates();
     const recoveredLoopOutputs = recoverStuckLoopOutputsFromLogs();
     canvas.updated_at = Number(serverCanvas.updated_at || canvas.updated_at || 0);
+    canvas.revision = Math.max(1, Number(serverCanvas.revision || canvas.revision || 1));
     if(canvas.title !== serverCanvas.title && serverCanvas.title){
         canvas.title = serverCanvas.title;
         const titleEl = document.getElementById('smartTitle');
         if(titleEl) titleEl.textContent = canvas.title;
     }
     render();
+    hydrateTextResultMediaContent(nodes).then(changed => {
+        if(!changed) return;
+        render();
+        scheduleSave();
+    });
     if(typeof scheduleConnectionLayerRefresh === 'function') scheduleConnectionLayerRefresh();
     if(cleanedState || recoveredLoopOutputs) scheduleSave();
     resumeSmartPendingTasks();
@@ -5448,8 +8356,9 @@ function handleCanvasUpdatedMessage(data={}){
     if(!canvasId || data.canvas_id !== canvasId) return;
     if(data.client_id && data.client_id === smartClientId) return; // 自己发的，忽略
     if(canvasSyncInFlight) return; // 我正在保存，保存完成/409 合并会处理
+    const remoteRevision = Number(data.revision || 0);
     const remoteUpdatedAt = Number(data.updated_at || 0);
-    if(remoteUpdatedAt && remoteUpdatedAt <= Number(canvas?.updated_at || 0)) return;
+    if((remoteRevision && remoteRevision <= Number(canvas?.revision || 0)) || (!remoteRevision && remoteUpdatedAt && remoteUpdatedAt <= Number(canvas?.updated_at || 0))) return;
     scheduleCanvasMergeReload(200);
 }
 function startCanvasMetaPoll(){
@@ -5462,7 +8371,9 @@ function startCanvasMetaPoll(){
             const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}/meta`);
             if(!res.ok) return;
             const meta = await res.json();
-            if(Number(meta.updated_at || 0) > Number(canvas.updated_at || 0)) mergeReloadCanvasNow();
+            const remoteRevision = Number(meta.revision || 0);
+            const remoteUpdatedAt = Number(meta.updated_at || 0);
+            if((remoteRevision && remoteRevision > Number(canvas.revision || 0)) || (!remoteRevision && remoteUpdatedAt > Number(canvas.updated_at || 0))) mergeReloadCanvasNow();
         } catch(e) {}
     }, 8000);
 }
@@ -5510,6 +8421,9 @@ function setAssetLibraryFromResponse(data, options={}){
     const cats = assetCategories('image');
     if(activeAssetCategoryId && !cats.some(cat => cat.id === activeAssetCategoryId)) activeAssetCategoryId = '';
     if(!activeAssetCategoryId) activeAssetCategoryId = activeAssetCategory()?.id || '';
+    const workflowLibs = workflowAssetLibraries();
+    if(activeWorkflowAssetLibraryId && !workflowLibs.some(lib => lib.id === activeWorkflowAssetLibraryId)) activeWorkflowAssetLibraryId = '';
+    if(!activeWorkflowAssetLibraryId) activeWorkflowAssetLibraryId = workflowLibs[0]?.id || '';
     const workflowCats = workflowAssetCategories();
     if(activeWorkflowAssetCategoryId && !workflowCats.some(cat => cat.id === activeWorkflowAssetCategoryId)) activeWorkflowAssetCategoryId = '';
     if(!activeWorkflowAssetCategoryId) activeWorkflowAssetCategoryId = activeWorkflowAssetCategory()?.id || '';
@@ -5522,6 +8436,7 @@ function setAssetLibraryFromResponse(data, options={}){
 }
 function toggleAssetLibrary(open=!assetLibraryOpen){
     if(!assetPanel || !assetToggle) return;
+    if(open) closeSmartTopPanels('assets');
     assetLibraryOpen = !!open;
     assetPanel.classList.toggle('open', assetLibraryOpen);
     assetToggle?.classList.toggle('active', assetLibraryOpen);
@@ -5557,6 +8472,10 @@ function assetNodeImageFromItem(item, fallbackName='asset'){
     };
     copyMediaSizeFields(item, image);
     if(item?.asset_uris && typeof item.asset_uris === 'object') image.asset_uris = {...item.asset_uris};
+    if(item?.resultId || item?.result_id) image.resultId = item.resultId || item.result_id;
+    if(item?.materialId || item?.material_id) image.materialId = item.materialId || item.material_id;
+    if(item?.sourceKind) image.sourceKind = item.sourceKind;
+    if(item?.generatedResult || item?.sourceKind === 'result' || image.resultId) image.generatedResult = true;
     return image;
 }
 function assetThumbHtml(item){
@@ -5578,18 +8497,41 @@ function assetThumbHtml(item){
 function renderAssetLibrary(){
     if(!assetPanel || !assetGrid || !assetCategorySelect) return;
     document.querySelectorAll('[data-asset-tab]').forEach(btn => btn.classList.toggle('active', btn.dataset.assetTab === assetTab));
-    const libs = currentAssetSourceLibraries();
-    if(!activeAssetLibraryId || !libs.some(lib => lib.id === activeAssetLibraryId)) activeAssetLibraryId = assetLibrary.active_library_id || assetLibraries()[0]?.id || LOCAL_ASSET_LIBRARY_ID;
+    const workflowMode = assetTab === 'workflow';
+    const resultMode = assetTab === 'result';
+    const libs = workflowMode ? workflowAssetLibraries() : currentAssetSourceLibraries();
+    const activeLibraryId = workflowMode ? activeWorkflowAssetLibraryId : activeAssetLibraryId;
+    if(workflowMode){
+        if(!activeWorkflowAssetLibraryId || !libs.some(lib => lib.id === activeWorkflowAssetLibraryId)) activeWorkflowAssetLibraryId = libs[0]?.id || '';
+    } else if(!activeAssetLibraryId || !libs.some(lib => lib.id === activeAssetLibraryId)) activeAssetLibraryId = assetLibrary.active_library_id || assetLibraries()[0]?.id || LOCAL_ASSET_LIBRARY_ID;
     if(assetLibrarySelect){
-        assetLibrarySelect.innerHTML = libs.map(lib => `<option value="${escapeHtml(lib.id)}" ${lib.id === activeAssetLibraryId ? 'selected' : ''}>${escapeHtml(lib.name || '资产库')}</option>`).join('');
+        assetLibrarySelect.innerHTML = libs.map(lib => `<option value="${escapeHtml(lib.id)}" ${lib.id === (workflowMode ? activeWorkflowAssetLibraryId : activeAssetLibraryId) ? 'selected' : ''}>${escapeHtml(lib.name || (workflowMode ? '画布工作流' : '资产库'))}</option>`).join('');
     }
     const imageMode = assetTab === 'image';
-    const workflowMode = assetTab === 'workflow';
     assetImageControls.style.display = (imageMode || workflowMode) ? 'block' : 'none';
-    const localMode = assetLibraryIsLocal();
+    const localMode = imageMode && assetLibraryIsLocal();
     assetDropZone.style.display = imageMode ? 'flex' : 'none';
-    assetGrid.style.display = (imageMode || workflowMode) ? 'grid' : 'none';
+    assetGrid.style.display = (imageMode || workflowMode || resultMode) ? 'grid' : 'none';
     workflowEmpty.style.display = 'none';
+    if(resultMode){
+        if(assetLibrarySelect) assetLibrarySelect.closest('#assetImageControls')?.style?.setProperty('display', 'none');
+        const canvasMap = new Map((generationResults.canvases || []).map(entry => [String(entry.id || ''), entry]));
+        const grouped = new Map();
+        (generationResults.items || []).forEach(item => {
+            const source = item.source_canvas || {};
+            const canvasId = String(source.id || '__unknown__');
+            if(!grouped.has(canvasId)) grouped.set(canvasId, []);
+            grouped.get(canvasId).push(item);
+        });
+        assetGrid.innerHTML = grouped.size ? [...grouped.entries()].map(([canvasId, items]) => {
+            const meta = canvasMap.get(canvasId) || items[0]?.source_canvas || {};
+            return `<section class="asset-result-section"><div class="asset-result-section-head"><span>${escapeHtml(meta.title || '未记录来源')}</span><span>${items.length} 个结果</span></div>${items.map(item => `<div class="asset-item" draggable="true" data-asset-id="${escapeHtml(item.id || '')}" data-url="${escapeHtml(item.url || '')}" data-name="${escapeHtml(item.name || '生成结果')}" data-kind="${escapeHtml(item.kind || assetMediaKind(item))}" data-source-kind="result">${assetThumbHtml(item)}<div class="asset-meta"><span class="asset-name" title="${escapeHtml(item.name || '')}">${escapeHtml(item.name || '生成结果')}</span></div></div>`).join('')}</section>`;
+        }).join('') : '<div class="asset-empty">暂无生成结果</div>';
+        bindResultAssetItemEvents();
+        bindSmartPreviewImageFallbacks(assetGrid);
+        refreshIcons();
+        return;
+    }
     if(!imageMode && !workflowMode){ refreshIcons(); return; }
     const baseCats = workflowMode ? workflowAssetCategories() : assetCategories('image');
     const smartClassCats = imageMode && !localMode ? assetSmartClassEntries().map(entry => ({
@@ -5601,14 +8543,13 @@ function renderAssetLibrary(){
         items:[]
     })) : [];
     const cats = workflowMode ? baseCats : [...baseCats, ...smartClassCats];
-    const activeCatId = workflowMode ? activeWorkflowAssetCategoryId : activeAssetCategoryId;
     if(workflowMode && !cats.some(cat => cat.id === activeWorkflowAssetCategoryId)) activeWorkflowAssetCategoryId = cats[0]?.id || '';
     if(imageMode && !cats.some(cat => cat.id === activeAssetCategoryId)) activeAssetCategoryId = cats[0]?.id || '';
     assetCategorySelect.innerHTML = cats.map(cat => `<option value="${escapeHtml(cat.id)}" ${cat.id === (workflowMode ? activeWorkflowAssetCategoryId : activeAssetCategoryId) ? 'selected' : ''}>${escapeHtml(cat.name || (workflowMode ? '工作流' : tr('smart.assetFolder')))}</option>`).join('');
     const cat = workflowMode ? activeWorkflowAssetCategory() : activeAssetCategory();
     const smartClass = imageMode ? parseAssetSmartClassId(activeAssetCategoryId) : null;
     const items = smartClass ? itemsForAssetSmartClass(activeAssetCategoryId) : (cat?.items || []);
-    if(assetAddCategoryBtn) assetAddCategoryBtn.disabled = Boolean(smartClass);
+    if(assetAddCategoryBtn) assetAddCategoryBtn.disabled = Boolean(smartClass) || localMode;
     if(assetRenameCategoryBtn) assetRenameCategoryBtn.disabled = !cat || Boolean(smartClass) || (localMode && (cat.id === '__root__' || !cat.id));
     assetGrid.innerHTML = items.length ? items.map(item => `
         <div class="asset-item ${workflowMode ? 'workflow-asset-item' : ''}" draggable="${workflowMode ? 'false' : 'true'}" data-asset-id="${escapeHtml(item.id)}" data-url="${escapeHtml(item.url)}" data-name="${escapeHtml(item.name || 'asset')}" data-kind="${escapeHtml(assetMediaKind(item))}">
@@ -5619,11 +8560,12 @@ function renderAssetLibrary(){
                     ? `<button class="asset-mini-btn" type="button" data-rename-workflow-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('smart.assetRename'))}"><i data-lucide="pencil"></i></button>
                        <button class="asset-mini-btn" type="button" data-delete-workflow-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>`
                     : localMode ? `<button class="asset-mini-btn" type="button" data-rename-local-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('smart.assetRename'))}"><i data-lucide="pencil"></i></button>
+                       <button class="asset-mini-btn" type="button" data-promote-local-asset="${escapeHtml(item.id)}" title="收藏到资产素材"><i data-lucide="bookmark-plus"></i></button>
                        <button class="asset-mini-btn" type="button" data-delete-local-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>` : `<button class="asset-mini-btn" type="button" data-rename-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('smart.assetRename'))}"><i data-lucide="pencil"></i></button>
                        <button class="asset-mini-btn" type="button" data-delete-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>`}
             </div>
         </div>
-    `).join('') : `<div class="asset-empty">${escapeHtml(localMode ? '暂无本地素材，拖入图片即可保存' : (smartClass ? '这个智能分类下暂无素材' : (workflowMode ? '暂无工作流资产' : tr('smart.assetEmpty'))))}</div>`;
+    `).join('') : `<div class="asset-empty">${escapeHtml(localMode ? '暂无临时素材，可拖入图片、视频或音频' : (smartClass ? '这个智能分类下暂无素材' : (workflowMode ? '暂无工作流资产' : tr('smart.assetEmpty'))))}</div>`;
     if(workflowMode) bindWorkflowAssetItemEvents();
     else bindAssetItemEvents();
     bindSmartPreviewImageFallbacks(assetGrid);
@@ -5846,6 +8788,13 @@ function bindAssetItemEvents(){
             beginAssetInlineRename(btn.dataset.renameLocalAsset || '');
         };
     });
+    assetGrid.querySelectorAll('[data-promote-local-asset]').forEach(btn => {
+        btn.onclick = async e => {
+            e.preventDefault(); e.stopPropagation();
+            const item = (activeAssetCategory()?.items || []).find(entry => entry.id === btn.dataset.promoteLocalAsset);
+            await promoteSmartMaterial(item?.material_id || window.MaterialPromote?.materialIdFromUrl?.(item?.url || ''), item?.name || '');
+        };
+    });
     assetGrid.querySelectorAll('[data-delete-local-asset]').forEach(btn => {
         btn.onclick = async e => {
             e.preventDefault(); e.stopPropagation();
@@ -5890,6 +8839,25 @@ function bindWorkflowAssetItemEvents(){
                 toast(err.message || tr('smart.assetAddFail'));
             }
         };
+    });
+}
+function bindResultAssetItemEvents(){
+    assetGrid.querySelectorAll('.asset-item[data-source-kind="result"]').forEach(el => {
+        const item = (generationResults.items || []).find(entry => String(entry.id || '') === String(el.dataset.assetId || '')) || {};
+        const asset = assetNodeImageFromItem({...item, resultId:item.id || ''});
+        el.addEventListener('dragstart', event => {
+            event.dataTransfer.effectAllowed = 'copy';
+            event.dataTransfer.setData('application/x-smart-asset', JSON.stringify({...asset, resultId:item.id || '', sourceKind:'result'}));
+            event.dataTransfer.setData('text/plain', asset.url || '');
+        });
+        el.addEventListener('dblclick', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const point = viewportCenter();
+            pushUndo();
+            const node = createImageNodeAt(point, [{...asset, resultId:item.id || '', generatedResult:true}], {skipUndo:true, sourceKind:'result'});
+            if(node){ render(); scheduleSave(); }
+        });
     });
 }
 async function addUrlToAssetLibrary(url, name=''){
@@ -5975,21 +8943,91 @@ function canvasImageDragPayload(node, index=0){
     if(!img?.url) return null;
     return {url:img.url, name:img.name || node.title || 'image'};
 }
-// 迁移旧数据：早期把图片节点作为成员（items[]）放进分组的画布，统一把这些图片吸收进 group.images，
-// 让它们显示为卡片内的缩略图网格（新模型）。一次性、幂等。
 function migrateSmartGroupImageMembers(){
     let changed = false;
     nodes.filter(isSmartGroupNode).forEach(group => {
-        const imageMemberIds = (Array.isArray(group.items) ? group.items : [])
-            .map(id => nodes.find(n => n.id === id))
-            .filter(m => m && isSmartImageNode(m) && (m.images || []).some(img => img?.url))
-            .map(m => m.id);
-        imageMemberIds.forEach(id => {
-            const member = nodes.find(n => n.id === id);
-            if(member && absorbImageNodeIntoSmartGroup(group, member)) changed = true;
+        const legacyImages = (group.images || []).filter(item => item?.url);
+        if(!legacyImages.length) return;
+        const layout = smartGroupLayoutSize(group);
+        const startX = Number(group.x || 0) + SMART_GROUP_ARRANGE_PADDING;
+        const startY = Number(group.y || 0) + SMART_GROUP_ARRANGE_HEADER + SMART_GROUP_ARRANGE_PADDING;
+        const memberIds = [];
+        legacyImages.forEach((image, index) => {
+            const row = Math.floor(index / 3);
+            const col = index % 3;
+            const member = {
+                id:uid('material'),
+                type:SMART_NODE_TYPES.material,
+                sourceKind:'input',
+                x:startX + col * 116,
+                y:startY + row * 116,
+                title:image.name || '素材',
+                images:[stripImageGenerationMeta({...image})],
+                scale:1,
+                created_at:group.created_at || Date.now()
+            };
+            nodes.push(member);
+            memberIds.push(member.id);
         });
+        group.items = Array.from(new Set([...(group.items || []), ...memberIds]));
+        group.images = [];
+        group.w = Math.max(layout.width, 340);
+        group.h = Math.max(layout.height, 220);
+        fitSmartGroupBounds(group);
+        changed = true;
     });
     return changed;
+}
+async function restoreCanvasRuns(){
+    if(!canvasId || !nodes.length) return [];
+    let runs = [];
+    try {
+        const response = await fetch(`/api/canvas-runs?canvas_id=${encodeURIComponent(canvasId)}`);
+        if(!response.ok) return [];
+        const payload = await response.json();
+        runs = Array.isArray(payload.runs) ? payload.runs : [];
+    } catch(error) {
+        return [];
+    }
+    const runById = new Map(runs.map(run => [String(run?.run_id || ''), run]).filter(entry => entry[0]));
+    nodes.forEach(node => {
+        const run = runById.get(canvasRunId(node));
+        if(!run) return;
+        const attempt = (run.attempts || []).slice(-1)[0] || {};
+        const status = String(attempt.status || 'validated');
+        node.runStatus = status;
+        node.runRef = {
+            ...(node.runRef || {}),
+            runId:String(run.run_id || ''),
+            attemptId:String(attempt.attempt_id || node.runRef?.attemptId || ''),
+            idempotencyKey:String(attempt.idempotency_key || node.runRef?.idempotencyKey || ''),
+            providerTaskId:String(attempt.provider_task_id || ''),
+            resultIds:Array.isArray(attempt.result_ids) ? attempt.result_ids.filter(Boolean) : [],
+            syncError:''
+        };
+        if(['queued','submitted','processing'].includes(status)){
+            node.running = status === 'processing';
+            node.queued = status !== 'processing';
+            if(!node.pending && smartPendingTasks(node).length) node.pending = smartPendingTasks(node).length;
+        } else if(status === 'recoverable'){
+            node.running = false;
+            node.queued = false;
+            node.runError = String(attempt.error || '任务可继续查询');
+        } else if(status === 'failed'){
+            node.running = false;
+            node.queued = false;
+            node.runError = String(attempt.error || '任务未完成');
+        } else if(status === 'cancelled'){
+            node.running = false;
+            node.queued = false;
+            delete node.runError;
+        } else if(['succeeded','partially_succeeded'].includes(status)){
+            node.running = false;
+            node.queued = false;
+            delete node.runError;
+        }
+    });
+    return runs;
 }
 async function loadCanvas(){
     if(!canvasId) return;
@@ -6002,7 +9040,12 @@ async function loadCanvas(){
         canvasUsesConnections = Object.prototype.hasOwnProperty.call(canvas || {}, 'connections');
         document.title = canvas.title || tr('canvas.smartCanvas');
         document.getElementById('smartTitle').textContent = canvas.title || tr('canvas.smartCanvas');
-        nodes = (Array.isArray(canvas.nodes) ? canvas.nodes : []).map(normalizeLegacySmartNode).filter(Boolean);
+    const migration = SMART_NODE_CONTRACT.migrateLegacyCanvas(canvas.nodes, canvas.connections);
+    nodes = migration.nodes.map(normalizeLegacySmartNode).filter(Boolean);
+    const hydratedTextResults = await hydrateTextResultMediaContent(nodes);
+    const migratedMusicNodes = migrateLegacyMusicGeneratorNodes();
+        canvas.connections = migration.connections;
+        smartNodeMigrationPending = Number(canvas.node_schema_version || 0) < SMART_NODE_SCHEMA_VERSION;
         migrateSmartGroupImageMembers();
         canvas.connections = Array.isArray(canvas.connections) ? canvas.connections : [];
         nodes.forEach(n => {
@@ -6028,22 +9071,64 @@ async function loadCanvas(){
         nodes.forEach(node => {
             if(node.runSettings) normalizeSmartVideoModeSettings(node.runSettings, true);
         });
+        const initializedExecutionDefaults = nodes.reduce((changed, node) => {
+            if(!node.runSettings) return changed;
+            return ensureExecutionSelectionDefaults(node.runSettings, node) || changed;
+        }, false);
         canvasDefaultSmartSettings = cloneSmartSettings(settings);
         loadRecentSmartSettings();
         if(settings.comfy_workflow && !settings.comfyWorkflow) settings.comfyWorkflow = settings.comfy_workflow;
         if(settings.comfy_params && !settings.comfyParams) settings.comfyParams = settings.comfy_params;
         updateProviderModels();
+        await restoreCanvasRuns();
         applyViewport();
         render();
-        if(cleanedDetachedInputs || cleanedCompletedState || recoveredLoopOutputs || hiddenCompletedTimers) scheduleSave();
+    if(smartNodeMigrationPending || migratedMusicNodes || initializedExecutionDefaults || cleanedDetachedInputs || cleanedCompletedState || recoveredLoopOutputs || hiddenCompletedTimers || hydratedTextResults) scheduleSave();
         resumeSmartPendingTasks();
         resumeJimengPendingNodes();
         startCanvasMetaPoll();
     } catch(e) { toast(tr('smart.toastCanvasFail')); }
 }
+function migrateLegacyMusicGeneratorNodes(){
+    let changed = false;
+    nodes.forEach(node => {
+        if(node?.type !== SMART_NODE_TYPES.audioGenerator) return;
+        const runSettings = node.runSettings || {};
+        const profile = capabilityProfileFor(runSettings.audioProvider, runSettings.audioModel, 'music_generation');
+        if(profile?.node_type !== 'music_generation') return;
+        node.type = SMART_NODE_TYPES.musicGenerator;
+        node.title = SMART_NODE_CONTRACT.titleForType(node.type);
+        node.outputKind = SMART_NODE_CONTRACT.outputKindForType(node.type);
+        node.runSettings = SMART_NODE_CONTRACT.normalizeExecutionSettings(node, {
+            ...runSettings,
+            musicProvider:runSettings.musicProvider || runSettings.audioProvider || '',
+            musicFamilyId:runSettings.musicFamilyId || runSettings.audioFamilyId || profile.family_id || '',
+            musicModel:runSettings.musicModel || runSettings.audioModel || profile.model_id || ''
+        });
+        changed = true;
+    });
+    return changed;
+}
 function scheduleSave(){
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveCanvas, 450);
+}
+function syncServerMediaUrls(serverNodes){
+    if(!Array.isArray(serverNodes)) return false;
+    const remoteById = new Map(serverNodes.filter(node => node?.id).map(node => [node.id, node]));
+    let changed = false;
+    nodes.forEach(node => {
+        const remote = remoteById.get(node?.id);
+        if(!remote || !Array.isArray(remote.images) || !Array.isArray(node.images)) return;
+        remote.images.forEach((image, index) => {
+            const current = node.images[index];
+            const remoteUrl = String(image?.url || '').trim();
+            if(!current || !remoteUrl || remoteUrl === String(current.url || '')) return;
+            node.images[index] = {...current, ...image, url:remoteUrl};
+            changed = true;
+        });
+    });
+    return changed;
 }
 async function saveCanvas(){
     if(!canvasId || !canvas) return;
@@ -6070,12 +9155,31 @@ async function saveCanvas(){
                 logs:storageCanvas.logs || [],
                 settings:storageCanvas.settings,
                 base_updated_at:storageCanvas.updated_at || canvas.updated_at || 0,
-                client_id:smartClientId
+                base_revision:storageCanvas.revision || canvas.revision || 0,
+                client_id:smartClientId,
+                migration_version:smartNodeMigrationPending ? SMART_NODE_SCHEMA_VERSION : 0
             })
         });
         if(res.ok){
             const data = await res.json();
             if(data.canvas && data.canvas.updated_at) canvas.updated_at = data.canvas.updated_at;
+            canvas.revision = Number(data.canvas?.revision || canvas.revision || 1);
+            if(syncServerMediaUrls(data.canvas?.nodes)){
+                canvas.nodes = nodes;
+                render();
+                scheduleConnectionLayerRefresh();
+            }
+            if(smartNodeMigrationPending){
+                const migrationConfirmed = Number(data.canvas?.node_schema_version || 0) >= SMART_NODE_SCHEMA_VERSION;
+                if(migrationConfirmed){
+                    canvas.node_schema_version = Number(data.canvas.node_schema_version);
+                    smartNodeMigrationPending = false;
+                    smartMigrationRestartNotified = false;
+                } else if(!smartMigrationRestartNotified){
+                    smartMigrationRestartNotified = true;
+                    toast(tr('smart.toastMigrationRestart'));
+                }
+            }
         } else if(res.status === 409) {
             // 冲突：别人先保存了。合并对方的状态（节点 id 合并、图片取并集，谁都不丢），
             // 然后用对方最新的 updated_at 作为基底重存，把合并结果落盘——而不是直接覆盖对方。
@@ -6088,8 +9192,9 @@ async function saveCanvas(){
                     if(node.runSettings) node.runSettings = settingsForStorage(node.runSettings);
                 });
                 canvas.nodes = nodes;
-            } else if(data.detail?.updated_at) {
-                canvas.updated_at = data.detail.updated_at;
+            } else if(data.detail?.updated_at || data.detail?.revision) {
+                if(data.detail.updated_at) canvas.updated_at = data.detail.updated_at;
+                if(data.detail.revision) canvas.revision = Number(data.detail.revision);
             }
             clearTimeout(saveTimer);
             saveTimer = setTimeout(saveCanvas, 300);
@@ -6111,10 +9216,102 @@ function inheritNodeMetaFromImage(node){
 function createNode(x, y, images=[], options={}){
     if(!options.skipUndo) pushUndo();
     const nodeImages = (images || []).map(img => ({...img}));
-    const node = {id:uid('smart'), type:'smart-image', x, y, title:nodeImages.length > 1 ? 'Group' : nodeImages.length ? 'Image' : tr('smart.createImportNode'), images:nodeImages, created_at:Date.now()};
+    const node = {id:uid('material'), type:SMART_NODE_TYPES.material, sourceKind:options.sourceKind || 'input', x, y, title:nodeImages.length > 1 ? '素材组' : nodeImages[0]?.name || tr('smart.createMaterial') || '素材', images:nodeImages, created_at:Date.now()};
     node.scale = nodeImages.length > 1 ? MEDIA_GROUP_DEFAULT_SCALE : mediaNodeDefaultScale(node);
+    if(nodeImages.length === 1){
+        const defaultSize = defaultSingleMaterialSize(nodeImages[0]);
+        node.w = defaultSize.width;
+        node.h = defaultSize.height;
+        node.mediaSizeMode = 'auto';
+    }
     inheritNodeMetaFromImage(node);
     nodes.push(node);
+    if(options.select !== false) selectedId = node.id;
+    render();
+    scheduleSave();
+    return node;
+}
+function createExecutionNode(x, y, type, options={}){
+    if(!options.skipUndo) pushUndo();
+    const node = SMART_NODE_CONTRACT.normalizeExecutionNode({
+        id:uid('run'),
+        type,
+        x,
+        y,
+        w:SMART_NODE_CONTRACT.EXECUTION_NODE_SIZE.width,
+        h:SMART_NODE_CONTRACT.EXECUTION_NODE_SIZE.height,
+        title:SMART_NODE_CONTRACT.titleForType(type),
+        outputKind:SMART_NODE_CONTRACT.outputKindForType(type),
+        images:[],
+        promptDraftHtml:'',
+        promptDraftText:'',
+        runSettings:SMART_NODE_CONTRACT.normalizeExecutionSettings({type}, cloneSmartSettings(canvasDefaultSmartSettings || initialSmartSettings)),
+        created_at:Date.now()
+    });
+    if(type === SMART_NODE_TYPES.textGenerator){
+        node.runSettings.engine = 'api';
+        node.runSettings.apiKind = 'text';
+        node.runSettings.textProvider = resolveChatProviderId(node.runSettings.textProvider || '');
+        node.runSettings.textModel = resolveChatModel(node.runSettings.textModel || '', node.runSettings.textProvider);
+        node.runSettings.textSystemEnabled = false;
+        node.runSettings.textSystemPrompt = '';
+    }
+    if(type === SMART_NODE_TYPES.imageGenerator){ node.runSettings.engine = 'api'; node.runSettings.apiKind = 'image'; }
+    if(type === SMART_NODE_TYPES.videoGenerator){ node.runSettings.engine = 'api'; node.runSettings.apiKind = 'video'; node.runSettings.provider_id = ''; node.runSettings.model = ''; }
+    if(type === SMART_NODE_TYPES.audioGenerator){ node.runSettings.engine = 'api'; node.runSettings.apiKind = 'audio'; node.runSettings.provider_id = ''; node.runSettings.model = ''; node.runSettings.videoProvider = ''; node.runSettings.videoModel = ''; }
+    if(type === SMART_NODE_TYPES.musicGenerator){ node.runSettings.engine = 'api'; node.runSettings.apiKind = 'music'; node.runSettings.provider_id = ''; node.runSettings.model = ''; node.runSettings.videoProvider = ''; node.runSettings.videoModel = ''; node.runSettings.audioProvider = ''; node.runSettings.audioModel = ''; node.runSettings.audioFamilyId = ''; }
+    if(type === SMART_NODE_TYPES.aiApp){
+        node.runSettings.engine = 'runninghub';
+        node.runSettings.apiKind = 'image';
+        const defaultApp = runningHubEntries('app')[0];
+        node.runSettings.rhConfigKey = defaultApp ? runningHubEntryKey('app', runningHubEntryId(defaultApp, 'app')) : '';
+        node.runSettings.rhAppId = defaultApp ? runningHubEntryId(defaultApp, 'app') : '';
+        delete node.runSettings.rhWorkflowId;
+        node.runSettings.rhMode = 'app';
+    }
+    if(type === SMART_NODE_TYPES.comfyWorkflow){
+        node.runSettings.engine = 'comfy';
+        node.runSettings.apiKind = 'image';
+        node.runSettings.comfyMode = 'custom';
+    }
+    sanitizeSmartApiSelection(node.runSettings);
+    ensureExecutionSelectionDefaults(node.runSettings, node, {resetSelection:true});
+    nodes.push(node);
+    if(options.select !== false) selectedId = node.id;
+    render();
+    scheduleSave();
+    return node;
+}
+function resultIdsForMediaItems(items=[]){
+    return (items || []).map((item, index) => normalizeSmartMediaReference(item, index).resultId || '').filter(Boolean);
+}
+function createResultGroupNode(x, y, entries=[], options={}){
+    if(!options.skipUndo) pushUndo();
+    const items = (entries || []).map((entry, index) => {
+        const member = nodes.find(node => node.id === entry?.nodeId);
+        const media = Array.isArray(entry?.media) ? entry.media : (member?.images || []);
+        return {
+            nodeId:entry?.nodeId || '',
+            resultIds:Array.isArray(entry?.resultIds) ? entry.resultIds.filter(Boolean) : resultIdsForMediaItems(media),
+            round:Number(entry?.round || entry?.roundIndex || index + 1) || index + 1,
+            label:entry?.label || ''
+        };
+    }).filter(entry => entry.nodeId && nodes.some(node => node.id === entry.nodeId));
+    if(!items.length) return null;
+    const node = {
+        id:uid('result-group'),
+        type:SMART_NODE_TYPES.resultGroup,
+        x,
+        y,
+        title:options.title || '结果组',
+        groupKind:options.groupKind || 'loop',
+        sourceNodeId:options.sourceNodeId || '',
+        items,
+        scale:MEDIA_GROUP_DEFAULT_SCALE,
+        created_at:Date.now()
+    };
+    nodes.push(node);
+    items.forEach(entry => addConnection(entry.nodeId, node.id, 'result'));
     if(options.select !== false) selectedId = node.id;
     render();
     scheduleSave();
@@ -6214,8 +9411,14 @@ function cloneSmartNode(node, dx=0, dy=0){
             ? 'loop'
             : node.type === 'smart-group'
             ? 'group'
+            : isSmartResultGroupNode(node)
+            ? 'result-group'
             : node.type === 'smart-minimax'
             ? 'minimax'
+            : isSmartExecutionNode(node)
+            ? 'run'
+            : isSmartMaterialNode(node)
+            ? 'material'
             : 'smart'
     );
     copy.x = (Number(node.x) || 0) + dx;
@@ -6236,6 +9439,48 @@ function copySelectedNodes(){
         connections:JSON.parse(JSON.stringify(copiedConnections))
     };
     toast(`已复制 ${copiedNodes.length} 个节点`);
+}
+function selectedClipboardMedia(){
+    return selectedNodeIds()
+        .map(id => nodes.find(node => node.id === id))
+        .filter(Boolean)
+        .flatMap(node => (node.images || []).filter(item => item?.url).map(item => ({node, item})));
+}
+async function clipboardBlobForMedia(item){
+    const response = await fetch(displayMediaUrl(item));
+    if(!response.ok) throw new Error('素材读取失败');
+    const blob = await response.blob();
+    if(mediaKindForItem(item || {}) !== 'image' || blob.type === 'image/png') return blob;
+    const bitmap = await createImageBitmap(blob);
+    const canvasEl = document.createElement('canvas');
+    canvasEl.width = bitmap.width;
+    canvasEl.height = bitmap.height;
+    canvasEl.getContext('2d').drawImage(bitmap, 0, 0);
+    bitmap.close?.();
+    return await new Promise(resolve => canvasEl.toBlob(resolve, 'image/png'));
+}
+async function copySelectedMediaToSystemClipboard(){
+    const entries = selectedClipboardMedia();
+    if(!entries.length){ toast('请先选择包含素材的节点'); return false; }
+    const item = entries[0].item;
+    const kind = mediaKindForItem(item || {});
+    try {
+        if(kind === 'text'){
+            const text = await fetch(displayMediaUrl(item)).then(response => response.ok ? response.text() : Promise.reject(new Error('文本读取失败')));
+            if(!await copyTextToClipboard(text)) throw new Error('浏览器未允许写入剪贴板');
+        } else if(kind === 'image' && navigator.clipboard?.write && window.ClipboardItem){
+            const blob = await clipboardBlobForMedia(item);
+            await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+        } else {
+            const absoluteUrl = new URL(displayMediaUrl(item), window.location.origin).href;
+            if(!await copyTextToClipboard(absoluteUrl)) throw new Error('浏览器未允许写入剪贴板');
+        }
+        toast(entries.length > 1 ? `已复制第 1 个素材，当前共选中 ${entries.length} 个素材` : '已复制素材到系统剪贴板');
+        return true;
+    } catch(error){
+        toast(error?.message || '复制素材失败');
+        return false;
+    }
 }
 function pasteNodes(){
     if(!canvas || !nodeClipboard?.nodes?.length || isEditableTarget(document.activeElement)) return;
@@ -6317,7 +9562,6 @@ function duplicateForAltDrag(node, preserveConnections=false){
     const ids = (isNodeSelected(node.id) ? selectedNodeIds() : [node.id]);
     const sourceNodes = ids.map(id => nodes.find(n => n.id === id)).filter(Boolean);
     if(!sourceNodes.length) return node;
-    pushUndo();
     const idMap = new Map();
     const copies = sourceNodes.map(n => {
         const copy = cloneSmartNode(n, 0, 0);
@@ -6351,12 +9595,11 @@ function duplicateForAltDrag(node, preserveConnections=false){
         canvas.connections = nextConnections;
     }
     nodes.push(...copies);
-    selectedId = '';
-    selectedIds = [];
+    selectedId = copies.length === 1 ? copies[0].id : '';
+    selectedIds = copies.length > 1 ? copies.map(copy => copy.id) : [];
     selectedImage = {nodeId:'', index:-1};
     const dragCopy = copies.find(c => c.id === idMap.get(node.id)) || copies[0];
     render();
-    scheduleSave();
     return dragCopy;
 }
 function shellPoint(event){
@@ -6384,11 +9627,12 @@ function renderConnections(){
         if(isMemberTarget){
             const key = `${conn.from}|${toScope}|${kind}`;
             let b = buckets.get(key);
-            if(!b){ b = {merged:true, from:conn.from, toId:toScope, kind, indices:[], targets:[]}; buckets.set(key, b); items.push(b); }
+            if(!b){ b = {merged:true, from:conn.from, toId:toScope, kind, indices:[], targets:[], connections:[]}; buckets.set(key, b); items.push(b); }
             b.indices.push(conn.index);
             b.targets.push(conn.to);
+            b.connections.push(conn);
         } else {
-            items.push({merged:false, from:conn.from, toId:conn.to, kind, indices:[conn.index], targets:[conn.to]});
+            items.push({merged:false, from:conn.from, toId:conn.to, kind, indices:[conn.index], targets:[conn.to], connections:[conn]});
         }
     });
     const paths = items.map(item => {
@@ -6398,6 +9642,7 @@ function renderConnections(){
         const fr = nodeRect(fromNode), tr = nodeRect(toNode);
         const kind = item.kind;
         const isHistory = kind === 'history';
+        const isResult = kind === 'result';
         const dataIndex = item.indices.join(',');
         const isInsertPreview = item.indices.some(i => loopInsertPreview?.index === i);
         const edgeKeys = item.targets.map(t => `${item.from}->${t}`);
@@ -6406,11 +9651,13 @@ function renderConnections(){
         if(states.includes('active')) cascadeState = 'active';
         else if(states.some(s => s !== 'done')) cascadeState = states.find(s => s !== 'done');
         else if(states.length) cascadeState = 'done';
-        const isCascade = !isHistory && (edgeKeys.some(k => cascadeKeys.has(k)) || Boolean(cascadeState) || isInsertPreview);
+        const isCascade = !isHistory && !isResult && (edgeKeys.some(k => cascadeKeys.has(k)) || Boolean(cascadeState) || isInsertPreview);
         const isPendingLine = !isCascade && item.targets.some(t => nodes.find(n => n.id === t)?.pending);
         const isSelectedLine = selectedConnIds.size > 0 && (selectedConnIds.has(item.from) || selectedConnIds.has(item.toId) || item.targets.some(t => selectedConnIds.has(t)));
-        const fx = isHistory ? fr.x + fr.width / 2 : fr.x + fr.width;
-        const fy = isHistory ? fr.y + fr.height : fr.y + fr.height / 2;
+        const sourceConnection = item.connections?.length === 1 ? item.connections[0] : null;
+        const sourcePoint = sourceConnection ? resultGroupConnectionSourcePoint(fromNode, sourceConnection) : null;
+        const fx = sourcePoint?.x ?? (isHistory ? fr.x + fr.width / 2 : fr.x + fr.width);
+        const fy = sourcePoint?.y ?? (isHistory ? fr.y + fr.height : fr.y + fr.height / 2);
         const tx = isHistory ? tr.x + tr.width / 2 : tr.x;
         const ty = isHistory ? tr.y : tr.y + tr.height / 2;
         const dx = Math.max(50, Math.abs(tx - fx) * 0.45);
@@ -6426,14 +9673,35 @@ function renderConnections(){
             isCascade && Boolean(cascadeState) && cascadeState !== 'done' ? 'conn-cascade-wait' : '',
             isCascade && cascadeState === 'active' ? 'conn-cascade-active' : '',
             isHistory ? 'conn-history' : '',
+            isResult ? 'conn-result' : '',
             isSelectedLine ? 'conn-selected' : ''
         ].filter(Boolean).join(' ');
-        const color = isCascade ? '#16a34a' : isHistory ? 'rgba(100,116,139,0.46)' : kind === 'input' ? 'rgba(100,116,139,0.62)' : 'rgba(148,163,184,0.62)';
+        const color = isCascade ? '#16a34a' : isHistory ? 'rgba(100,116,139,0.46)' : isResult ? 'rgba(14,116,144,0.62)' : kind === 'input' ? 'rgba(100,116,139,0.62)' : 'rgba(148,163,184,0.62)';
         const opacity = isPendingLine ? '.82' : '1';
-        const width = kind === 'input' ? '1.9' : '1.6';
+        const width = kind === 'input' ? '1.9' : isResult ? '1.7' : '1.6';
         return `<path class="${cls} conn-line" data-conn-index="${dataIndex}" d="${curve}" stroke="${color}" stroke-width="${width}" fill="none" opacity="${opacity}"></path><path class="conn-hit" data-conn-index="${dataIndex}" d="${curve}" stroke="transparent" stroke-width="14" fill="none"></path><circle class="conn-end" data-conn-index="${dataIndex}" cx="${tx}" cy="${ty}" r="3.5" fill="${color}" opacity=".66"></circle><g class="conn-cut" data-conn-index="${dataIndex}" transform="translate(${mx} ${my})"><circle r="8" fill="var(--card)" stroke="${color}" stroke-width="1.4"></circle><path d="M-3 -3 L3 3 M3 -3 L-3 3" stroke="${color}" stroke-width="1.5" stroke-linecap="round"></path></g>`;
     }).join('');
     return `<svg class="connection-layer ${reduceMotion ? 'conn-reduce-motion' : ''}" width="6000" height="4000" viewBox="0 0 6000 4000" xmlns="http://www.w3.org/2000/svg">${paths}</svg>`;
+}
+function resultGroupConnectionSourcePoint(node, connection){
+    if(!isSmartResultGroupNode(node)) return null;
+    const resultId = connectionSourceResultId(connection);
+    if(!resultId) return null;
+    const refs = resultGroupMediaItems(node);
+    const index = refs.findIndex(item => String(item?.resultId || '').trim() === resultId);
+    if(index < 0) return null;
+    const rect = nodeRect(node);
+    const layout = imageLayout(node.images || [], nodeScale(node), node);
+    const cols = Math.max(1, Number(layout.cols || 1));
+    const thumb = Math.max(24, Number(layout.thumb || 96));
+    const gap = 8;
+    const gridWidth = cols * thumb + Math.max(0, cols - 1) * gap;
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    return {
+        x:rect.x + (rect.width - gridWidth) / 2 + col * (thumb + gap) + thumb,
+        y:rect.y + 16 + row * (thumb + gap) + thumb / 2
+    };
 }
 function refreshConnectionLayer(){
     connectionLayerRaf = 0;
@@ -6541,7 +9809,7 @@ function updateNodeElementDuringResize(node){
 }
 function syncSmartGroupMemberElements(group){
     if(!isSmartGroupNode(group)) return;
-    smartGroupCompactMembers(group).forEach(member => {
+    smartGroupMembers(group).forEach(member => {
         const el = world.querySelector(`.image-node[data-id="${CSS.escape(member.id)}"]`);
         if(el){
             el.style.left = `${member.x || 0}px`;
@@ -6584,10 +9852,10 @@ function mediaKindForFile(file){
     return 'image';
 }
 function mediaKindForItem(img){
-    if(isFileMediaItem(img)) return 'file';
     if(isTextMediaItem(img)) return 'text';
     if(isAudioMediaItem(img)) return 'audio';
     if(isVideoMediaItem(img)) return 'video';
+    if(isFileMediaItem(img)) return 'file';
     return 'image';
 }
 function localDisplayUrlForMediaItem(img){
@@ -6630,6 +9898,8 @@ function resultMediaUrls(result){
                 const url = value.url || value.path || value.src || value.uri;
                 if(url){
                     const item = {url, kind:value.kind || value.type || value.mediaKind || '', name:value.name || value.filename || ''};
+                    const resultId = value.result_id || value.resultId || value.id || '';
+                    if(resultId) item.result_id = resultId;
                     ['natural_w','natural_h','width','height','w','h','layout_w','layout_h'].forEach(key => {
                         const n = Number(value[key]);
                         if(Number.isFinite(n) && n > 0) item[key] = n;
@@ -6686,6 +9956,58 @@ function thumbMediaHtml(img){
     if(isAudioMediaItem(img)) return `<div class="media-thumb audio-thumb" data-media-url="${escapeAttr(img.url || '')}" data-media-kind="audio"><i data-lucide="file-audio"></i><span>${escapeHtml(img.name || 'Audio')}</span></div>`;
     if(isVideoMediaItem(img)) return `<div class="media-thumb video-thumb">${isInlineVideoActive(img) ? smartVideoPlayerHtml(img.url || '') : `${smartVideoPreviewHtml(img, 512, 'alt=""')}<button class="smart-video-play thumb-video-play" type="button" title="播放"><i data-lucide="play"></i></button>`}</div>`;
     return smartPreviewImgHtml(img, 512, 'draggable="false"');
+}
+function safeMarkdownInlineHtml(text){
+    return escapeHtml(text)
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+        .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+}
+function safeMarkdownPreviewHtml(text){
+    const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+    let inCode = false;
+    const html = [];
+    lines.forEach(rawLine => {
+        const line = String(rawLine || '');
+        if(/^\s*```/.test(line)){
+            inCode = !inCode;
+            html.push(inCode ? '<pre><code>' : '</code></pre>');
+            return;
+        }
+        if(inCode){
+            html.push(`${escapeHtml(line)}\n`);
+            return;
+        }
+        if(!line.trim()){
+            html.push('<div class="md-gap"></div>');
+            return;
+        }
+        const heading = line.match(/^\s*(#{1,3})\s+(.+)$/);
+        if(heading){
+            const level = heading[1].length;
+            html.push(`<h${level}>${safeMarkdownInlineHtml(heading[2])}</h${level}>`);
+            return;
+        }
+        const quote = line.match(/^\s*>\s?(.*)$/);
+        if(quote){
+            html.push(`<blockquote>${safeMarkdownInlineHtml(quote[1])}</blockquote>`);
+            return;
+        }
+        const unordered = line.match(/^\s*[-*+]\s+(.+)$/);
+        if(unordered){
+            html.push(`<div class="md-list"><span>•</span><p>${safeMarkdownInlineHtml(unordered[1])}</p></div>`);
+            return;
+        }
+        const ordered = line.match(/^\s*(\d+)\.\s+(.+)$/);
+        if(ordered){
+            html.push(`<div class="md-list"><span>${escapeHtml(ordered[1])}.</span><p>${safeMarkdownInlineHtml(ordered[2])}</p></div>`);
+            return;
+        }
+        html.push(`<p>${safeMarkdownInlineHtml(line)}</p>`);
+    });
+    if(inCode) html.push('</code></pre>');
+    return html.join('');
 }
 function imageResolutionLabel(img){
     const w = Number(img?.natural_w || img?.width || img?.w || 0);
@@ -6753,7 +10075,11 @@ function updateImageResolutionBadgeElement(itemEl, img){
     badge.textContent = label;
 }
 function singleMediaHtml(img, w, h){
-    if(isFileMediaItem(img) || isTextMediaItem(img)) return `<div class="node-img media-card media-file-card" style="width:${w}px;height:${h}px"><div class="media-card-icon"><i data-lucide="${isTextMediaItem(img) ? 'file-text' : 'file'}"></i></div><div class="media-card-title">${escapeHtml(img.name || (isTextMediaItem(img) ? 'Text' : 'File'))}</div><div class="media-card-sub">${isTextMediaItem(img) ? 'TEXT' : 'FILE'}</div></div>`;
+    if(isTextMediaItem(img)){
+        const content = SMART_NODE_CONTRACT.textContentForMediaItem(img);
+        return `<div class="node-img media-card media-text-card" style="width:${w}px;height:${h}px"><div class="media-text-preview" data-text-preview="1">${content ? safeMarkdownPreviewHtml(content) : `<p class="media-text-empty">右键编辑文本</p>`}</div></div>`;
+    }
+    if(isFileMediaItem(img)) return `<div class="node-img media-card media-file-card" style="width:${w}px;height:${h}px"><div class="media-card-icon"><i data-lucide="file"></i></div><div class="media-card-title">${escapeHtml(img.name || 'File')}</div><div class="media-card-sub">FILE</div></div>`;
     if(isAudioMediaItem(img)) return `<div class="node-img media-card media-audio-card" style="width:${w}px;height:${h}px"><div class="media-card-icon"><i data-lucide="file-audio"></i></div><div class="media-card-title">${escapeHtml(img.name || 'Audio')}</div><div class="media-card-sub">AUDIO</div><audio src="${escapeAttr(img.url || '')}" data-url="${escapeAttr(img.url || '')}" controls preload="metadata"></audio></div>`;
     if(isVideoMediaItem(img)) return `<div class="node-img media-card media-video-card" style="width:${w}px;height:${h}px">${isInlineVideoActive(img) ? smartVideoPlayerHtml(img.url || '') : `${smartVideoPreviewHtml(img, 768, 'alt=""')}<button class="smart-video-play" type="button" title="播放"><i data-lucide="play"></i></button>`}</div>`;
     return smartPreviewImgHtml(img, 768, `class="node-img" draggable="false" style="width:${w}px;height:${h}px"`);
@@ -6858,16 +10184,23 @@ function restoreMediaPlaybackStates(states){
 function smartRunTaskLabel(run){
     const s = run?.settings || {};
     if(s.engine === 'runninghub') return s.rhTaskLabel || s.rhWorkflowTitle || s.rhAppTitle || s.rhWorkflowId || s.rhAppId || 'RunningHub';
-    if(run?.kind === 'video') return s.videoModel || 'Video';
+    if(run?.kind === 'video') return capabilityFamilyDisplayName(s.videoProvider, s.videoFamilyId, s.videoModel, 'video_generation') || 'Video';
     if(s.engine === 'comfy'){
         if(s.comfyMode === 'custom') return s.comfyWorkflow || 'ComfyUI';
         const labels = {text:tr('canvas.comfyModeText') || '文生图', enhance:tr('canvas.comfyModeEnhance') || '图片增强', edit:tr('canvas.comfyModeEdit') || '图片编辑'};
         return labels[s.comfyMode || 'text'] || 'ComfyUI';
     }
     if(s.engine === 'modelscope'){
-        return s.msgenModel === 'custom' ? (s.msCustomModel || 'Modelscope') : (MS_GEN_MODELS[s.msgenModel]?.label || s.msgenModel || 'Modelscope');
+        return s.msCustomModel || 'Modelscope';
     }
-    return s.model || 'API Image';
+    return capabilityFamilyDisplayName(s.provider_id, s.imageFamilyId, s.model, 'image_generation') || 'API Image';
+}
+function capabilityFamilyDisplayName(providerId, familyId, modelId, nodeType){
+    const provider = (modelCapabilityCatalog.providers || []).find(item => item.id === providerId) || null;
+    const family = (provider?.families || []).find(item => item.node_type === nodeType && item.family_id === familyId)
+        || window.SmartModelCapabilities?.familyForModel(provider, modelId, nodeType)
+        || null;
+    return family?.display_name || modelId || '';
 }
 function outputUrlLooksVideo(url){
     return /\.(mp4|webm|mov|m4v|avi|mkv)(\?|$)/.test(smartOriginalMediaUrl(url).toLowerCase());
@@ -6882,6 +10215,42 @@ function displayMediaUrl(itemOrUrl, name=''){
     const url = smartOriginalMediaUrl(itemOrUrl);
     if(/^https?:\/\//i.test(String(url || ''))) return proxiedMediaUrl(itemOrUrl, name);
     return url;
+}
+async function hydrateTextResultMediaContent(targetNodes=nodes){
+    const missing = [];
+    const seen = new Set();
+    (targetNodes || []).forEach(node => {
+        (node?.images || []).forEach(item => {
+            if(!isTextMediaItem(item) || SMART_NODE_CONTRACT.textContentForMediaItem(item)) return;
+            const url = String(displayMediaUrl(item) || '').trim();
+            if(!url || (!/^\/api\/results\//i.test(url) && !item.resultId && !item.result_id)) return;
+            if(seen.has(url)) return;
+            seen.add(url);
+            missing.push({item, url});
+        });
+    });
+    if(!missing.length) return false;
+    const loaded = await Promise.all(missing.map(async entry => {
+        let request = textResultContentCache.get(entry.url);
+        if(!request){
+            request = fetch(entry.url, {cache:'no-store'}).then(async response => {
+                if(!response.ok) throw new Error('文本结果读取失败');
+                return String(await response.text()).trim();
+            });
+            textResultContentCache.set(entry.url, request);
+        }
+        try {
+            const content = await request;
+            if(!content) return false;
+            entry.item.text = content;
+            entry.item.content = content;
+            return true;
+        } catch(error) {
+            textResultContentCache.delete(entry.url);
+            return false;
+        }
+    }));
+    return loaded.some(Boolean);
 }
 function bindImageProxyFallback(imgEl, itemOrUrl){
     if(!imgEl || imgEl.dataset.proxyFallbackBound === '1') return;
@@ -7009,6 +10378,8 @@ function smartRunPlatformLabel(run){
     if(s.engine === 'runninghub') return 'RunningHub';
     if(s.engine === 'modelscope') return 'Modelscope';
     if(run?.kind === 'video') return videoProviderById(s.videoProvider || '')?.name || s.videoProvider || 'Video';
+    if(run?.kind === 'audio') return (apiProviders || []).find(provider => provider.id === s.audioProvider)?.name || s.audioProvider || 'Audio';
+    if(run?.kind === 'music') return (apiProviders || []).find(provider => provider.id === s.musicProvider)?.name || s.musicProvider || 'Music';
     return apiProviderById(s.provider_id || '')?.name || s.provider_id || 'API';
 }
 function smartRunRequestMeta(run){
@@ -7024,17 +10395,52 @@ function smartRunRequestMeta(run){
         megapixels:s.megapixels || '',
         refs:s.refCount || 0
     };
-    if(s.engine === 'modelscope') return {backend:'Modelscope', model:s.msgenModel || '', custom_model:s.msCustomModel || ''};
-    if(run?.kind === 'video') return {provider_id:s.videoProvider || '', model:s.videoModel || '', duration:s.videoDuration || '', aspect_ratio:s.videoAspect || '', resolution:s.videoResolution || ''};
-    return {provider_id:s.provider_id || '', model:s.model || '', size:run?.size || '', quality:s.quality || '', n:s.count || 1};
+    if(s.engine === 'modelscope') return {backend:'Modelscope', model:s.msCustomModel || ''};
+    if(run?.kind === 'video') return {provider_id:s.videoProvider || '', family_id:s.videoFamilyId || '', model:s.videoModel || '', duration:s.videoDuration || '', aspect_ratio:s.videoAspect || '', resolution:s.videoResolution || ''};
+    if(run?.kind === 'audio') return {provider_id:s.audioProvider || '', family_id:s.audioFamilyId || '', model:s.audioModel || '', format:s.audioFormat || '', sample_rate:s.audioSampleRate || '', speaker:s.audioSpeaker || ''};
+    if(run?.kind === 'music') return {provider_id:s.musicProvider || '', family_id:s.musicFamilyId || '', model:s.musicModel || ''};
+    return {provider_id:s.provider_id || '', family_id:s.imageFamilyId || '', model:s.model || '', size:run?.size || '', quality:s.quality || '', n:s.count || 1};
 }
 function smartRunSnapshot(node, prompt, refs=[], kind='image'){
     const settingsSnapshot = cloneSmartSettings(settings);
+    const nodeType = kind === 'video' ? 'video_generation' : kind === 'audio' ? 'audio_generation' : kind === 'music' ? 'music_generation' : 'image_generation';
+    const providerId = kind === 'video'
+        ? (settingsSnapshot.videoProvider || '')
+        : kind === 'audio'
+        ? (settingsSnapshot.audioProvider || '')
+        : kind === 'music'
+        ? (settingsSnapshot.musicProvider || '')
+        : (settingsSnapshot.provider_id || '');
+    const modelId = kind === 'video'
+        ? (settingsSnapshot.videoModel || '')
+        : kind === 'audio'
+        ? (settingsSnapshot.audioModel || '')
+        : kind === 'music'
+        ? (settingsSnapshot.musicModel || '')
+        : (settingsSnapshot.model || '');
+    const inputCounts = {
+        text:prompt ? 1 : 0,
+        image:imageRefsOnly(refs).length,
+        video:videoRefsOnly(refs).length,
+        audio:audioRefsOnly(refs).length
+    };
+    const profile = capabilityProfileFor(providerId, modelId, nodeType);
+    const referenceAudio = audioRefsOnly(refs).find(ref => ref?.url)?.url || '';
+    const parameterValues = kind === 'video'
+        ? capabilityVideoParameterValues(profile, settingsSnapshot)
+        : kind === 'audio'
+            ? capabilityAudioParameterValues(profile, settingsSnapshot, referenceAudio)
+            : kind === 'music'
+                ? capabilityParameterSubmissionValues(profile, settingsSnapshot)
+                : capabilityImageParameterValues(profile, settingsSnapshot);
     return {
         nodeId:node?.id || '',
         nodeType:node?.type || 'smart-image',
         kind,
         settings:settingsSnapshot,
+        capability:window.SmartModelCapabilities?.capabilitySnapshot
+            ? window.SmartModelCapabilities.capabilitySnapshot(profile, inputCounts, parameterValues)
+            : null,
         prompt:prompt || '',
         refs:(refs || []).map(ref => ({url:ref.url || '', name:ref.name || 'image', kind:ref.kind || ''})).filter(ref => ref.url),
         size: kind === 'image' && isApiLikeEngine(settingsSnapshot.engine) ? sizeForRun(settingsSnapshot) : ''
@@ -7072,6 +10478,37 @@ function addSmartGenerationLog({run, outputs=[], runMs=0, error=''}) {
     };
     canvas.logs = [entry, ...canvas.logs].slice(0, 500);
     if(!error && recoverStuckLoopOutputsFromLogs()) render();
+    scheduleSave();
+}
+function addSmartCanvasNoticeLog(message, explicitNode=null){
+    if(!canvas || !message) return;
+    canvas.logs = canvas.logs || [];
+    const node = explicitNode || activeComposerNode?.() || selectedNode?.() || null;
+    const nodeId = node?.id || '';
+    const duplicate = canvas.logs.some(log =>
+        log?.status === 'failed'
+        && String(log?.error || '') === message
+        && String(log?.nodeId || '') === nodeId
+        && Date.now() - Number(log?.createdAt || 0) < 5000
+    );
+    if(duplicate) return;
+    const meta = node && isSmartExecutionNode(node) ? smartExecutionNodeMeta(node) : null;
+    const entry = {
+        id:uid('log'),
+        createdAt:Date.now(),
+        status:'failed',
+        platform:meta?.provider || capabilityUiText('画布','Canvas'),
+        nodeId,
+        nodeType:node?.type || 'canvas-notice',
+        model:meta?.model || '',
+        request:{source:'ui', kind:'validation'},
+        prompt:String(node?.promptDraftText || ''),
+        outputs:[],
+        refs:[],
+        runMs:0,
+        error:message
+    };
+    canvas.logs = [entry, ...canvas.logs].slice(0, 500);
     scheduleSave();
 }
 const SMART_LOG_PREVIEW_NODE_ID = '__smart_log_preview__';
@@ -7185,7 +10622,7 @@ function renderSmartCanvasLog(){
                     <span class="log-chip">${escapeHtml(formatRunDuration(log.runMs || 0))}</span>
                 </div>
                 <div class="log-subline">${subParts.map(part => `<span title="${escapeAttr(part)}">${escapeHtml(part)}</span>`).join('')}</div>
-                ${log.error ? `<div class="log-error" title="${escapeAttr(log.error)}" data-error="${escapeAttr(log.error)}">${escapeHtml(log.error)}</div>` : ''}
+                ${log.error ? `<div class="log-error" title="点击复制错误信息" data-error="${escapeAttr(log.error)}" data-copy-error="1"><span class="log-error-copy-hint">点击复制错误信息，可提交 GitHub Issue 或发送给管理员排查</span>${escapeHtml(log.error)}</div>` : ''}
                 <div class="log-prompt" title="${escapeAttr(log.prompt || tr('canvas.noPromptMeta'))}" data-prompt="${escapeAttr(log.prompt || '')}">${escapeHtml(log.prompt || tr('canvas.noPromptMeta'))}</div>
             </div>
             <div class="log-thumbs">${thumbs}</div>
@@ -7220,18 +10657,291 @@ function renderSmartCanvasLog(){
 }
 function openSmartCanvasLog(){
     if(!canvas) return;
+    closeSmartTopPanels('logs');
     renderSmartCanvasLog();
     smartLogModal.classList.add('open');
+    smartLogToggle?.classList.add('active');
 }
 function closeSmartCanvasLog(){
     smartLogModal.classList.remove('open');
+    smartLogToggle?.classList.remove('active');
+}
+function toggleSmartCanvasLog(){
+    if(smartLogModal?.classList.contains('open')) closeSmartCanvasLog();
+    else openSmartCanvasLog();
 }
 function openSmartCanvasShortcuts(){
+    closeSmartTopPanels('shortcuts');
     smartShortcutModal?.classList.add('open');
+    smartShortcutToggle?.classList.add('active');
     refreshIcons();
 }
 function closeSmartCanvasShortcuts(){
     smartShortcutModal?.classList.remove('open');
+    smartShortcutToggle?.classList.remove('active');
+}
+function toggleSmartCanvasShortcuts(){
+    if(smartShortcutModal?.classList.contains('open')) closeSmartCanvasShortcuts();
+    else openSmartCanvasShortcuts();
+}
+const SMART_PRICE_NODE_TYPES = [
+    {key:'text_generation', configKey:'chat_models', label:['文本','Text']},
+    {key:'image_generation', configKey:'image_models', label:['图片','Image']},
+    {key:'video_generation', configKey:'video_models', label:['视频','Video']},
+    {key:'audio_generation', configKey:'audio_models', label:['音频','Audio']},
+    {key:'music_generation', configKey:'audio_models', label:['音乐','Music']}
+];
+function priceUiText(zh, en){ return window.StudioI18n?.lang?.() === 'en' ? en : zh; }
+function priceProviderName(provider){
+    return window.StudioI18n?.lang?.() === 'en' ? (provider?.name_en || provider?.name || provider?.id || '') : (provider?.name || provider?.name_en || provider?.id || '');
+}
+function runningHubPriceLookupRegion(provider){
+    const selected = provider?.rh_region === 'global' ? 'global' : 'cn';
+    const regionState = provider?.rh_regions?.[selected] || {};
+    const activeHasKey = Boolean(regionState.has_key || regionState.has_wallet_key || provider?.has_key || provider?.has_wallet_key);
+    return activeHasKey ? selected : 'cn';
+}
+function priceLookupUrl(provider){
+    if(provider?.id === 'ai-money') return 'https://api.laohuaimoney.com/pricing';
+    if(provider?.id !== 'runninghub') return '';
+    return runningHubPriceLookupRegion(provider) === 'global'
+        ? 'https://www.runninghub.ai/call-api/search-api/standard-model?search=&inviteCode=rh-v1001'
+        : 'https://www.runninghub.cn/call-api/search-api/standard-model?search=&inviteCode=rh-v1001';
+}
+function priceLookupButton(provider, modelId, record, nodeType){
+    if(!priceLookupUrl(provider)) return '';
+    const label = priceUiText('查询价格','Check price');
+    const current = formatPriceRecord(record, nodeType);
+    const hint = priceUiText(`当前价格：${current}。复制模型名称“${modelId}”并打开官方价格页`, `Current price: ${current}. Copy “${modelId}” and open the official pricing page`);
+    return `<button class="price-lookup-btn" type="button" data-price-lookup data-provider-id="${escapeAttr(provider.id)}" data-model-id="${escapeAttr(modelId)}" title="${escapeAttr(hint)}" aria-label="${escapeAttr(hint)}"><i data-lucide="external-link"></i><span>${escapeHtml(label)}</span></button>`;
+}
+async function openPriceLookup(providerId, modelId){
+    const provider = (apiProviders || []).find(item => item.id === providerId);
+    const url = priceLookupUrl(provider);
+    if(!url || !modelId) return;
+    window.open(url, '_blank', 'noopener,noreferrer');
+    const copied = await copyTextToClipboard(modelId);
+    const providerLabel = priceProviderName(provider);
+    const regionLabel = providerId === 'runninghub'
+        ? priceUiText(runningHubPriceLookupRegion(provider) === 'global' ? '国际站' : '国内站', runningHubPriceLookupRegion(provider) === 'global' ? 'global site' : 'China site')
+        : '';
+    if(copied){
+        toast(priceUiText(
+            `已复制模型名称“${modelId}”。已打开${providerLabel}${regionLabel ? ` ${regionLabel}` : ''}价格页，请粘贴到搜索框，查询后点击“详情”查看资费。`,
+            `Copied “${modelId}”. The ${providerLabel}${regionLabel ? ` ${regionLabel}` : ''} pricing page is open. Paste it into search, then open Details to view pricing.`
+        ), {duration:6200});
+        return;
+    }
+    toast(priceUiText(
+        `已打开${providerLabel}${regionLabel ? ` ${regionLabel}` : ''}价格页，但浏览器未允许自动复制。请手动复制模型名称“${modelId}”后搜索。`,
+        `The ${providerLabel}${regionLabel ? ` ${regionLabel}` : ''} pricing page is open, but clipboard access was denied. Copy “${modelId}” manually and search for it.`
+    ), {tone:'error', duration:6200});
+}
+function priceProfileFor(providerId, modelId, nodeType=''){
+    const provider = (modelCapabilityCatalog.providers || []).find(item => item.id === providerId || item.capability_provider_id === providerId);
+    if(!provider) return null;
+    const models = provider.models || [];
+    return models.find(item => item.model_id === modelId && (!nodeType || item.node_type === nodeType)) || null;
+}
+function priceNodeTypeForModel(providerId, modelId, requestedType){
+    const direct = priceProfileFor(providerId, modelId, requestedType);
+    if(direct) return requestedType;
+    if(requestedType !== 'music_generation' && priceProfileFor(providerId, modelId, 'music_generation')) return 'music_generation';
+    if(requestedType === 'music_generation' && priceProfileFor(providerId, modelId, 'audio_generation')) return 'audio_generation';
+    const normalized = String(modelId || '').toLowerCase();
+    if(requestedType === 'audio_generation' && /(suno|mureka|music|song|melody|lyrics)/.test(normalized)) return 'music_generation';
+    return requestedType;
+}
+function priceUnitForNodeType(nodeType){
+    return nodeType === 'text_generation' ? 'input_million_tokens' : nodeType === 'image_generation' ? 'image' : nodeType === 'video_generation' ? 'video_second' : nodeType === 'music_generation' ? 'music_run' : 'audio_second';
+}
+function priceUnitLabel(unit){
+    const item = modelPricingCatalog.unit_definitions?.[unit];
+    return item ? priceUiText(item.zh, item.en) : unit;
+}
+function priceRecordFor(providerId, modelId, profile, nodeType){
+    const entries = modelPricingCatalog.entries || {};
+    const keys = [
+        `${providerId}:${modelId}`,
+        `${providerId}::${modelId}`,
+        `family:${profile?.family_id || ''}`,
+        `model:${modelId}`
+    ].filter(Boolean);
+    let record = keys.map(key => entries[key]).find(Boolean) || profile?.pricing || null;
+    if(!record){
+        record = (modelPricingCatalog.rules || []).find(rule => {
+            if(rule?.provider_id && rule.provider_id !== providerId) return false;
+            if(rule?.node_type && rule.node_type !== nodeType) return false;
+            if(!rule?.model_id_pattern) return false;
+            try{ return new RegExp(rule.model_id_pattern, 'i').test(String(modelId || '')); }
+            catch(_error){ return false; }
+        })?.record || null;
+    }
+    if(!record) record = modelPricingCatalog.provider_defaults?.[providerId] || null;
+    const unit = record?.unit || priceUnitForNodeType(nodeType);
+    return {status:record?.status || modelPricingCatalog.default_status || 'pending', unit, ...record};
+}
+function priceComparableName(modelId, profile){
+    const raw = String(profile?.family_name || profile?.display_name || modelId || '').trim();
+    const lower = `${raw} ${modelId}`.toLowerCase();
+    const aliases = [
+        [/seedance\s*2(?:\.0)?/i, 'Seedance 2.0'],
+        [/sora[-\s]?2/i, 'Sora 2'],
+        [/gpt[-\s]?image[-\s]?2/i, 'GPT Image 2'],
+        [/veo\s*3(?:\.1)?/i, 'Veo 3.1'],
+        [/nano[-\s]?banana\s*pro/i, 'Nano Banana Pro'],
+        [/nano[-\s]?banana(?!\s*\d)/i, 'Nano Banana']
+    ];
+    const alias = aliases.find(([pattern]) => pattern.test(lower));
+    if(alias) return alias[1];
+    return raw || modelId;
+}
+function priceModelKey(modelId, profile, nodeType){
+    return `${nodeType}:${priceComparableName(modelId, profile).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+}
+function configuredPriceRows(){
+    const rows = new Map();
+    (apiProviders || []).filter(provider => provider && provider.enabled !== false).forEach(provider => {
+        SMART_PRICE_NODE_TYPES.forEach(type => {
+            const models = Array.isArray(provider[type.configKey]) ? provider[type.configKey] : [];
+            models.filter(Boolean).forEach(modelId => {
+                const nodeType = priceNodeTypeForModel(provider.id, modelId, type.key);
+                const profile = priceProfileFor(provider.id, modelId, nodeType) || priceProfileFor(provider.id, modelId, type.key);
+                const label = priceComparableName(modelId, profile);
+                const key = priceModelKey(modelId, profile, nodeType);
+                let row = rows.get(key);
+                if(!row){
+                    row = {key, nodeType, label, variants:[], providers:{}};
+                    rows.set(key, row);
+                }
+                const record = priceRecordFor(provider.id, modelId, profile, nodeType);
+                if(row.variants.some(item => item.providerId === provider.id && item.modelId === modelId && item.profile?.node_type === profile?.node_type)) return;
+                row.variants.push({providerId:provider.id, modelId, profile, record});
+                row.providers[provider.id] ||= [];
+                if(!row.providers[provider.id].some(item => item.modelId === modelId && item.profile?.node_type === profile?.node_type)) row.providers[provider.id].push({modelId, profile, record});
+            });
+        });
+    });
+    return [...rows.values()].sort((a,b) => a.nodeType.localeCompare(b.nodeType) || a.label.localeCompare(b.label));
+}
+function formatPriceRecord(record, nodeType){
+    const localizedLabel = priceUiText(record?.display_zh || record?.label_zh, record?.display_en || record?.label_en);
+    if(localizedLabel) return localizedLabel;
+    const currency = record?.currency || modelPricingCatalog.currency || 'CNY';
+    const symbol = currency === 'CNY' ? '¥' : currency === 'USD' ? '$' : `${currency} `;
+    if(record?.status === 'confirmed'){
+        if(nodeType === 'text_generation' && (record.input_amount != null || record.output_amount != null)){
+            const input = record.input_amount == null ? '—' : `${symbol}${record.input_amount}`;
+            const output = record.output_amount == null ? '—' : `${symbol}${record.output_amount}`;
+            return `${input} / ${output}`;
+        }
+        if(Number.isFinite(Number(record.amount))) return `${symbol}${Number(record.amount).toFixed(Number(record.amount) < 1 ? 4 : 2)}`;
+    }
+    const statusFallbacks = {
+        formula: ['按公式计费','Formula based'],
+        tiered: ['阶梯计费','Tiered pricing'],
+        estimate: ['实测参考价','Observed estimate'],
+        dynamic: ['按实际消费结算','Billed by actual usage'],
+        account: ['按账号套餐或额度结算','Uses account plan or quota'],
+        unpublished: ['官方暂未公开价格','No official public price'],
+        free: ['免费','Free']
+    };
+    const fallback = statusFallbacks[record?.status];
+    if(fallback) return priceUiText(fallback[0], fallback[1]);
+    return priceUiText(`待同步 · ${priceUnitLabel(record?.unit || priceUnitForNodeType(nodeType))}`, `Pending · ${priceUnitLabel(record?.unit || priceUnitForNodeType(nodeType))}`);
+}
+function renderPriceComparisonTable(){
+    if(!smartPriceComparisonBody) return;
+    const query = String(smartPriceComparisonSearch?.value || '').trim().toLowerCase();
+    const kind = smartPriceComparisonKind?.value || 'all';
+    const providers = (apiProviders || []).filter(provider => provider && provider.enabled !== false && SMART_PRICE_NODE_TYPES.some(type => (provider[type.configKey] || []).length));
+    const rows = configuredPriceRows().filter(row => {
+        if(kind !== 'all' && row.nodeType !== kind) return false;
+        if(!query) return true;
+        return `${row.label} ${row.nodeType} ${row.variants.map(item => `${priceProviderName(providers.find(p => p.id === item.providerId))} ${item.modelId}`).join(' ')}`.toLowerCase().includes(query);
+    });
+    const priceRecords = rows.flatMap(row => row.variants.map(item => item.record));
+    const statusCount = status => priceRecords.filter(record => record.status === status).length;
+    const fixedCount = statusCount('confirmed') + statusCount('free') + statusCount('tiered');
+    const variableCount = statusCount('formula') + statusCount('estimate') + statusCount('dynamic') + statusCount('account');
+    const unpublishedCount = statusCount('unpublished') + statusCount('pending');
+    if(smartPriceComparisonNote){
+        smartPriceComparisonNote.classList.toggle('pending', unpublishedCount > 0);
+        smartPriceComparisonNote.textContent = priceUiText(
+            `已核实固定或阶梯价格 ${fixedCount} 项，公式、浮动或账号计费 ${variableCount} 项，官方未公开或待同步 ${unpublishedCount} 项。AI MONEY 和 RunningHub 可点击“查询价格”：模型名称会自动复制，打开官方页面后粘贴搜索，再点击“详情”查看资费。最终以平台实际扣费为准。`,
+            `${fixedCount} fixed or tiered prices verified, ${variableCount} formula, variable, or account-billed items, and ${unpublishedCount} unpublished or pending items. For AI MONEY and RunningHub, Check price copies the model name and opens the official page; paste it into search, then open Details. Final billing follows the provider.`
+        );
+    }
+    if(smartPriceComparisonSub) smartPriceComparisonSub.textContent = priceUiText(`${rows.length} 个模型分组 · ${providers.length} 个平台`, `${rows.length} model groups · ${providers.length} providers`);
+    if(!rows.length){ smartPriceComparisonBody.innerHTML = `<div class="price-comparison-empty">${escapeHtml(priceUiText('没有匹配的已启用模型','No enabled models match the filter'))}</div>`; return; }
+    const header = `<thead><tr><th>${escapeHtml(priceUiText('模型 / 类型','Model / type'))}</th>${providers.map(provider => `<th>${escapeHtml(priceProviderName(provider))}</th>`).join('')}</tr></thead>`;
+    const body = rows.map(row => `<tr id="${escapeAttr(`smart-price-row-${row.key}`)}" data-price-row-key="${escapeAttr(row.key)}" data-price-model-ids="${escapeAttr(row.variants.map(item => item.modelId).join('|'))}" class="${row.key === smartPriceHighlightKey || row.variants.some(item => item.modelId === smartPriceHighlightModelId) ? 'highlight' : ''}"><td><div class="price-model-cell"><span class="price-model-name">${escapeHtml(row.label)}</span><span class="price-model-meta">${escapeHtml(priceUiText(row.nodeType.replace('_generation','') === 'text' ? '文本' : row.nodeType.replace('_generation',''), row.nodeType))}</span></div></td>${providers.map(provider => {
+        const variants = row.providers[provider.id] || [];
+        const providerLabel = priceProviderName(provider);
+        if(!variants.length) return `<td class="price-empty" data-provider-label="${escapeAttr(providerLabel)}"><span class="price-source">—</span></td>`;
+        return `<td data-provider-label="${escapeAttr(providerLabel)}"><div class="price-provider-values">${variants.map(item => {
+            const detail = priceUiText(item.record?.details_zh || item.record?.source_label_zh || '', item.record?.details_en || item.record?.source_label_en || '');
+            const lookup = priceLookupButton(provider, item.modelId, item.record, row.nodeType);
+            const price = `<span class="price-value ${escapeAttr(item.record.status || 'pending')}">${escapeHtml(formatPriceRecord(item.record, row.nodeType))}</span>`;
+            const highlighted = provider.id === smartPriceHighlightProviderId && item.modelId === smartPriceHighlightModelId;
+            return `<div class="price-cell ${highlighted ? 'highlight' : ''}" data-price-provider-id="${escapeAttr(provider.id)}" data-price-model-id="${escapeAttr(item.modelId)}" title="${escapeAttr([item.modelId, detail].filter(Boolean).join(' · '))}">${price}${lookup}<span class="price-source price-model-id">${escapeHtml(item.modelId)}</span></div>`;
+        }).join('')}</div></td>`;
+    }).join('')}</tr>`).join('');
+    smartPriceComparisonBody.innerHTML = `<table class="price-comparison-table">${header}<tbody>${body}</tbody></table>`;
+}
+function populatePriceComparisonFilters(){
+    if(!smartPriceComparisonKind) return;
+    const current = smartPriceComparisonKind.value || 'all';
+    smartPriceComparisonKind.innerHTML = `<option value="all">${escapeHtml(priceUiText('全部类型','All types'))}</option>${SMART_PRICE_NODE_TYPES.map(type => `<option value="${type.key}">${escapeHtml(priceUiText(type.label[0], type.label[1]))}</option>`).join('')}`;
+    smartPriceComparisonKind.value = SMART_PRICE_NODE_TYPES.some(type => type.key === current) ? current : 'all';
+}
+function openSmartPriceComparison(target={}){
+    closeSmartTopPanels('prices');
+    populatePriceComparisonFilters();
+    if(target?.providerId && target?.modelId){
+        smartPriceHighlightKey = priceModelKey(target.modelId, target.profile, target.nodeType);
+        smartPriceHighlightModelId = String(target.modelId);
+        smartPriceHighlightProviderId = String(target.providerId);
+        if(smartPriceComparisonSearch) smartPriceComparisonSearch.value = '';
+        if(smartPriceComparisonKind) smartPriceComparisonKind.value = 'all';
+    }
+    renderPriceComparisonTable();
+    smartPriceComparisonPanel?.classList.add('open');
+    smartPriceComparisonPanel?.setAttribute('aria-hidden','false');
+    smartPriceToggle?.classList.add('active');
+    refreshIcons();
+    if(target?.providerId && target?.modelId){
+        requestAnimationFrame(() => {
+            const body = smartPriceComparisonBody;
+            const cell = body?.querySelector(`[data-price-provider-id="${CSS.escape(String(target.providerId))}"][data-price-model-id="${CSS.escape(String(target.modelId))}"]`);
+            const row = cell?.closest('tr') || body?.querySelector(`[data-price-row-key="${CSS.escape(smartPriceHighlightKey)}"]`) || [...(body?.querySelectorAll('tr[data-price-model-ids]') || [])].find(item => String(item.dataset.priceModelIds || '').split('|').includes(String(target.modelId)));
+            if(!body || !row) return;
+            const bodyRect = body.getBoundingClientRect();
+            const targetRect = (cell || row).getBoundingClientRect();
+            body.scrollTo({
+                top:Math.max(0, body.scrollTop + targetRect.top - bodyRect.top - (bodyRect.height - targetRect.height) / 2),
+                left:Math.max(0, body.scrollLeft + targetRect.left - bodyRect.left - (bodyRect.width - targetRect.width) / 2),
+                behavior:'smooth'
+            });
+            row.classList.add('highlight');
+            cell?.classList.add('highlight');
+        });
+    }
+}
+function closeSmartPriceComparison(){
+    smartPriceComparisonPanel?.classList.remove('open');
+    smartPriceComparisonPanel?.setAttribute('aria-hidden','true');
+    smartPriceToggle?.classList.remove('active');
+    smartPriceHighlightKey = '';
+    smartPriceHighlightModelId = '';
+    smartPriceHighlightProviderId = '';
+}
+function closeSmartTopPanels(except=''){
+    if(except !== 'prices') closeSmartPriceComparison();
+    if(except !== 'workflow') closeSmartWorkflowTransferModal();
+    if(except !== 'shortcuts') closeSmartCanvasShortcuts();
+    if(except !== 'logs') closeSmartCanvasLog();
+    if(except !== 'assets' && assetLibraryOpen) toggleAssetLibrary(false);
 }
 function promptNodeBodyHtml(node){
     node.llmProvider = resolveChatProviderId(node.llmProvider || '');
@@ -7889,45 +11599,23 @@ function smartLoopBodyHtml(node){
     </div>`;
 }
 function smartGroupBodyHtml(node){
-    const groupThumbLayout = smartGroupThumbLayout(node);
-    const refThumbs = groupThumbLayout?.refs || [];
     const members = smartGroupMembers(node);
     const counts = members.reduce((acc, member) => {
         if(member.type === 'smart-prompt') acc.prompt += 1;
         else if(member.type === 'smart-loop') acc.loop += 1;
+        else if(isSmartExecutionNode(member)) acc.execution += 1;
+        else if(isSmartImageNode(member)) acc.media += 1;
         return acc;
-    }, {prompt:0, media:refThumbs.length, loop:0});
+    }, {prompt:0, media:0, loop:0, execution:0});
     const summary = [
         counts.prompt ? `${counts.prompt} 提示词` : '',
         counts.media ? `${counts.media} 图片` : '',
-        counts.loop ? `${counts.loop} 循环` : ''
-    ].filter(Boolean).join(' · ') || '双击或拖入图片';
-    if(refThumbs.length){
-        const totalThumbs = Math.max(1, Number(groupThumbLayout?.rows || 1) * Number(groupThumbLayout?.cols || 1));
-        if(totalThumbs === 1 && refThumbs.length === 1){
-            const ref = refThumbs[0];
-            const innerW = Math.max(24, Number(groupThumbLayout.innerW || groupThumbLayout.width || SMART_GROUP_DEFAULT_WIDTH));
-            const innerH = Math.max(24, Number(groupThumbLayout.innerH || groupThumbLayout.height || SMART_GROUP_DEFAULT_HEIGHT));
-            const canDelete = ref.nodeId === node.id;
-            return `<div class="smart-group-card has-thumbs">
-                <div class="smart-group-summary"><i data-lucide="group"></i><span>${escapeHtml(summary)}</span></div>
-                <div class="image-wrap smart-group-single-thumb ${selectedImage.nodeId === ref.nodeId && Number(selectedImage.index) === Number(ref.index) ? 'image-selected' : ''}" data-ref-node-id="${escapeAttr(ref.nodeId)}" data-ref-image-index="${ref.index}" data-image-index="${ref.index}" data-media-signature="${escapeAttr(`${mediaKindForItem(ref.item)}:${ref.item?.url || ''}`)}" style="--node-img-w:${innerW}px;--node-img-h:${innerH}px">${singleMediaHtml(ref.item, innerW, innerH)}${imageNameBadgeHtml(ref.item)}${imageResolutionBadgeHtml(ref.item)}${canDelete ? `<button class="mini-x image-delete" type="button" data-image-index="${ref.index}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>` : ''}</div>
-            </div>`;
-        }
-        const groupMaxVisibleRows = (groupThumbLayout.compactMembers || []).length ? Number(groupThumbLayout.rows || 1) : SMART_GROUP_MAX_VISIBLE_ROWS;
-        const visibleRows = Math.max(1, Math.min(groupMaxVisibleRows, Number(groupThumbLayout.visibleRows || groupThumbLayout.rows || 1)));
-        const maxHeight = Math.max(44, visibleRows * Number(groupThumbLayout.thumb || 96) + Math.max(0, visibleRows - 1) * 8);
-        return `<div class="smart-group-card has-thumbs">
-            <div class="smart-group-summary"><i data-lucide="group"></i><span>${escapeHtml(summary)}</span></div>
-            <div class="thumb-grid smart-group-thumb-grid" data-thumb-scroll="1" style="--thumb-cols:${groupThumbLayout.cols}; --thumb-size:${groupThumbLayout.thumb}px; --thumb-max-height:${maxHeight}px">${refThumbs.map(ref => {
-                const canDelete = ref.nodeId === node.id;
-                return `<div class="thumb-item ${selectedImage.nodeId === ref.nodeId && Number(selectedImage.index) === Number(ref.index) ? 'image-selected' : ''}" data-ref-node-id="${escapeAttr(ref.nodeId)}" data-ref-image-index="${ref.index}" data-image-index="${ref.index}" data-media-signature="${escapeAttr(`${mediaKindForItem(ref.item)}:${ref.item?.url || ''}`)}">${thumbMediaHtml(ref.item)}${imageNameBadgeHtml(ref.item)}${imageResolutionBadgeHtml(ref.item)}${canDelete ? `<button class="mini-x image-delete" type="button" data-image-index="${ref.index}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>` : ''}</div>`;
-            }).join('')}</div>
-        </div>`;
-    }
+        counts.loop ? `${counts.loop} 循环` : '',
+        counts.execution ? `${counts.execution} 执行` : ''
+    ].filter(Boolean).join(' · ') || '拖入节点归组';
     return `<div class="smart-group-card">
-        <div class="smart-group-summary"><i data-lucide="group"></i><span>${escapeHtml(summary)}</span></div>
-        ${members.length ? '' : `<div class="smart-group-empty"><i data-lucide="plus"></i><span>拖入图片自动收进分组</span></div>`}
+        <div class="smart-group-summary"><span><i data-lucide="group"></i>${escapeHtml(summary)}</span></div>
+        ${members.length ? '' : `<div class="smart-group-empty"><i data-lucide="plus"></i><span>拖入节点归组</span></div>`}
     </div>`;
 }
 function smartMinimaxBodyHtml(node){
@@ -8096,8 +11784,16 @@ function smartMinimaxBodyHtml(node){
 function nodeBodyHtml(node, layout){
     if(node.type === 'smart-minimax') return smartMinimaxBodyHtml(node);
     if(node.type === 'smart-group') return smartGroupBodyHtml(node);
+    if(isSmartResultGroupNode(node)){
+        const refs = resultGroupMediaItems(node);
+        if(!refs.length) return `<div class="node-drop"><span class="upload-node-main"><i data-lucide="package-open"></i></span><span class="upload-node-title">结果组为空</span></div>`;
+        const visibleRows = Math.max(1, Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, Number(layout.visibleRows || layout.rows || 1)));
+        const maxHeight = visibleRows * Number(layout.thumb || 96) + Math.max(0, visibleRows - 1) * 8;
+        return `<div class="thumb-grid result-group-grid" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${refs.map((item, index) => `<div class="thumb-item has-outside-image-name" data-result-group-item="${index}" data-result-id="${escapeAttr(item.resultId || '')}" data-media-signature="${escapeAttr(`${item.kind}:${item.url || ''}`)}">${thumbMediaHtml(item)}${imageNameBadgeHtml(item, {outside:true})}<span class="result-group-round">${escapeHtml(item.round ? `第 ${item.round} 轮` : `第 ${index + 1} 项`)}</span><button class="mini-x result-group-extract" type="button" data-result-group-extract="${index}" title="${escapeAttr(tr('smart.resultGroupExtract'))}"><i data-lucide="external-link"></i></button>${item.resultId ? `<button class="result-group-item-port node-port port-out" type="button" data-port="out" data-source-result-id="${escapeAttr(item.resultId)}" title="${escapeAttr(tr('smart.resultGroupConnectOne'))}"></button>` : ''}</div>`).join('')}</div>`;
+    }
     if(node.type === 'smart-prompt') return promptNodeBodyHtml(node);
     if(node.type === 'smart-loop') return smartLoopBodyHtml(node);
+    if(isSmartExecutionNode(node)) return smartExecutionNodeBodyHtml(node);
     const imgs = (node.images || []).map(imageForDisplay);
     if(node.jimengPending && node.jimengPending.submitId && imgs.length === 0){
         return jimengPendingBodyHtml(node, layout);
@@ -8106,15 +11802,18 @@ function nodeBodyHtml(node, layout){
     if(recoverTask && imgs.length === 0){
         return imageTaskRecoverBodyHtml(node, recoverTask, layout);
     }
+    if(node.isRunPlaceholder && String(node.runStatus || '') === 'failed' && imgs.length === 0){
+        return runPlaceholderFailureHtml(node, layout);
+    }
     if(node.queued && imgs.length === 0 && !node.pending){
-        return `<div class="loading-cell single queued" style="width:${layout.width}px;height:${layout.height}px"></div>`;
+        return `<div class="run-placeholder loading-cell single queued" style="width:${layout.width}px;height:${layout.height}px">${runPlaceholderOverlayHtml(node)}</div>`;
     }
     if(node.pending && imgs.length === 0){
         const count = Math.max(1, Number(node.pending) || 1);
-        if(count <= 1) return `<div class="loading-cell single" style="width:${layout.width}px;height:${layout.height}px"></div>`;
+        if(count <= 1) return `<div class="run-placeholder loading-cell single" style="width:${layout.width}px;height:${layout.height}px">${runPlaceholderOverlayHtml(node)}</div>`;
         const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(count))));
         const rows = Math.ceil(count / cols);
-        return `<div class="loading-skeleton" style="grid-template-columns:repeat(${cols}, 1fr);grid-template-rows:repeat(${rows}, 1fr);width:${layout.width}px;height:${layout.height}px;padding:8px;box-sizing:border-box">${Array.from({length:count}).map(() => `<div class="loading-cell"></div>`).join('')}</div>`;
+        return `<div class="run-placeholder loading-skeleton" style="grid-template-columns:repeat(${cols}, 1fr);grid-template-rows:repeat(${rows}, 1fr);width:${layout.width}px;height:${layout.height}px;padding:8px;box-sizing:border-box">${Array.from({length:count}).map(() => `<div class="loading-cell"></div>`).join('')}${runPlaceholderOverlayHtml(node)}</div>`;
     }
     if(imgs.length > 1){
         const visibleRows = Math.max(1, Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, Number(layout.visibleRows || layout.rows || 1)));
@@ -8128,6 +11827,100 @@ function nodeBodyHtml(node, layout){
         <span class="upload-node-sub">拖拽 / 粘贴 / 点击上传</span>
     </div>`;
 }
+function smartExecutionNodeMeta(node){
+    const runSettings = smartSettingsForNode(node);
+    const providers = apiProviders || [];
+    const selectedRhRef = node.type === SMART_NODE_TYPES.aiApp ? selectedRunningHubRef(runSettings) : null;
+    const providerId = node.type === SMART_NODE_TYPES.textGenerator
+        ? runSettings.textProvider
+        : node.type === SMART_NODE_TYPES.videoGenerator
+        ? runSettings.videoProvider
+        : node.type === SMART_NODE_TYPES.audioGenerator
+        ? runSettings.audioProvider
+        : node.type === SMART_NODE_TYPES.musicGenerator
+        ? runSettings.musicProvider
+        : runSettings.provider_id;
+    const provider = providers.find(item => item.id === providerId);
+    const model = node.type === SMART_NODE_TYPES.textGenerator
+        ? capabilityModelIdLabel(capabilityProfileFor(runSettings.textProvider, runSettings.textModel, 'text_generation')) || runSettings.textModel
+        : node.type === SMART_NODE_TYPES.videoGenerator
+        ? capabilityModelIdLabel(capabilityProfileFor(runSettings.videoProvider, runSettings.videoModel, 'video_generation')) || runSettings.videoModel
+        : node.type === SMART_NODE_TYPES.audioGenerator
+        ? capabilityModelIdLabel(capabilityProfileFor(runSettings.audioProvider, runSettings.audioModel, 'audio_generation')) || runSettings.audioModel
+        : node.type === SMART_NODE_TYPES.musicGenerator
+        ? capabilityModelIdLabel(capabilityProfileFor(runSettings.musicProvider, runSettings.musicModel, 'music_generation')) || runSettings.musicModel
+        : node.type === SMART_NODE_TYPES.aiApp
+        ? (selectedRhRef ? runningHubEntryLabel(selectedRhRef.entry, selectedRhRef.kind) : '')
+        : node.type === SMART_NODE_TYPES.comfyWorkflow
+        ? (runSettings.comfyWorkflow || '')
+        : capabilityModelIdLabel(capabilityProfileFor(runSettings.provider_id, runSettings.model, 'image_generation')) || runSettings.model;
+    const mediaInputCount = node.type === SMART_NODE_TYPES.textGenerator
+        ? Object.values(textGenerationRequestForNode(node).inputCounts || {}).reduce((sum, count) => sum + Number(count || 0), 0)
+        : inputImagesFor(node).filter(item => item?.url).length;
+    return {
+        title:SMART_NODE_CONTRACT.titleForType(node.type),
+        icon:node.type === SMART_NODE_TYPES.textGenerator
+            ? 'text-cursor-input'
+            : node.type === SMART_NODE_TYPES.videoGenerator
+            ? 'film'
+            : node.type === SMART_NODE_TYPES.audioGenerator
+            ? 'audio-lines'
+            : node.type === SMART_NODE_TYPES.musicGenerator
+            ? 'music-2'
+            : node.type === SMART_NODE_TYPES.aiApp
+            ? 'blocks'
+            : node.type === SMART_NODE_TYPES.comfyWorkflow
+            ? 'workflow'
+            : 'image-plus',
+        provider:provider?.name || (node.type === SMART_NODE_TYPES.aiApp ? 'RunningHub' : node.type === SMART_NODE_TYPES.comfyWorkflow ? 'Local' : '未选择平台'),
+        model:model || '未选择模型',
+        appId:selectedRhRef?.id || '',
+        inputCount:mediaInputCount || inputNodesFor(node).length,
+        unavailable:false
+    };
+}
+function smartExecutionNodeBodyHtml(node){
+    const meta = smartExecutionNodeMeta(node);
+    if(node.type === SMART_NODE_TYPES.aiApp){
+        return `<div class="smart-execution-card smart-ai-app-card ${meta.unavailable ? 'is-unavailable' : ''}">
+            <div class="smart-execution-icon"><i data-lucide="${escapeAttr(meta.icon)}"></i></div>
+            <div class="smart-execution-main">
+                <div class="smart-execution-title">${escapeHtml(meta.title)}</div>
+                <div class="smart-execution-provider">${escapeHtml(meta.provider)}</div>
+                <div class="smart-execution-app-id">${escapeHtml(meta.appId || '未选择 AI 应用')}</div>
+            </div>
+            <div class="smart-ai-app-name">${escapeHtml(meta.model)}</div>
+            <div class="smart-execution-footer">
+                <span><i data-lucide="git-merge"></i>${meta.inputCount ? `${meta.inputCount} 个输入` : '等待输入'}</span>
+                <span>${meta.unavailable ? '暂不可运行' : '选择后配置参数'}</span>
+            </div>
+        </div>`;
+    }
+    return `<div class="smart-execution-card ${meta.unavailable ? 'is-unavailable' : ''}">
+        <div class="smart-execution-icon"><i data-lucide="${escapeAttr(meta.icon)}"></i></div>
+        <div class="smart-execution-main">
+            <div class="smart-execution-title">${escapeHtml(meta.title)}</div>
+            <div class="smart-execution-provider">${escapeHtml(meta.provider)}</div>
+            <div class="smart-execution-model">${escapeHtml(meta.model)}</div>
+        </div>
+        <div class="smart-execution-footer">
+            <span><i data-lucide="git-merge"></i>${meta.inputCount ? `${meta.inputCount} 个输入` : '等待输入'}</span>
+            <span>${meta.unavailable ? '暂不可运行' : '选择后配置参数'}</span>
+        </div>
+    </div>`;
+}
+function runningHubTargetBadgesHtml(node){
+    if(!node || isSmartExecutionNode(node)) return '';
+    const labels = (canvas?.connections || []).filter(connection => connection.from === node.id && connectionTargetFieldKey(connection)).map(connection => {
+        const target = nodes.find(item => item.id === connection.to && item.type === SMART_NODE_TYPES.aiApp);
+        const field = target ? rhActiveFields(smartSettingsForNode(target)).find(item => rhParamKey(item.nodeId, item.fieldName) === connectionTargetFieldKey(connection)) : null;
+        return field ? rhFieldDisplayLabel(field, rhActiveFields(smartSettingsForNode(target))) : '';
+    }).filter(Boolean);
+    const unique = [...new Set(labels)];
+    if(!unique.length) return '';
+    const text = unique.length === 1 ? `→ ${unique[0]}` : `→ ${unique[0]} · ${unique.length}`;
+    return `<div class="rh-source-target-badge" title="${escapeAttr(unique.join('、'))}">${escapeHtml(text)}</div>`;
+}
 function jimengPendingBodyHtml(node, layout){
     const jp = node.jimengPending || {};
     const querying = Boolean(jp.querying);
@@ -8136,25 +11929,54 @@ function jimengPendingBodyHtml(node, layout){
         <div class="jimeng-pending-overlay">
             <div class="jimeng-pending-spinner"><i data-lucide="loader-2"></i></div>
             <div class="jimeng-pending-text">${escapeHtml(queueText)}</div>
-            <div class="jimeng-pending-sub">任务未丢失，可继续等待或手动查询</div>
-            <button class="jimeng-pending-query" type="button" data-jimeng-query="${escapeAttr(node.id)}" ${querying ? 'disabled' : ''}><i data-lucide="${querying ? 'loader-2' : 'refresh-cw'}"></i><span>${querying ? '查询中…' : '查询结果'}</span></button>
+            <div class="jimeng-pending-sub">任务未丢失，系统会自动查询结果</div>
+            <div class="run-placeholder-actions">
+                <button class="jimeng-pending-query" type="button" data-jimeng-query="${escapeAttr(node.id)}" ${querying ? 'disabled' : ''}><i data-lucide="${querying ? 'loader-2' : 'refresh-cw'}"></i><span>${querying ? '查询中…' : '查询结果'}</span></button>
+                ${cancelRunButtonHtml(node)}
+            </div>
         </div>
     </div>`;
 }
 function smartRecoverableImageTask(node){
-    return smartPendingTasks(node).find(task => task.failed && task.recoverTaskId) || null;
+    return smartPendingTasks(node).find(task => task.recoveryBlocked || (task.failed && task.recoverTaskId)) || null;
 }
 function imageTaskRecoverBodyHtml(node, task, layout){
     const querying = Boolean(task.querying);
     const failedCount = smartPendingTasks(node).filter(item => item.failed && item.recoverTaskId).length;
-    const title = querying ? '查询中' : '任务未丢失';
-    const sub = failedCount > 1 ? `还有 ${failedCount} 个任务可查询` : `任务 ID：${task.recoverTaskId || ''}`;
+    const blocked = Boolean(task.recoveryBlocked);
+    const title = querying ? '查询中' : blocked ? '等待安全恢复' : '任务未丢失';
+    const sub = blocked
+        ? '服务重启前未记录上游任务 ID；为避免重复计费，系统没有自动重提。'
+        : failedCount > 1 ? `还有 ${failedCount} 个任务可查询` : `任务 ID：${task.recoverTaskId || ''}`;
     return `<div class="jimeng-pending-cell loading-cell single" style="width:${layout.width}px;height:${layout.height}px">
         <div class="jimeng-pending-overlay">
             <div class="jimeng-pending-spinner"><i data-lucide="${querying ? 'loader-2' : 'refresh-cw'}"></i></div>
             <div class="jimeng-pending-text">${escapeHtml(title)}</div>
             <div class="jimeng-pending-sub">${escapeHtml(sub)}</div>
-            <button class="jimeng-pending-query" type="button" data-image-task-query="${escapeAttr(node.id)}" data-task-id="${escapeAttr(task.taskId)}" ${querying ? 'disabled' : ''}><i data-lucide="${querying ? 'loader-2' : 'refresh-cw'}"></i><span>${querying ? '查询中…' : '查询结果'}</span></button>
+            <div class="run-placeholder-actions">
+                ${blocked ? '' : `<button class="jimeng-pending-query" type="button" data-image-task-query="${escapeAttr(node.id)}" data-task-id="${escapeAttr(task.taskId)}" ${querying ? 'disabled' : ''}><i data-lucide="${querying ? 'loader-2' : 'refresh-cw'}"></i><span>${querying ? '查询中…' : '查询结果'}</span></button>`}
+                ${cancelRunButtonHtml(node)}
+            </div>
+        </div>
+    </div>`;
+}
+function cancelRunButtonHtml(node){
+    if(!node || (!node.isRunPlaceholder && !node.sourceExecutionNodeId)) return '';
+    const cancelling = Boolean(node.cancelInProgress);
+    return `<button class="run-placeholder-cancel" type="button" data-cancel-run="${escapeAttr(node.id)}" ${cancelling ? 'disabled' : ''}><i data-lucide="${cancelling ? 'loader-2' : 'square'}"></i><span>${escapeHtml(tr(cancelling ? 'smart.cancellingRun' : 'smart.cancelRun'))}</span></button>`;
+}
+function runPlaceholderOverlayHtml(node){
+    const button = cancelRunButtonHtml(node);
+    if(!button) return '';
+    return `<div class="run-placeholder-overlay"><i class="run-placeholder-spinner" data-lucide="loader-2"></i><span>${escapeHtml(tr('smart.hintPending'))}</span>${button}</div>`;
+}
+function runPlaceholderFailureHtml(node, layout){
+    const message = String(node?.runError || tr('smart.errRunFailed')).trim() || tr('smart.errRunFailed');
+    return `<div class="run-placeholder run-placeholder-failed" style="width:${layout.width}px;height:${layout.height}px">
+        <div class="run-placeholder-failure-content" role="status" aria-label="${escapeAttr(`${tr('smart.runFailedBadge')}：${message}`)}">
+            <span class="run-placeholder-failure-icon"><i data-lucide="triangle-alert"></i></span>
+            <strong>${escapeHtml(tr('smart.runFailedBadge'))}</strong>
+            <span title="${escapeAttr(message)}">${escapeHtml(message)}</span>
         </div>
     </div>`;
 }
@@ -8166,23 +11988,372 @@ function smartNodeToolbarImageIndex(node){
     }
     return 0;
 }
-function smartNodeToolbarHtml(node){
-    const isImageNode = node?.type === 'smart-image' || !node?.type;
-    const images = node?.images || [];
-    if(!isImageNode || !images.some(img => img?.url)) return '';
-    const item = imageForDisplay(images[smartNodeToolbarImageIndex(node)] || images.find(img => img?.url));
-    if(!item?.url) return '';
+let smartGenerationInfoNodeId = '';
+function smartGenerationSnapshotFromNode(node){
+    if(!node) return null;
+    const settingsSnapshot = cloneSmartSettings(node.runSettings || {});
+    if(!Object.keys(settingsSnapshot).length && !node.runPrompt && !node.runModelPrompt && !node.runSnapshot) return null;
+    return {
+        id:uid('version'),
+        images:(node.images || []).map(item => cloneSmartSettings(item)),
+        outputKind:node.outputKind || mediaKindForUrls(node.images || [], 'image'),
+        title:node.title || '',
+        runPrompt:node.runPrompt || '',
+        runModelPrompt:node.runModelPrompt || node.runPrompt || '',
+        promptDraftHtml:node.promptDraftHtml || '',
+        promptDraftText:node.promptDraftText || '',
+        runInputRefs:cloneSmartSettings(node.runInputRefs || node.runPromptRefs || []),
+        runPromptRefs:cloneSmartSettings(node.runPromptRefs || []),
+        runSettings:settingsSnapshot,
+        runSnapshot:cloneSmartSettings(node.runSnapshot || null),
+        runRef:cloneSmartSettings(node.runRef || null),
+        sourceExecutionNodeId:node.sourceExecutionNodeId || '',
+        createdAt:Number(node.runAt || node.runFinishedAt || node.created_at || Date.now())
+    };
+}
+function smartGenerationVersions(node){
+    return Array.isArray(node?.resultVersions) ? node.resultVersions.filter(version => Array.isArray(version?.images) && version.images.length) : [];
+}
+function smartActiveGenerationVersion(node){
+    const versions = smartGenerationVersions(node);
+    if(!versions.length) return smartGenerationSnapshotFromNode(node);
+    const index = Math.max(0, Math.min(versions.length - 1, Number(node.activeResultVersion) || 0));
+    return versions[index];
+}
+function smartNodeHasGenerationInfo(node){
+    return Boolean(isSmartImageNode(node) && smartActiveGenerationVersion(node));
+}
+function ensureSmartGenerationVersions(node){
+    let versions = smartGenerationVersions(node);
+    if(versions.length) return versions;
+    const initial = smartGenerationSnapshotFromNode(node);
+    if(!initial) return [];
+    node.resultVersions = [initial];
+    node.activeResultVersion = 0;
+    return node.resultVersions;
+}
+function applySmartGenerationVersion(node, index){
+    const versions = smartGenerationVersions(node);
+    const nextIndex = Math.max(0, Math.min(versions.length - 1, Number(index) || 0));
+    const version = versions[nextIndex];
+    if(!node || !version) return false;
+    node.activeResultVersion = nextIndex;
+    node.images = cloneSmartSettings(version.images || []).map(item => {
+        const copy = {...item};
+        delete copy._inlineVideoActive;
+        return copy;
+    });
+    node.outputKind = version.outputKind || mediaKindForUrls(node.images, 'image');
+    node.title = version.title || cascadeOutputTitle(node.outputKind, node.images.length);
+    const fields = ['runPrompt','runModelPrompt','promptDraftHtml','promptDraftText','runInputRefs','runPromptRefs','runSettings','runSnapshot','runRef'];
+    fields.forEach(key => {
+        if(version[key] === undefined || version[key] === null) delete node[key];
+        else node[key] = cloneSmartSettings(version[key]);
+    });
+    node.runAt = Number(version.createdAt || Date.now());
+    selectedImage = {nodeId:'', index:-1};
+    render();
+    scheduleSave();
+    return true;
+}
+function smartResultVersionSwitcherHtml(node){
+    const versions = smartGenerationVersions(node);
+    if(versions.length < 2) return '';
+    const activeIndex = Math.max(0, Math.min(versions.length - 1, Number(node.activeResultVersion) || 0));
+    return `<div class="result-version-switcher" role="tablist" aria-label="${escapeAttr(capabilityUiText('生成版本','Generated versions'))}">${versions.map((version, index) => `<button type="button" role="tab" data-result-version="${index}" data-node-id="${escapeAttr(node.id)}" class="${index === activeIndex ? 'active' : ''}" aria-selected="${index === activeIndex ? 'true' : 'false'}" title="${escapeAttr(capabilityUiText(`版本 ${index + 1}`,`Version ${index + 1}`))}">${index + 1}</button>`).join('')}</div>`;
+}
+function smartGenerationNodeType(snapshot){
+    const runSettings = snapshot?.runSettings || {};
+    if(runSettings.textProvider || snapshot?.outputKind === 'text') return 'text_generation';
+    if(runSettings.apiKind === 'video' || snapshot?.outputKind === 'video') return 'video_generation';
+    if(runSettings.apiKind === 'music') return 'music_generation';
+    if(runSettings.apiKind === 'audio' || snapshot?.outputKind === 'audio') return 'audio_generation';
+    return 'image_generation';
+}
+function smartGenerationProfile(snapshot){
+    const runSettings = snapshot?.runSettings || {};
+    const nodeType = smartGenerationNodeType(snapshot);
+    const providerId = nodeType === 'text_generation' ? runSettings.textProvider
+        : nodeType === 'video_generation' ? runSettings.videoProvider
+        : nodeType === 'audio_generation' ? runSettings.audioProvider
+        : nodeType === 'music_generation' ? runSettings.musicProvider
+        : runSettings.provider_id;
+    const modelId = nodeType === 'text_generation' ? runSettings.textModel
+        : nodeType === 'video_generation' ? runSettings.videoModel
+        : nodeType === 'audio_generation' ? runSettings.audioModel
+        : nodeType === 'music_generation' ? runSettings.musicModel
+        : runSettings.model;
+    return {nodeType, providerId:providerId || '', modelId:modelId || '', profile:capabilityProfileFor(providerId, modelId, nodeType)};
+}
+function smartGenerationValueText(key, value){
+    if(value === undefined || value === null || value === '' || value === CAPABILITY_PARAMETER_UNSET) return capabilityUiText('使用默认','Use default');
+    if(typeof value === 'boolean') return capabilityUiText(value ? '是' : '否', value ? 'Yes' : 'No');
+    if(Array.isArray(value)) return value.map(item => capabilityOptionLabel(key, item)).join('、');
+    if(typeof value === 'object'){
+        try { return JSON.stringify(value); } catch(error) { return String(value); }
+    }
+    return capabilityOptionLabel(key, value);
+}
+function smartRecordedGenerationParameterValue(key, computedValue, storedValues, runSettings){
+    if(Object.prototype.hasOwnProperty.call(storedValues || {}, key)) return computedValue;
+    const fallbacks = {
+        count:runSettings.count,
+        quality:runSettings.quality,
+        format:runSettings.audioFormat,
+        sample_rate:runSettings.audioSampleRate,
+        speaker:runSettings.audioSpeaker,
+        speech_rate:runSettings.audioSpeechRate,
+        loudness_rate:runSettings.audioLoudnessRate,
+        pitch_rate:runSettings.audioPitchRate
+    };
+    const fallback = fallbacks[key];
+    return fallback !== undefined && fallback !== null && fallback !== '' ? fallback : computedValue;
+}
+function smartGenerationReferenceItems(snapshot){
+    const refs = (snapshot?.runInputRefs || snapshot?.runPromptRefs || [])
+        .filter(hasMentionReferenceContent)
+        .map((ref, index) => normalizeSmartMediaReference(ref, index));
+    return numberedReferenceItems(refs);
+}
+function smartGenerationReferenceHtml(ref, index){
+    const item = normalizeSmartMediaReference(ref, index);
     const kind = mediaKindForItem(item);
+    const labels = {text:['文本','Text'], image:['图片','Image'], video:['视频','Video'], audio:['音频','Audio'], file:['文件','File']};
+    const typeLabel = capabilityUiText(...(labels[kind] || labels.file));
+    const name = item.alias || inputThumbLabel(kind, index + 1);
+    const sourceName = item.name && item.name !== name ? item.name : '';
+    const text = SMART_NODE_CONTRACT.textContentForMediaItem(item);
+    const preview = kind === 'text'
+        ? `<span class="generation-info-ref-text">${escapeHtml(String(text || '').slice(0, 80) || typeLabel)}</span>`
+        : `<span class="generation-info-ref-preview">${thumbMediaHtml(item)}</span>`;
+    return `<div class="generation-info-ref" title="${escapeAttr(sourceName || name)}">${preview}<span class="generation-info-ref-meta"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(typeLabel)}</small></span></div>`;
+}
+function smartGenerationPromptHtml(snapshot, refs){
+    const savedHtml = String(snapshot?.promptDraftHtml || '').trim();
+    if(savedHtml.includes('mention-image-token')) return savedHtml;
+    const prompt = String(snapshot?.promptDraftText || snapshot?.runPrompt || snapshot?.runModelPrompt || snapshot?.runSnapshot?.localCommand || '').trim();
+    if(!prompt) return '';
+    const promptRefs = (refs || []).map(ref => ({...ref, name:ref.alias || ref.name || inputThumbLabel(mediaKindForItem(ref), 1)}));
+    return promptHtmlWithMentionTokens(prompt, promptRefs) || safeMarkdownPreviewHtml(prompt);
+}
+function smartGenerationInfoBodyHtml(node){
+    const snapshot = smartActiveGenerationVersion(node);
+    if(!snapshot) return `<div class="generation-info-empty">${escapeHtml(capabilityUiText('这个素材没有可追溯的生成信息。','This material has no recorded generation details.'))}</div>`;
+    const descriptor = smartGenerationProfile(snapshot);
+    const profile = descriptor.profile;
+    const provider = (apiProviders || []).find(item => item.id === descriptor.providerId);
+    const runSettings = snapshot.runSettings || {};
+    const mode = capabilityVariantLabel(profile) || profile?.variant_id || profile?.operation || capabilityUiText('默认','Default');
+    const parameterValues = !profile ? {} : descriptor.nodeType === 'video_generation'
+        ? capabilityVideoParameterValues(profile, runSettings)
+        : descriptor.nodeType === 'audio_generation'
+        ? capabilityAudioParameterValues(profile, runSettings, audioRefsOnly(snapshot.runInputRefs || [])[0]?.url || '')
+        : descriptor.nodeType === 'music_generation' || descriptor.nodeType === 'text_generation'
+        ? capabilityParameterSubmissionValues(profile, runSettings)
+        : capabilityImageParameterValues(profile, runSettings);
+    const storedParameterValues = profile && runSettings.capabilityParameters?.[profile.model_id] && typeof runSettings.capabilityParameters[profile.model_id] === 'object'
+        ? runSettings.capabilityParameters[profile.model_id]
+        : {};
+    const parameters = profile ? Object.entries(profile.parameters || {}).map(([key, spec]) => ({key, label:capabilityParameterLabel(key, spec, profile), value:smartRecordedGenerationParameterValue(key, parameterValues[key], storedParameterValues, runSettings)})) : [];
+    const refs = smartGenerationReferenceItems(snapshot);
+    const prompt = String(snapshot.promptDraftText || snapshot.runPrompt || snapshot.runModelPrompt || snapshot.runSnapshot?.localCommand || '').trim();
+    const promptHtml = smartGenerationPromptHtml(snapshot, refs);
+    return `<div class="generation-info-content">
+        <section class="generation-info-section">
+            <div class="generation-info-section-title">${escapeHtml(capabilityUiText('模型配置','Model configuration'))}</div>
+            <div class="generation-info-primary-grid">
+                <div><span>${escapeHtml(capabilityUiText('平台','Platform'))}</span><strong>${escapeHtml(provider?.name || descriptor.providerId || capabilityUiText('未记录','Not recorded'))}</strong></div>
+                <div><span>${escapeHtml(capabilityUiText('模型','Model'))}</span><strong title="${escapeAttr(capabilityModelIdLabel(profile) || descriptor.modelId)}">${escapeHtml(capabilityModelIdLabel(profile) || descriptor.modelId || capabilityUiText('未记录','Not recorded'))}</strong></div>
+                <div><span>${escapeHtml(capabilityUiText('运行模式','Run mode'))}</span><strong>${escapeHtml(mode)}</strong></div>
+            </div>
+        </section>
+        <section class="generation-info-section">
+            <div class="generation-info-section-title">${escapeHtml(capabilityUiText('输入内容','Inputs'))}</div>
+            ${refs.length ? `<div class="generation-info-refs">${refs.map(smartGenerationReferenceHtml).join('')}</div>` : `<div class="generation-info-muted">${escapeHtml(capabilityUiText('没有引用外部素材','No external material references'))}</div>`}
+            ${prompt ? `<div class="generation-info-prompt"><span>${escapeHtml(capabilityUiText('输入文本','Input text'))}</span><div>${promptHtml}</div></div>` : ''}
+        </section>
+        <section class="generation-info-section">
+            <div class="generation-info-section-title">${escapeHtml(capabilityUiText('生成参数','Generation parameters'))}</div>
+            ${parameters.length ? `<div class="generation-info-parameters">${parameters.map(item => `<div><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(smartGenerationValueText(item.key, item.value))}</strong></div>`).join('')}</div>` : `<div class="generation-info-muted">${escapeHtml(capabilityUiText('当前模型没有记录额外参数','No additional parameters were recorded'))}</div>`}
+        </section>
+    </div>`;
+}
+function ensureSmartGenerationInfoModal(){
+    let modal = document.getElementById('smartGenerationInfoModal');
+    if(modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'smartGenerationInfoModal';
+    modal.className = 'generation-info-modal';
+    modal.innerHTML = `<div class="generation-info-dialog" role="dialog" aria-modal="true" aria-labelledby="smartGenerationInfoTitle">
+        <div class="generation-info-head"><div><small>${escapeHtml(capabilityUiText('素材记录','Material record'))}</small><strong id="smartGenerationInfoTitle">${escapeHtml(capabilityUiText('生成信息','Generation details'))}</strong></div><button type="button" data-close-generation-info="1" title="${escapeAttr(capabilityUiText('关闭','Close'))}"><i data-lucide="x"></i></button></div>
+        <div class="generation-info-scroll" data-generation-info-body="1"></div>
+        <div class="generation-info-footer"><span data-generation-info-status="1"></span><button type="button" class="generation-info-run" data-generation-info-run="1"><i data-lucide="refresh-cw"></i><span>${escapeHtml(capabilityUiText('按此配置重新生成','Regenerate with these settings'))}</span></button></div>
+    </div>`;
+    modal.addEventListener('mousedown', event => {
+        if(event.target === modal || event.target.closest?.('[data-close-generation-info]')) closeSmartGenerationInfo();
+    });
+    modal.querySelector('[data-generation-info-run]')?.addEventListener('click', event => {
+        event.preventDefault();
+        rerunSmartGeneratedMaterial(smartGenerationInfoNodeId);
+    });
+    const body = modal.querySelector('[data-generation-info-body]');
+    body?.addEventListener('mouseover', event => {
+        const token = event.target.closest?.('.mention-image-token');
+        if(!token || token.contains(event.relatedTarget)) return;
+        showReferenceHoverPreview(token, referenceFromMentionToken(token));
+    });
+    body?.addEventListener('mouseout', event => {
+        const token = event.target.closest?.('.mention-image-token');
+        if(!token || token.contains(event.relatedTarget)) return;
+        hideReferenceHoverPreview();
+    });
+    document.addEventListener('keydown', event => {
+        if(event.key === 'Escape' && modal.classList.contains('open')) closeSmartGenerationInfo();
+    });
+    document.body.appendChild(modal);
+    return modal;
+}
+function openSmartGenerationInfo(nodeId){
+    const node = nodes.find(item => item.id === nodeId);
+    if(!node) return;
+    smartGenerationInfoNodeId = node.id;
+    const modal = ensureSmartGenerationInfoModal();
+    modal.querySelector('[data-generation-info-body]').innerHTML = smartGenerationInfoBodyHtml(node);
+    const runButton = modal.querySelector('[data-generation-info-run]');
+    runButton.disabled = !smartNodeHasGenerationInfo(node) || Boolean(node.generationRerunPending);
+    runButton.classList.toggle('is-running', Boolean(node.generationRerunPending));
+    runButton.querySelector('span').textContent = node.generationRerunPending
+        ? capabilityUiText('重新生成中','Regenerating')
+        : capabilityUiText('按此配置重新生成','Regenerate with these settings');
+    modal.querySelector('[data-generation-info-status]').textContent = node.generationRerunPending
+        ? capabilityUiText('正在使用固定参数生成新版本…','Generating a new version with the recorded settings…')
+        : '';
+    modal.classList.add('open');
+    refreshIcons();
+}
+function closeSmartGenerationInfo(){
+    document.getElementById('smartGenerationInfoModal')?.classList.remove('open');
+    hideReferenceHoverPreview();
+    smartGenerationInfoNodeId = '';
+}
+async function runFixedTextGenerationSnapshot(snapshot, runNode){
+    const runSettings = cloneSmartSettings(snapshot.runSettings || {});
+    const descriptor = smartGenerationProfile(snapshot);
+    const refs = cloneSmartSettings(snapshot.runInputRefs || snapshot.runPromptRefs || []);
+    const message = String(snapshot.runModelPrompt || snapshot.runPrompt || snapshot.runSnapshot?.localCommand || '').trim();
+    if(!message) throw new Error(capabilityUiText('生成记录中缺少输入文本','The generation record has no input text'));
+    const images = imageRefsOnly(refs).map(item => item.url).filter(Boolean);
+    const videos = videoRefsOnly(refs).map(item => item.url).filter(Boolean);
+    const audios = audioRefsOnly(refs).map(item => item.url).filter(Boolean);
+    const inputCounts = {text:1, image:images.length, video:videos.length, audio:audios.length};
+    const inputRoles = capabilityInputRoles(refs, true);
+    const selection = resolveCapabilityForRun(descriptor.providerId, 'text_generation', inputCounts, runSettings.textFamilyId, descriptor.modelId, '', inputRoles, capabilityParameterIntent(descriptor.providerId, descriptor.modelId, 'text_generation', runSettings));
+    const parameters = capabilityParameterSubmissionValues(selection.profile, runSettings);
+    await preflightCanvasNodeRun({node:runNode, clientOperationId:createCanvasOperationId(runNode.id), providerId:descriptor.providerId, modelId:selection.profile.model_id, familyId:selection.family.family_id, nodeType:'text_generation', inputs:{prompt:message, reference:images, source_video:videos, reference_audio:audios}, inputCounts, inputRoles, parameters});
+    await queueCanvasRun(runNode);
+    const response = await fetch('/api/canvas-llm', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({message, messages:[], images, videos, audios, input_roles:inputRoles, model:selection.profile.model_id, family_id:selection.family.family_id, provider:descriptor.providerId, ms_model:descriptor.providerId === 'modelscope' ? selection.profile.model_id : '', system_prompt:runSettings.textSystemEnabled ? String(runSettings.textSystemPrompt || '') : '', parameters})});
+    const data = await response.json().catch(() => ({}));
+    if(!response.ok) throw new Error(apiErrorMessage(data, capabilityUiText('文本重新生成失败','Text regeneration failed')));
+    await submitCanvasRun(runNode);
+    await processCanvasRun(runNode);
+    const text = String(data.text || '').trim();
+    if(!text) throw new Error(capabilityUiText('模型没有返回文本','The model returned no text'));
+    const storedResponse = await fetch('/api/canvas-text-results', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text, name:'文本结果.md', canvas_id:canvas?.id || '', canvas_title:canvas?.title || ''})});
+    const stored = await storedResponse.json().catch(() => ({}));
+    if(!storedResponse.ok) throw new Error(apiErrorMessage(stored, capabilityUiText('文本结果保存失败','Failed to save text result')));
+    const media = [{url:stored.url, resultId:stored.id, result_id:stored.id, kind:'text', name:stored.display_name || '文本结果.md', text, content:text, provider:descriptor.providerId, model:selection.profile.model_id}];
+    await finishCanvasRun(runNode, media);
+    return {media, kind:'text', runRef:cloneSmartSettings(runNode.runRef || null)};
+}
+async function runFixedMediaGenerationSnapshot(snapshot, runNode){
+    const runSettings = cloneSmartSettings(snapshot.runSettings || {});
+    const prompt = String(snapshot.runModelPrompt || snapshot.runPrompt || '').trim();
+    const refs = cloneSmartSettings(snapshot.runInputRefs || snapshot.runPromptRefs || []);
+    const result = await generateUrlsForCurrentSettings(runNode, prompt, refs, runSettings);
+    const urls = resultMediaUrls(result?.urls || result);
+    if(!urls.length) throw new Error(result?.kind === 'video' ? tr('smart.errNoOutVideos') : result?.kind === 'audio' ? tr('smart.errNoOutAudios') : tr('smart.errNoOutImages'));
+    const kind = result?.kind || snapshot.outputKind || 'image';
+    const ext = kind === 'video' ? 'mp4' : kind === 'audio' ? 'mp3' : 'png';
+    const media = urls.map((item, index) => normalizeSmartMediaReference(copyMediaSizeFields(item, {url:typeof item === 'string' ? item : item.url, name:(typeof item === 'object' && item.name) || `output-${index + 1}.${ext}`, kind:(typeof item === 'object' && item.kind) || kind, generatedResult:true}), index)).filter(item => item.url);
+    await finishCanvasRun(runNode, media);
+    return {media, kind, runRef:cloneSmartSettings(runNode.runRef || null)};
+}
+async function rerunSmartGeneratedMaterial(nodeId){
+    let node = nodes.find(item => item.id === nodeId);
+    const snapshot = smartActiveGenerationVersion(node);
+    if(!node || !snapshot || node.generationRerunPending) return;
+    pushUndo();
+    ensureSmartGenerationVersions(node);
+    node.generationRerunPending = true;
+    openSmartGenerationInfo(node.id);
+    const runNode = {id:uid('material-version-run'), type:SMART_NODE_TYPES.material, sourceExecutionNodeId:node.sourceExecutionNodeId || '', runSettings:cloneSmartSettings(snapshot.runSettings || {})};
+    try {
+        const result = smartGenerationNodeType(snapshot) === 'text_generation'
+            ? await runFixedTextGenerationSnapshot(snapshot, runNode)
+            : await runFixedMediaGenerationSnapshot(snapshot, runNode);
+        node = liveSmartNode(node);
+        const versions = ensureSmartGenerationVersions(node);
+        versions.push({
+            ...cloneSmartSettings(snapshot),
+            id:uid('version'),
+            images:cloneSmartSettings(result.media),
+            outputKind:result.kind,
+            title:cascadeOutputTitle(result.kind, result.media.length),
+            runRef:cloneSmartSettings(result.runRef || null),
+            createdAt:Date.now()
+        });
+        node.resultVersions = versions;
+        node.generationRerunPending = false;
+        applySmartGenerationVersion(node, versions.length - 1);
+        addSmartCanvasNoticeLog(capabilityUiText(`已生成版本 ${versions.length}`,`Generated version ${versions.length}`), node);
+        toast(capabilityUiText(`已生成版本 ${versions.length}`,`Generated version ${versions.length}`));
+        openSmartGenerationInfo(node.id);
+    } catch(error) {
+        node = liveSmartNode(node);
+        if(node) node.generationRerunPending = false;
+        if(runNode.runRef && String(runNode.runStatus || '') !== 'failed') await failCanvasRun(runNode, error).catch(() => {});
+        addSmartCanvasNoticeLog(error?.message || capabilityUiText('重新生成失败','Regeneration failed'), node);
+        errorToast((error?.message || capabilityUiText('重新生成失败','Regeneration failed')).slice(0, 160));
+        if(node) openSmartGenerationInfo(node.id);
+    } finally {
+        scheduleSave();
+        render();
+    }
+}
+function smartNodeToolbarHtml(node){
+    const isImageNode = isSmartImageNode(node);
+    const images = node?.images || [];
+    if(!isImageNode || !images.some(img => img?.url || isTextMediaItem(img))) return '';
+    const item = imageForDisplay(images[smartNodeToolbarImageIndex(node)] || images.find(img => img?.url));
+    if(!item || (!item.url && mediaKindForItem(item) !== 'text')) return '';
+    const kind = mediaKindForItem(item);
+    const isTextMaterial = kind === 'text';
+    if(isTextMaterial){
+        const actions = [
+            {key:'preview', icon:'eye', label:'编辑文本', enabled:true},
+            {key:'generation-info', icon:'info', label:capabilityUiText('显示生成信息','Show generation details'), enabled:smartNodeHasGenerationInfo(node)},
+            {key:'replace', icon:'upload', label:'上传素材', enabled:true},
+            {key:'template', icon:'library', label:'模板库', enabled:true},
+            {key:'download', icon:'download', label:'下载', enabled:Boolean(item.url)}
+        ];
+        return `<div class="smart-node-floating-menu" data-smart-node-menu="1">${actions.map(action => `
+            <button type="button" data-smart-node-action="${escapeAttr(action.key)}" data-node-id="${escapeAttr(node.id)}" ${action.enabled ? '' : 'disabled'} title="${escapeAttr(action.label)}">
+                <i data-lucide="${escapeAttr(action.icon)}"></i><span>${escapeHtml(action.label)}</span>
+            </button>`).join('')}</div>`;
+    }
+    const canTrimMedia = ['image','video','audio'].includes(kind);
     const canEditImage = kind === 'image';
-    const imageCount = images.filter(img => mediaKindForItem(imageForDisplay(img)) === 'image' && imageForDisplay(img)?.url).length;
-    const gridLabel = imageCount > 1 ? '宫格拼接' : '宫格切分';
+    const materialId = window.MaterialPromote?.materialIdFromUrl?.(item.url || '');
+    const resultId = item.resultId || window.MaterialPromote?.resultIdFromUrl?.(item.url || '');
     const actions = [
-        {key:'preview', icon:'eye', label:'预览', enabled:kind === 'image' || kind === 'video'},
-        {key:'crop', icon:'crop', label:'裁剪', enabled:canEditImage},
+        {key:'preview', icon:'eye', label:'预览', enabled:true},
+        {key:'generation-info', icon:'info', label:capabilityUiText('显示生成信息','Show generation details'), enabled:smartNodeHasGenerationInfo(node)},
+        {key:'promote', icon:'bookmark-plus', label:'收藏到资产素材', enabled:Boolean(materialId || resultId)},
+        {key:'crop', icon:'crop', label:'裁剪', enabled:canTrimMedia},
         {key:'outpaint', icon:'expand', label:'扩图', enabled:canEditImage},
         {key:'mask', icon:'brush', label:'遮罩', enabled:canEditImage},
         {key:'brush', icon:'paintbrush', label:'画笔', enabled:canEditImage},
-        {key:'grid', icon:'grid-3x3', label:gridLabel, enabled:canEditImage},
+        {key:'grid', icon:'grid-3x3', label:'图片宫格切分', enabled:canEditImage},
         ...(jimengImageProviderId() ? [{key:'upscale', icon:'maximize-2', label:tr('smart.jimengUpscaleAction'), enabled:canEditImage}] : []),
         {key:'download', icon:'download', label:'下载', enabled:true}
     ];
@@ -8206,14 +12377,41 @@ function duplicateSmartNodeMediaToCanvas(node, imageIndex){
     scheduleSave();
     toast('已添加到画布');
 }
-function runSmartNodeToolbarAction(nodeId, action){
+function extractResultGroupItemToCanvas(group, itemIndex){
+    const item = resultGroupMediaItems(group)[Number(itemIndex)];
+    if(!group || !item?.url){ toast('结果项不可用'); return; }
+    pushUndo();
+    const rect = nodeRect(group);
+    const newNode = createImageNodeAt({x:rect.x + rect.width + 220, y:rect.y + rect.height / 2}, [{...item}], {select:true, skipUndo:true, sourceKind:'reference'});
+    newNode.sourceKind = 'reference';
+    newNode.resultGroupId = group.id;
+    newNode.resultId = item.resultId || '';
+    selectedIds = [];
+    selectedImage = {nodeId:newNode.id, index:0};
+    render();
+    scheduleSave();
+    toast('已提取到画布');
+}
+async function runSmartNodeToolbarAction(nodeId, action){
     const node = nodes.find(n => n.id === nodeId);
     if(!node) return;
     const index = smartNodeToolbarImageIndex(node);
     const item = imageForDisplay(node.images?.[index]);
-    if(!item?.url) return;
+    if(!item || (!item.url && mediaKindForItem(item) !== 'text')) return;
     const kind = mediaKindForItem(item);
     selectedId = nodeId;
+    if(action === 'generation-info'){
+        openSmartGenerationInfo(nodeId);
+        return;
+    }
+    if(action === 'replace' && kind === 'text'){
+        pickMediaForTextMaterial(node);
+        return;
+    }
+    if(action === 'template' && kind === 'text'){
+        openPromptTemplatePanel(node.id, node.promptPresetId || '', {target:'text-material'});
+        return;
+    }
     selectedIds = [];
     selectedImage = {nodeId, index};
     if(action === 'download'){
@@ -8224,12 +12422,25 @@ function runSmartNodeToolbarAction(nodeId, action){
         duplicateSmartNodeMediaToCanvas(node, index);
         return;
     }
-    if(kind !== 'image' && action !== 'preview'){
-        toast('当前素材不支持该操作');
+    if(action === 'promote'){
+        await promoteSmartMaterial(item, item.name || '');
         return;
     }
     if(action === 'preview'){
-        openImagePreview(nodeId, index);
+        openSmartMaterialPreview(nodeId, index);
+        return;
+    }
+    if(action === 'crop' && kind === 'audio'){
+        openAudioMaterialPreview(nodeId, index);
+        return;
+    }
+    if(action === 'crop' && kind === 'video'){
+        openImageEditor(nodeId, index);
+        setImageEditMode('preview');
+        return;
+    }
+    if(kind !== 'image'){
+        toast('当前素材不支持该操作');
         return;
     }
     if(action === 'upscale'){
@@ -8239,9 +12450,43 @@ function runSmartNodeToolbarAction(nodeId, action){
     const modeMap = {crop:'crop', outpaint:'outpaint', mask:'mask', brush:'brush', grid:'grid'};
     openImageEditor(nodeId, index);
     setImageEditMode(modeMap[action] || 'preview', true);
-    if(action === 'grid' && canGridJoinCurrentNode()){
-        setGridOperationMode('join');
+}
+async function promoteSmartMaterial(itemOrId, name=''){
+    const item = typeof itemOrId === 'object' ? itemOrId : null;
+    const materialId = item ? window.MaterialPromote?.materialIdFromUrl?.(item.url || '') : String(itemOrId || '');
+    const resultId = item?.resultId || window.MaterialPromote?.resultIdFromUrl?.(item?.url || '');
+    if(!materialId && !resultId){
+        toast('这个素材暂时不能收藏');
+        return;
     }
+    await window.MaterialPromote.open({
+        materialId,
+        resultId,
+        name,
+        onSuccess:async () => {
+            await loadAssetLibrary();
+            toast('已收藏到资产素材');
+        },
+        onError:error => toast(error?.message || '收藏失败')
+    });
+}
+async function promoteSmartMaterialGroup(refs=[]){
+    const entries = (refs || []).map(ref => ({
+        kind:(ref?.item?.resultId || window.MaterialPromote?.resultIdFromUrl?.(ref?.item?.url || '')) ? 'result' : 'material',
+        id:ref?.item?.resultId || window.MaterialPromote?.resultIdFromUrl?.(ref?.item?.url || '') || window.MaterialPromote?.materialIdFromUrl?.(ref?.item?.url || ''),
+        name:ref?.item?.name || ''
+    })).filter(entry => entry.id);
+    const uniqueEntries = [...new Map(entries.map(entry => [`${entry.kind}:${entry.id}`, entry])).values()];
+    if(!uniqueEntries.length){ toast('分组内没有可收藏的素材'); return; }
+    await window.MaterialPromote.open({
+        entries:uniqueEntries,
+        name:`${uniqueEntries.length} 个素材`,
+        onSuccess:async () => {
+            await loadAssetLibrary();
+            toast(`已收藏 ${uniqueEntries.length} 个素材`);
+        },
+        onError:error => toast(error?.message || '收藏失败')
+    });
 }
 async function runJimengUpscale(node, index){
     node = liveSmartNode(node) || node;
@@ -8286,54 +12531,85 @@ async function runJimengUpscale(node, index){
         scheduleSave();
     }
 }
-// 智能分组顶部小菜单：整理排列 / 预览（整组左右切换）/ 宫格拼接 / 批量下载 / 解散分组。
-// 与多图节点的 smart-node-floating-menu 同款样式与定位（选中分组时浮在卡片上方）。
+// 智能分组顶部只保留面向集合的素材操作；整理和解散放在分组内部。
 function smartGroupToolbarHtml(node){
     if(!isSmartGroupNode(node)) return '';
-    const hasContent = (node.images || []).some(img => img?.url) || smartGroupMembers(node).length > 0;
-    const imageCount = (node.images || []).filter(img => img?.url).length;
+    const mediaRefs = smartGroupMediaRefs(node);
+    const imageRefs = smartGroupImageRefs(node)
+        .filter(ref => mediaKindForItem(ref.item) === 'image');
+    const promotable = mediaRefs.some(ref => Boolean(
+        ref.item.resultId ||
+        window.MaterialPromote?.resultIdFromUrl?.(ref.item.url || '') ||
+        window.MaterialPromote?.materialIdFromUrl?.(ref.item.url || '')
+    ));
     const actions = [
-        {key:'arrange', icon:'layout-grid', label:'整理排列', enabled:hasContent},
-        {key:'preview', icon:'eye', label:'预览', enabled:imageCount > 0},
-        {key:'grid', icon:'grid-3x3', label:'宫格拼接', enabled:imageCount > 1},
-        {key:'download', icon:'archive', label:'批量下载', enabled:imageCount > 0},
-        {key:'ungroup', icon:'ungroup', label:'解散分组', enabled:true}
+        {key:'preview', icon:'eye', label:'预览', enabled:mediaRefs.length > 0},
+        {key:'promote', icon:'bookmark-plus', label:'收藏到资产素材', enabled:promotable},
+        {key:'grid', icon:'grid-3x3', label:'图片宫格拼接', enabled:imageRefs.length > 1},
+        {key:'download', icon:'download', label:'下载', enabled:mediaRefs.length > 0},
+        {key:'arrange-menu', icon:'layout-grid', label:'整理排版', enabled:smartGroupMembers(node).length > 0}
     ];
-    return `<div class="smart-node-floating-menu" data-smart-group-menu="1">${actions.map(action => `
-        <button type="button" data-smart-group-action="${escapeAttr(action.key)}" data-node-id="${escapeAttr(node.id)}" ${action.enabled ? '' : 'disabled'} title="${escapeAttr(action.label)}">
+    const buttons = actions.map(action => {
+        const button = `<button type="button" data-smart-group-action="${escapeAttr(action.key)}" data-node-id="${escapeAttr(node.id)}" ${action.enabled ? '' : 'disabled'} title="${escapeAttr(action.label)}">
             <i data-lucide="${escapeAttr(action.icon)}"></i><span>${escapeHtml(action.label)}</span>
-        </button>`).join('')}</div>`;
+        </button>`;
+        if(action.key !== 'arrange-menu') return button;
+        return `<div class="smart-group-arrange-control">
+            ${button}
+            <div class="smart-group-arrange-menu ${openSmartGroupArrangeMenuId === node.id ? 'open' : ''}" data-smart-group-arrange-menu="${escapeAttr(node.id)}">
+                <button type="button" data-smart-group-layout="horizontal" data-node-id="${escapeAttr(node.id)}"><i data-lucide="rows-3"></i><span>水平布局</span></button>
+                <button type="button" data-smart-group-layout="vertical" data-node-id="${escapeAttr(node.id)}"><i data-lucide="columns-3"></i><span>垂直布局</span></button>
+                <button type="button" data-smart-group-layout="grid" data-node-id="${escapeAttr(node.id)}"><i data-lucide="grid-3x3"></i><span>宫格布局</span></button>
+            </div>
+        </div>`;
+    }).join('');
+    return `<div class="smart-node-floating-menu ${openSmartGroupArrangeMenuId === node.id ? 'arrange-menu-open' : ''}" data-smart-group-menu="1">${buttons}</div>`;
 }
-function runSmartGroupToolbarAction(nodeId, action){
+async function runSmartGroupToolbarAction(nodeId, action){
     const group = nodes.find(n => n.id === nodeId);
     if(!isSmartGroupNode(group)) return;
     selectedId = nodeId;
     selectedIds = [];
     selectedImage = {nodeId:'', index:-1};
-    if(action === 'arrange'){
-        if(arrangeSmartGroupMembers(group)){ render(); scheduleSave(); toast('已整理分组'); }
-        else toast('分组内没有可整理的节点');
+    if(action === 'arrange-menu'){
+        openSmartGroupArrangeMenuId = openSmartGroupArrangeMenuId === group.id ? '' : group.id;
+        render();
         return;
     }
     if(action === 'ungroup'){ ungroupNode(nodeId); return; }
-    // 图片已收进分组（group.images），预览/下载/拼接直接复用单节点机器（分组就是一个多图容器）。
-    const imageCount = (group.images || []).filter(img => img?.url).length;
-    if(!imageCount){ toast('分组内没有图片'); return; }
+    const refs = smartGroupMediaRefs(group);
+    if(!refs.length){ toast('分组内没有可操作的素材'); return; }
     if(action === 'preview'){
-        const first = (group.images || []).findIndex(img => img?.url);
-        openImagePreview(nodeId, Math.max(0, first));
+        const first = refs[0];
+        if(!first) return;
+        const kind = mediaKindForItem(first.item);
+        if(kind === 'text') openTextMaterialEditor(first.nodeId, first.index);
+        else if(kind === 'video') smartActivateVideoPreview(world.querySelector(`.image-node[data-id="${CSS.escape(first.nodeId)}"] [data-image-index="${first.index}"]`) || world.querySelector(`.image-node[data-id="${CSS.escape(first.nodeId)}"]`));
+        else if(kind === 'audio') world.querySelector(`.image-node[data-id="${CSS.escape(first.nodeId)}"] audio`)?.play?.().catch(() => {});
+        else openGroupImagePreview(group, first.nodeId, first.index);
         return;
     }
-    if(action === 'download'){ zipDownloadImageItems(group.title, (group.images || []).map(imageForDisplay)); return; }
-    if(action === 'grid'){
-        if(imageCount <= 1){ toast('分组至少需要 2 张图片才能宫格拼接'); return; }
-        const first = (group.images || []).findIndex(img => img?.url);
-        openImageEditor(nodeId, Math.max(0, first));
-        if(imageEditModal.classList.contains('open')){
-            setImageEditMode('grid', true);
-            setGridOperationMode('join');
-        }
+    if(action === 'promote'){
+        const promotable = refs.filter(ref => ref.item.resultId || window.MaterialPromote?.resultIdFromUrl?.(ref.item.url || '') || window.MaterialPromote?.materialIdFromUrl?.(ref.item.url || ''));
+        await promoteSmartMaterialGroup(promotable);
         return;
+    }
+    if(action === 'download'){ zipDownloadImageItems(group.title, refs.map(ref => ref.item)); return; }
+    if(action === 'grid'){
+        openGroupGridJoin(group);
+        return;
+    }
+}
+function applySmartGroupLayout(nodeId, mode){
+    const group = nodes.find(node => node.id === nodeId && isSmartGroupNode(node));
+    if(!group) return;
+    if(arrangeSmartGroupMembers(group, {mode})){
+        openSmartGroupArrangeMenuId = '';
+        render();
+        scheduleSave();
+        toast(mode === 'horizontal' ? '已水平排列' : mode === 'vertical' ? '已垂直排列' : '已宫格排列');
+    } else {
+        toast('分组内没有可整理的节点');
     }
 }
 function nowMs(){ return Date.now(); }
@@ -8352,9 +12628,8 @@ function nodeRunElapsedMs(node){
 function runTimePillHtml(node){
     if(!node || node.runTimerHidden || node.type === 'smart-prompt') return '';
     const running = Boolean(node.pending || node.running || node.jimengPending);
-    if(!running && !node.runFinishedAt) return '';
-    const cls = running ? '' : ' done';
-    return `<span class="run-time-pill${cls}" data-run-timer="${escapeHtml(node.id)}">${formatRunDuration(nodeRunElapsedMs(node))}</span>`;
+    if(!running) return '';
+    return `<span class="run-time-pill" data-run-timer="${escapeHtml(node.id)}">${formatRunDuration(nodeRunElapsedMs(node))}</span>`;
 }
 function hideRunTimerForNode(node){
     if(!node || node.runTimerHidden || node.pending || node.running || node.jimengPending || !node.runFinishedAt) return false;
@@ -8363,15 +12638,14 @@ function hideRunTimerForNode(node){
     return true;
 }
 function refreshRunTimerPills(){
-    const active = nodes.some(n => n.type !== 'smart-prompt' && !n.runTimerHidden && (n.pending || n.running || n.jimengPending || n.runFinishedAt));
+    const active = nodes.some(n => n.type !== 'smart-prompt' && !n.runTimerHidden && (n.pending || n.running || n.jimengPending));
     document.querySelectorAll('[data-run-timer]').forEach(el => {
         const node = nodes.find(n => n.id === el.dataset.runTimer);
-        if(!node || node.runTimerHidden || node.type === 'smart-prompt') {
+        if(!node || node.runTimerHidden || node.type === 'smart-prompt' || !(node.pending || node.running || node.jimengPending)) {
             el.remove();
             return;
         }
         el.textContent = formatRunDuration(nodeRunElapsedMs(node));
-        el.classList.toggle('done', Boolean(!node.pending && !node.running && !node.jimengPending && node.runFinishedAt));
     });
     if(active && !runTimerInterval) runTimerInterval = setInterval(refreshRunTimerPills, 1000);
     if(!active && runTimerInterval){ clearInterval(runTimerInterval); runTimerInterval = null; }
@@ -8387,6 +12661,7 @@ function rememberInlineVideoActivations(){
     });
 }
 function render(){
+    const editableState = captureCanvasEditableState(document.activeElement);
     if(smartWorkflowTransferModal?.classList.contains('open')) updateSmartWorkflowTransferMeta();
     rememberInlineVideoActivations();
     world.classList.toggle('smart-multi-selected', selectedNodeIds().length > 1);
@@ -8408,36 +12683,44 @@ function render(){
         .sort((a, b) => (isSmartGroupNode(a) ? 0 : 1) - (isSmartGroupNode(b) ? 0 : 1))
         .map(node => {
         const imgs = node.images || [];
-        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : node.type === 'smart-minimax' ? 'MiniMax H3' : (imgs.length > 1 ? 'Group' : imgs.length ? 'Image' : escapeHtml(tr('smart.createImportNode')));
+        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : isSmartResultGroupNode(node) ? (node.title || '结果组') : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : node.type === 'smart-minimax' ? 'MiniMax H3' : isSmartExecutionNode(node) ? SMART_NODE_CONTRACT.titleForType(node.type) : (imgs.length > 1 ? '素材组' : imgs[0]?.name || escapeHtml(tr('smart.createMaterial') || '素材'));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
         const isLoop = node.type === 'smart-loop';
         const isMinimax = node.type === 'smart-minimax';
         const isSmartGroup = node.type === 'smart-group';
+        const isResultGroup = isSmartResultGroupNode(node);
+        const isExecution = isSmartExecutionNode(node);
+        const failedRunPlaceholder = !isExecution && node.isRunPlaceholder === true && String(node.runStatus || '') === 'failed';
+        const executionFailureBadge = '';
+        const canResize = !isExecution;
         const isCompactMember = isSmartGroupCompactMember(node);
-        const isImageNode = node.type === 'smart-image' || !node.type;
+        const isImageNode = isSmartImageNode(node);
         const isJimengPending = Boolean(node.jimengPending && node.jimengPending.submitId && imgs.length === 0);
         const isQueued = Boolean(node.queued && imgs.length === 0 && !node.pending && !isJimengPending);
-        const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isQueued && !isJimengPending;
+        const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isQueued && !isJimengPending && !failedRunPlaceholder;
         const isHistory = isHistoryGroupNode(node);
         const isGroup = isImageNode && imgs.length > 1;
         const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
         const deleteBtn = (isGroup || isMinimax) ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
         const hint = isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isMinimax ? 'Timeline editing' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
+        const hasResultVersions = smartGenerationVersions(node).length > 1;
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup || isResultGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartGroup && openSmartGroupArrangeMenuId === node.id ? 'arrange-menu-open' : ''} ${isResultGroup ? 'smart-result-group-node' : ''} ${isExecution ? 'smart-execution-node' : ''} ${failedRunPlaceholder ? 'node-run-failed' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${hasResultVersions ? 'has-result-versions' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
 
+            ${executionFailureBadge}
             <div class="node-head"><div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div></div>
             ${!isEmpty && !isGroup && !isMinimax ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
-            ${smartNodeToolbarHtml(node)}${smartGroupToolbarHtml(node)}
+            ${smartNodeToolbarHtml(node)}${smartGroupToolbarHtml(node)}${runningHubTargetBadgesHtml(node)}
+            ${smartResultVersionSwitcherHtml(node)}
             ${runTimePillHtml(node)}
             <div class="node-body">${body}</div>
             ${isCompactMember && (isPrompt || isLoop) ? '<div class="smart-group-member-grab" title="拖动移出分组"></div>' : ''}
-            <div class="node-hint">${hint}</div>
-            ${imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isMinimax || isSmartGroup ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
+            <div class="node-hint">${isResultGroup ? escapeHtml(tr('smart.resultGroupHint')) : hint}</div>
+            ${isSmartGroup ? '<div class="node-resize-handle" data-resize="1" data-resize-corner="nw"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="ne"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="sw"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="se"></div>' : canResize && (imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isMinimax) ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
             <div class="node-port port-in" data-port="in" title="input"></div>
-            <div class="node-port port-out" data-port="out" title="output"></div>
+            <div class="node-port port-out" data-port="out" title="${isResultGroup ? escapeAttr(tr('smart.resultGroupConnectAll')) : 'output'}"></div>
         </div>`;
         return {node, html};
     });
@@ -8478,6 +12761,7 @@ function render(){
     syncSmartSelectedImageResolution(world);
     measureSmartNodeImages();
     refreshRunTimerPills();
+    if(editableState) restoreCanvasEditableState(editableState);
     return;
     world.innerHTML = '';
     if(composerEl) world.appendChild(composerEl);
@@ -8490,7 +12774,7 @@ function render(){
         const isPrompt = node.type === 'smart-prompt';
         const isLoop = node.type === 'smart-loop';
         const isMinimax = node.type === 'smart-minimax';
-        const isImageNode = node.type === 'smart-image' || !node.type;
+        const isImageNode = isSmartImageNode(node);
         const isQueued = Boolean(node.queued && imgs.length === 0 && !node.pending);
         const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isQueued;
         const isGroup = isImageNode && imgs.length > 1;
@@ -8542,10 +12826,11 @@ function measureSmartNodeImages(){
                 delete image.layout_h;
                 applyThumbDisplaySizeToElement(itemEl, image, Math.max(itemEl?.clientWidth || 0, itemEl?.clientHeight || 0));
                 updateImageResolutionBadgeElement(itemEl, image);
-                if(!isSmartGroupNode(node) && (node.images || []).length === 1 && !node.w && !node.h){
+                if(!isSmartGroupNode(node) && (node.images || []).length === 1 && !singleMaterialHasManualSize(node, image)){
                     const layout = singleImageLayout(image, node, mediaNodeDefaultScale(node));
                     node.w = layout.width;
                     node.h = layout.height;
+                    node.mediaSizeMode = 'auto';
                 }
                 updateNodeElementDuringResize(node);
                 if(containerNode && containerNode.id !== node.id) updateNodeElementDuringResize(containerNode);
@@ -8572,10 +12857,11 @@ function measureSmartNodeImages(){
             }
             applyThumbDisplaySizeToElement(itemEl, image, Math.max(itemEl?.clientWidth || 0, itemEl?.clientHeight || 0));
             updateImageResolutionBadgeElement(itemEl, image);
-            if(!isSmartGroupNode(node) && (node.images || []).length === 1 && !node.w && !node.h){
+            if(!isSmartGroupNode(node) && (node.images || []).length === 1 && !singleMaterialHasManualSize(node, image)){
                 const layout = singleImageLayout(image, node, mediaNodeDefaultScale(node));
                 node.w = layout.width;
                 node.h = layout.height;
+                node.mediaSizeMode = 'auto';
             }
             updateNodeElementDuringResize(node);
             if(containerNode && containerNode.id !== node.id) updateNodeElementDuringResize(containerNode);
@@ -8604,22 +12890,27 @@ function bindConnectionEvents(){
     });
 }
 function ensurePortDragPathElement(){
+    return ensurePortDragPathElements(1)[0] || null;
+}
+function ensurePortDragPathElements(count=1){
     const svg = world.querySelector('svg.connection-layer');
-    if(!svg) return null;
-    let path = svg.querySelector('path.port-drag-temp');
-    if(!path){
-        path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    if(!svg) return [];
+    const paths = [...svg.querySelectorAll('path.port-drag-temp')];
+    while(paths.length < Math.max(1, Number(count) || 1)){
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         path.setAttribute('class', 'port-drag-temp conn-pending');
         path.setAttribute('stroke', 'rgba(100,116,139,0.92)');
         path.setAttribute('stroke-width', '1.9');
         path.setAttribute('fill', 'none');
         path.setAttribute('stroke-linecap', 'round');
         svg.appendChild(path);
+        paths.push(path);
     }
-    return path;
+    paths.slice(Math.max(1, Number(count) || 1)).forEach(path => path.remove());
+    return paths.slice(0, Math.max(1, Number(count) || 1));
 }
 function clearPortDragVisual(){
-    world.querySelector('path.port-drag-temp')?.remove();
+    world.querySelectorAll('path.port-drag-temp').forEach(path => path.remove());
     world.querySelectorAll('.node-port.is-active').forEach(el => el.classList.remove('is-active'));
     world.querySelectorAll('.image-node.port-hover').forEach(el => el.classList.remove('port-hover'));
 }
@@ -9523,20 +13814,72 @@ function bindScrollableText(el){
         if(textSelectionGuard?.el === el) textSelectionGuard.wheelUntil = Date.now() + 180;
     }, {passive:true});
 }
+function connectionNodeHitAtPoint(clientX, clientY, eventTarget=null){
+    const stack = typeof document.elementsFromPoint === 'function'
+        ? document.elementsFromPoint(clientX, clientY)
+        : [];
+    const topHit = stack[0] || document.elementFromPoint(clientX, clientY);
+    const hitStack = [...stack, topHit].filter(Boolean);
+    const targetEl = eventTarget?.nodeType === 1 ? eventTarget : null;
+    const targetNodeEl = targetEl?.closest?.('.image-node') || (targetEl?.matches?.('.image-node') ? targetEl : null);
+    const targetOwnedOverlay = targetEl?.closest?.('[data-smart-node-id]') || (targetEl?.matches?.('[data-smart-node-id]') ? targetEl : null);
+    const targetOwnedNodeId = String(targetOwnedOverlay?.dataset?.smartNodeId || '').trim();
+    const directNodeEl = hitStack
+        .map(el => el?.closest?.('.image-node') || (el?.matches?.('.image-node') ? el : null))
+        .find(Boolean);
+    const ownedOverlay = hitStack
+        .map(el => el?.closest?.('[data-smart-node-id]') || (el?.matches?.('[data-smart-node-id]') ? el : null))
+        .find(Boolean);
+    const ownedNodeId = String(ownedOverlay?.dataset?.smartNodeId || '').trim();
+    const composerHit = topHit?.closest?.('.composer');
+    let nodeEl = null;
+    if(targetNodeEl) nodeEl = targetNodeEl;
+    else if(targetOwnedNodeId && world){
+        nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(targetOwnedNodeId)}"]`);
+    }
+    if(!nodeEl && ownedNodeId && world){
+        nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(ownedNodeId)}"]`);
+    }
+    if(!nodeEl) nodeEl = directNodeEl || null;
+    if(!nodeEl && composerHit && composer?.classList?.contains('open')){
+        const subject = activeComposerNode();
+        if(subject?.id && world) nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(subject.id)}"]`);
+    }
+    if(!nodeEl && (topHit === world || topHit?.closest?.('#world'))){
+        nodeEl = [...world.querySelectorAll('.image-node')].reverse().find(candidate => {
+            const rect = candidate.getBoundingClientRect();
+            return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+        }) || null;
+    }
+    const nodeId = String(nodeEl?.dataset?.id || '').trim();
+    const portEl = targetEl?.closest?.('.node-port') || topHit?.closest?.('.node-port');
+    return {
+        hit:topHit || null,
+        nodeEl,
+        nodeId,
+        portEl:portEl?.closest?.('.image-node') === nodeEl ? portEl : null
+    };
+}
 function updatePortDragVisual(){
     if(!portDragState) return;
-    const fromNode = nodes.find(n => n.id === portDragState.fromId);
-    if(!fromNode) return;
-    const fr = nodeRect(fromNode);
     const isOut = portDragState.fromPort === 'out';
-    const fx = isOut ? fr.x + fr.width : fr.x;
-    const fy = fr.y + fr.height / 2;
     const tx = portDragState.currentWorld.x;
     const ty = portDragState.currentWorld.y;
-    const dx = Math.max(50, Math.abs(tx - fx) * 0.45);
     const sign = isOut ? 1 : -1;
-    const path = ensurePortDragPathElement();
-    if(path) path.setAttribute('d', `M${fx} ${fy} C ${fx + dx * sign} ${fy}, ${tx - dx * sign} ${ty}, ${tx} ${ty}`);
+    const fromIds = isOut && portDragState.fromIds?.length ? portDragState.fromIds : [portDragState.fromId];
+    const paths = ensurePortDragPathElements(fromIds.length);
+    fromIds.forEach((fromId, index) => {
+        const fromNode = nodes.find(n => n.id === fromId);
+        const path = paths[index];
+        if(!fromNode || !path) return;
+        const fr = nodeRect(fromNode);
+        const isPrimary = fromId === portDragState.fromId;
+        const fx = isPrimary && Number.isFinite(Number(portDragState.fromWorld?.x)) ? Number(portDragState.fromWorld.x) : (isOut ? fr.x + fr.width : fr.x);
+        const fy = isPrimary && Number.isFinite(Number(portDragState.fromWorld?.y)) ? Number(portDragState.fromWorld.y) : (fr.y + fr.height / 2);
+        const dx = Math.max(50, Math.abs(tx - fx) * 0.45);
+        path.setAttribute('data-source-node-id', fromId);
+        path.setAttribute('d', `M${fx} ${fy} C ${fx + dx * sign} ${fy}, ${tx - dx * sign} ${ty}, ${tx} ${ty}`);
+    });
     world.querySelectorAll('.node-port.is-active').forEach(el => el.classList.remove('is-active'));
     world.querySelectorAll('.image-node.port-hover').forEach(el => el.classList.remove('port-hover'));
     if(portDragState.hoverTargetId){
@@ -9545,32 +13888,79 @@ function updatePortDragVisual(){
         targetNodeEl?.querySelector(`.node-port[data-port="${portDragState.hoverPort}"]`)?.classList.add('is-active');
     }
 }
+function beginNodeConnectionDrag(event, sourceNodeId=''){
+    const sourceResultId = arguments[2] || '';
+    const selected = selectedNodeIds().filter(id => nodes.some(node => node.id === id));
+    const sourceIsSelected = selected.includes(sourceNodeId);
+    const fromIds = sourceIsSelected ? selected : [sourceNodeId].filter(id => nodes.some(node => node.id === id));
+    if(!fromIds.length) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+    const primaryId = sourceNodeId || (fromIds.includes(selectedId) ? selectedId : fromIds[0]);
+    const primary = nodes.find(node => node.id === primaryId);
+    if(!primary) return false;
+    const rect = nodeRect(primary);
+    portDragState = {
+        fromId:primaryId,
+        fromIds,
+        sourceResultIds:Object.fromEntries(fromIds.map(id => [id, id === primaryId ? String(sourceResultId || '') : ''])),
+        fromPort:'out',
+        sourceResultId:'',
+        fromWorld:{x:rect.x + rect.width, y:rect.y + rect.height / 2},
+        currentWorld:screenToWorld(event),
+        hoverTargetId:'',
+        hoverPort:'',
+        moved:false
+    };
+    shell.classList.add('port-dragging');
+    capturePendingUndo();
+    ensurePortDragPathElement();
+    updatePortDragVisual();
+    return true;
+}
 function handlePortDrop(drag, e){
-    const {targetId, targetPort, hit} = (() => {
-        const hitEl = document.elementFromPoint(e.clientX, e.clientY);
-        const portEl = hitEl?.closest?.('.node-port');
-        const nodeEl = portEl?.closest?.('.image-node') || hitEl?.closest?.('.image-node');
-        let id = '', port = '';
-        if(nodeEl && nodeEl.dataset.id && nodeEl.dataset.id !== drag.fromId){
+    const {targetId, targetPort, targetSourceResultId, hit} = (() => {
+        const nodeHit = connectionNodeHitAtPoint(e.clientX, e.clientY, e.target);
+        const hitEl = nodeHit.hit;
+        const portEl = nodeHit.portEl;
+        const nodeEl = nodeHit.nodeEl;
+        let id = '', port = '', sourceResultId = '';
+        if(nodeEl && nodeEl.dataset.id && !(drag.fromIds || [drag.fromId]).includes(nodeEl.dataset.id)){
             id = nodeEl.dataset.id;
             if(portEl){
                 port = portEl.dataset.port;
+                sourceResultId = String(portEl.dataset.sourceResultId || '').trim();
             } else {
-                const rect = nodeEl.getBoundingClientRect();
-                port = (e.clientX - rect.left) < rect.width / 2 ? 'in' : 'out';
+                port = drag.fromPort === 'out' ? 'in' : 'out';
             }
         }
-        return {targetId:id, targetPort:port, hit:hitEl};
+        return {targetId:id, targetPort:port, targetSourceResultId:sourceResultId, hit:hitEl};
     })();
     if(targetId){
         const compatible = (drag.fromPort === 'out' && targetPort === 'in') || (drag.fromPort === 'in' && targetPort === 'out');
         if(!compatible){ discardPendingUndo(); render(); return; }
-        const fromId = drag.fromPort === 'out' ? drag.fromId : targetId;
+        const fromIds = drag.fromPort === 'out' ? (drag.fromIds?.length ? drag.fromIds : [drag.fromId]) : [targetId];
         const toId = drag.fromPort === 'out' ? targetId : drag.fromId;
-        if(connectInputNode(fromId, toId)){
+        const targetNode = nodes.find(node => node.id === toId);
+        if(drag.fromPort === 'out' && fromIds.length > 1 && targetNode?.type === SMART_NODE_TYPES.aiApp){
+            startRunningHubConnectionQueue(fromIds, toId, drag.sourceResultIds || {}, drag.sourceResultId || '', e);
+            return;
+        }
+        const outcomes = fromIds.map(fromId => {
+            const sourceResultId = drag.fromPort === 'out'
+                ? (drag.sourceResultIds?.[fromId] || drag.sourceResultId || '')
+                : targetSourceResultId;
+            return connectInputNodeWithTargetField(fromId, toId, {sourceResultId}, e);
+        });
+        const connected = outcomes.some(outcome => outcome === true);
+        const pending = outcomes.some(outcome => outcome === 'pending');
+        if(connected){
             commitPendingUndo();
             render();
             scheduleSave();
+        } else if(pending){
+            return;
         } else {
             discardPendingUndo();
             render();
@@ -9581,16 +13971,14 @@ function handlePortDrop(drag, e){
     if(hit?.closest?.('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.smart-minimap')){
         discardPendingUndo(); render(); return;
     }
-    const p = screenToWorld(e);
-    undoSuppressed = true;
-    const newNode = createImageNodeAt(p, [], {select:true, skipUndo:true});
-    undoSuppressed = false;
-    const fromId = drag.fromPort === 'out' ? drag.fromId : newNode.id;
-    const toId = drag.fromPort === 'out' ? newNode.id : drag.fromId;
-    connectInputNode(fromId, toId);
-    commitPendingUndo();
-    render();
-    scheduleSave();
+    createMenuConnection = {
+        fromId:drag.fromId,
+        fromIds:drag.fromIds?.length ? drag.fromIds : [drag.fromId],
+        fromPort:drag.fromPort,
+        sourceResultId:drag.sourceResultId || '',
+        sourceResultIds:drag.sourceResultIds || {}
+    };
+    openCreateMenu(e, {connection:createMenuConnection, keepOpenOnNextClick:true});
 }
 function pickMediaForSmartNode(nodeId){
     const input = document.createElement('input');
@@ -9608,24 +13996,78 @@ function pickMediaForSmartNode(nodeId){
     document.body.appendChild(input);
     input.click();
 }
+function pickMediaForTextMaterial(node){
+    if(!node) return;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*,video/*,audio/*,.txt,.md,.markdown,.json,.csv,.srt,.vtt';
+    input.onchange = async () => {
+        const file = input.files?.[0];
+        input.remove();
+        if(!file) return;
+        try {
+            await replaceTextMaterialFromFiles(node, [file]);
+        } catch(error) {
+            toast((error.message || '替换素材失败').slice(0, 160));
+        }
+    };
+    input.style.position = 'fixed';
+    input.style.left = '-9999px';
+    input.style.top = '-9999px';
+    input.style.opacity = '0';
+    document.body.appendChild(input);
+    input.click();
+}
+async function replaceTextMaterialFromFiles(node, files=[]){
+    const file = [...(files || [])][0];
+    if(!node || !file) return;
+    pushUndo();
+    if(isSupportedTextFile(file)){
+        const text = await file.text();
+        const item = node.images?.[0] || {kind:'text'};
+        item.kind = 'text';
+        item.text = text;
+        item.content = text;
+        item.url = '';
+        item.name = file.name || '导入文本.md';
+        node.images = [item];
+        node.title = item.name;
+    } else {
+        const uploaded = await uploadFiles([file]);
+        if(!uploaded?.length) throw new Error('素材上传失败');
+        node.images = [{...uploaded[0], kind:uploaded[0].kind || mediaKindForFile(file)}];
+        node.title = node.images[0].name || file.name || '素材';
+    }
+    render();
+    scheduleSave();
+}
 function bindNodeEvents(){
     world.querySelectorAll('.image-node').forEach(el => {
         const id = el.dataset.id;
         const nodeForControls = nodes.find(n => n.id === id);
+        const textMaterial = nodeForControls?.type === SMART_NODE_TYPES.material
+            && (nodeForControls.images || []).length === 1
+            && isTextMediaItem(nodeForControls.images[0]);
+        if(textMaterial){
+            el.addEventListener('contextmenu', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                beginSmartInlineTextEdit(id, 0);
+            }, true);
+        }
+        el.addEventListener('dblclick', event => {
+            if(!event.shiftKey) return;
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            focusSmartNodeInViewport(id);
+        }, true);
         if(nodeForControls?.type === 'smart-prompt') bindPromptNodeControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-loop') bindLoopNodeControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-minimax') bindMinimaxNodeControls(el, nodeForControls);
-        if(nodeForControls?.type === 'smart-group') {
-            el.ondblclick = e => {
-                e.preventDefault();
-                e.stopPropagation();
-                selectedId = id;
-                selectedIds = [];
-                selectedImage = {nodeId:'', index:-1};
-                openCreateMenu(e, {groupId:id});
-            };
-        }
+        if(nodeForControls?.type === 'smart-group') el.ondblclick = e => { e.preventDefault(); e.stopPropagation(); };
         el.onclick = e => {
+            if(e.target.closest?.('.media-text-inline-editor')) return;
             e.stopPropagation();
             if(Date.now() < suppressNodeClickUntil) return;
             const node = nodes.find(n => n.id === id);
@@ -9642,7 +14084,13 @@ function bindNodeEvents(){
             }
             render();
         };
-        if(nodeForControls?.type !== 'smart-group') el.ondblclick = e => e.stopPropagation();
+        if(nodeForControls?.type !== 'smart-group') el.ondblclick = e => {
+            e.stopPropagation();
+            if(isSmartExecutionNode(nodeForControls)){
+                e.preventDefault();
+                focusSmartNodeInViewport(id);
+            }
+        };
         const nodeDrop = el.querySelector('.node-drop');
         nodeDrop?.addEventListener('mousedown', e => {
             if(e.button !== 0) return;
@@ -9678,12 +14126,37 @@ function bindNodeEvents(){
                 runSmartNodeToolbarAction(btn.dataset.nodeId || id, btn.dataset.smartNodeAction);
             });
         });
+        el.querySelectorAll('[data-result-version]').forEach(btn => {
+            btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+            btn.addEventListener('click', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                applySmartGenerationVersion(nodes.find(node => node.id === (btn.dataset.nodeId || id)), Number(btn.dataset.resultVersion));
+            });
+        });
         el.querySelectorAll('[data-smart-group-action]').forEach(btn => {
             btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
             btn.addEventListener('click', e => {
                 e.preventDefault();
                 e.stopPropagation();
                 runSmartGroupToolbarAction(btn.dataset.nodeId || id, btn.dataset.smartGroupAction);
+            });
+        });
+        el.querySelectorAll('[data-smart-group-layout]').forEach(btn => {
+            btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+            btn.addEventListener('click', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                applySmartGroupLayout(btn.dataset.nodeId || id, btn.dataset.smartGroupLayout || 'grid');
+            });
+        });
+        el.querySelectorAll('[data-result-group-extract]').forEach(btn => {
+            btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+            btn.addEventListener('click', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                const group = nodes.find(node => node.id === id && isSmartResultGroupNode(node));
+                extractResultGroupItemToCanvas(group, Number(btn.dataset.resultGroupExtract));
             });
         });
         el.querySelectorAll('[data-jimeng-query]').forEach(btn => {
@@ -9698,6 +14171,14 @@ function bindNodeEvents(){
             btn.addEventListener('click', e => {
                 e.preventDefault(); e.stopPropagation();
                 querySmartImageTaskNow(btn.dataset.imageTaskQuery, btn.dataset.taskId);
+            });
+        });
+        el.querySelectorAll('[data-cancel-run]').forEach(btn => {
+            btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+            btn.addEventListener('click', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                cancelExecutionResultRun(btn.dataset.cancelRun);
             });
         });
         el.querySelectorAll('[data-thumb-scroll]').forEach(scroller => {
@@ -9735,6 +14216,8 @@ function bindNodeEvents(){
             }, true);
         });
         el.querySelectorAll('.smart-video-play').forEach(btn => {
+            if(btn.dataset.smartVideoPlayBound === '1') return;
+            btn.dataset.smartVideoPlayBound = '1';
             btn.addEventListener('mousedown', e => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -9752,8 +14235,20 @@ function bindNodeEvents(){
                 clearImageClickTimer();
                 suppressImageClickUntil = Date.now() + 260;
                 hideRunTimerForNode(owner);
+                const activeVideo = item?.querySelector('video[data-inline-video-active="1"],video[data-url]');
+                if(activeVideo){
+                    toggleSmartInlineVideoPlayback(activeVideo, owner?.images?.[imageIndex] || null);
+                    return;
+                }
                 smartActivateVideoPreview(btn);
             }, true);
+        });
+        el.querySelectorAll('video[data-inline-video-active="1"]').forEach(video => {
+            const item = video.closest('[data-image-index]');
+            const targetNodeId = item?.dataset.refNodeId || id;
+            const imageIndex = Number(item?.dataset.refImageIndex ?? item?.dataset.imageIndex ?? 0);
+            const owner = nodes.find(n => n.id === targetNodeId);
+            bindSmartInlineVideoControls(video, owner?.images?.[imageIndex] || null);
         });
         el.querySelectorAll('.thumb-item,.image-wrap').forEach(item => {
             const thumbTarget = () => {
@@ -9767,7 +14262,6 @@ function bindNodeEvents(){
                 e.preventDefault();
             });
             item.addEventListener('mousedown', e => {
-                if(e.target.closest('video,audio')) return;
                 if(e.button !== 0 || e.target.closest('.image-delete,.image-name-badge')) return;
                 if(e.detail < 2) return;
                 e.preventDefault();
@@ -9776,10 +14270,8 @@ function bindNodeEvents(){
                 clearImageClickTimer();
                 suppressImageClickUntil = Date.now() + 260;
                 const target = thumbTarget();
-                if(mediaKindForItem(target.image || {}) === 'video'){
-                    smartActivateVideoPreview(item);
-                    return;
-                }
+                openSmartMaterialPreview(target.targetNodeId, target.imageIndex, item);
+                return;
                 selectedId = id;
                 selectedIds = [];
                 selectedImage = {nodeId:target.targetNodeId, index:target.imageIndex};
@@ -9824,7 +14316,6 @@ function bindNodeEvents(){
                 }, 220);
             });
         item.addEventListener('dblclick', e => {
-            if(e.target.closest('video,audio')) return;
             if(e.target.closest('.image-delete,.image-name-badge')) return;
             e.preventDefault();
             e.stopPropagation();
@@ -9832,14 +14323,10 @@ function bindNodeEvents(){
             clearImageClickTimer();
             suppressImageClickUntil = Date.now() + 260;
             const target = thumbTarget();
-            if(mediaKindForItem(target.image || {}) === 'video'){
-                smartActivateVideoPreview(item);
-                return;
-            }
             selectedId = id;
             selectedIds = [];
             selectedImage = {nodeId:target.targetNodeId, index:target.imageIndex};
-            openImagePreviewSmart(target.targetNodeId, target.imageIndex);
+            openSmartMaterialPreview(target.targetNodeId, target.imageIndex, item);
         }, true);
         });
         el.querySelectorAll('.thumb-item,.smart-group-single-thumb').forEach(item => {
@@ -9860,33 +14347,17 @@ function bindNodeEvents(){
                 capturePendingUndo();
             });
         });
-        el.querySelector('.node-resize-handle')?.addEventListener('mousedown', e => {
+        el.querySelectorAll('.node-resize-handle').forEach(handle => handle.addEventListener('mousedown', e => {
             if(e.button !== 0) return;
             e.preventDefault(); e.stopPropagation();
             const node = nodes.find(n => n.id === id);
             if(!node) return;
+            if(isSmartExecutionNode(node)) return;
             const rect = nodeRect(node);
-            resizeState = {id, startX:e.clientX, startY:e.clientY, startW:rect.width, startH:rect.height};
-            // 分组缩放：记录本次手势开始时所有成员的位置/尺寸快照与起始缩放，缩放过程按相对快照的比例实时计算，
-            // 整体等比缩放+重排。用快照而非持久基准，移动成员后再缩放也不会回退到旧位置。
-            if(isSmartGroupNode(node)){
-                resizeState.startZoom = smartGroupZoom(node);
-                const gx0 = Number(node.x) || 0, gy0 = Number(node.y) || 0;
-                let maxR = gx0, maxB = gy0, hasM = false;
-                resizeState.members = smartGroupMembers(node).map(m => {
-                    const r = nodeRect(m);
-                    const sx = Number(m.x) || 0, sy = Number(m.y) || 0, sw = Number(r.width) || 0, sh = Number(r.height) || 0;
-                    hasM = true; maxR = Math.max(maxR, sx + sw); maxB = Math.max(maxB, sy + sh);
-                    return {id:m.id, sx, sy, sw, sh, isImage:isSmartImageNode(m)};
-                });
-                // 记录“贴合内容时的框尺寸”作为缩放映射基准（而不是当前可能含留白的框宽），
-                // 这样从放大很多的框往回缩时，框是线性跟随手柄缩小、而不是一下子跳到内容边缘。
-                resizeState.contentFitW = hasM ? Math.max(1, maxR - gx0 + 16) : (rect.width || 1);
-                resizeState.contentFitH = hasM ? Math.max(1, maxB - gy0 + 16) : (rect.height || 1);
-            }
+            resizeState = {id, startX:e.clientX, startY:e.clientY, startW:rect.width, startH:rect.height, startNodeX:rect.x, startNodeY:rect.y, corner:handle.dataset.resizeCorner || 'se'};
             document.body.classList.add('smart-node-resize');
             capturePendingUndo();
-        });
+        }));
         const beginNodeDrag = e => {
             if(e.button !== 0 || e.target.closest('.mini-x, .smart-node-floating-menu, .node-resize-handle, .thumb-item, .node-port, .prompt-node-control, select, input, textarea, button')) return;
             if(e.target.closest('.prompt-node-pill, textarea:not(.prompt-node-text)')) return;
@@ -9895,6 +14366,7 @@ function bindNodeEvents(){
             if(document.activeElement?.blur) document.activeElement.blur();
             let node = nodes.find(n => n.id === id);
             if(!node) return;
+            capturePendingUndo();
             if(e.altKey) node = duplicateForAltDrag(node, e.shiftKey);
             let dragIds = selectedIds.includes(node.id) ? selectedIds.slice() : [node.id];
             if(isSmartGroupNode(node)){
@@ -9905,9 +14377,8 @@ function bindNodeEvents(){
                 const n = nodes.find(x => x.id === dragId);
                 return n ? {id:n.id, ox:Number(n.x) || 0, oy:Number(n.y) || 0} : null;
             }).filter(Boolean);
-            dragState = {id:node.id, startX:e.clientX, startY:e.clientY, ox:node.x || 0, oy:node.y || 0, group, groupIds:group.map(item => item.id), ctrlGroup:Boolean(e.ctrlKey)};
+            dragState = {id:node.id, startX:e.clientX, startY:e.clientY, ox:node.x || 0, oy:node.y || 0, group, groupIds:group.map(item => item.id), ctrlGroup:Boolean(e.ctrlKey), altDuplicated:Boolean(e.altKey), previewGroupId:''};
             document.body.classList.add('smart-node-drag');
-            capturePendingUndo();
         };
         el.querySelectorAll('.node-port').forEach(port => {
             port.addEventListener('mousedown', e => {
@@ -9915,9 +14386,17 @@ function bindNodeEvents(){
                 e.preventDefault(); e.stopPropagation();
                 const portType = port.dataset.port;
                 const p = screenToWorld(e);
+                const portRect = port.getBoundingClientRect();
+                const fromWorld = clientPointToWorld(portRect.left + portRect.width / 2, portRect.top + portRect.height / 2);
+                const selected = selectedNodeIds().filter(selectedNodeId => nodes.some(node => node.id === selectedNodeId));
+                const selectedOutputIds = portType === 'out' && selected.includes(id) ? selected : [id];
                 portDragState = {
                     fromId:id,
                     fromPort:portType,
+                    fromIds:selectedOutputIds,
+                    sourceResultId:String(port.dataset.sourceResultId || '').trim(),
+                    sourceResultIds:Object.fromEntries(selectedOutputIds.map(sourceId => [sourceId, sourceId === id ? String(port.dataset.sourceResultId || '').trim() : ''])),
+                    fromWorld,
                     currentWorld:p,
                     hoverTargetId:'',
                     hoverPort:'',
@@ -9938,6 +14417,12 @@ function bindNodeEvents(){
             e.stopPropagation();
             const payload = await resolveSmartImageDropPayload(e.dataTransfer);
             if(payload.type === 'none') return;
+            const dropNode = nodes.find(node => node.id === id);
+            if(dropNode && isTextMediaItem(dropNode.images?.[0] || {})){
+                if(payload.type === 'files') await replaceTextMaterialFromFiles(dropNode, payload.files);
+                else toast('文本素材请拖入本地文件进行替换');
+                return;
+            }
             await handleSmartImageDropPayload(payload, id);
         };
     });
@@ -9963,12 +14448,7 @@ function dragConnectTargetFor(sourceNode, point=lastMouseWorld){
 function canAutoConnectDraggedNode(sourceNode, targetNode){
     if(!sourceNode || !targetNode || sourceNode.id === targetNode.id) return false;
     if(isHistoryGroupNode(sourceNode) || isHistoryGroupNode(targetNode)) return false;
-    if(isSmartGroupNode(targetNode)) return false;
-    if(isSmartImageNode(sourceNode)) return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop' || targetNode.type === 'smart-prompt';
-    if(sourceNode.type === 'smart-prompt') return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop';
-    if(sourceNode.type === 'smart-loop') return isSmartImageNode(targetNode);
-    if(sourceNode.type === 'smart-group') return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop';
-    return false;
+    return SMART_NODE_CONTRACT.canConnectNodes(sourceNode, targetNode);
 }
 function restoreDraggedNodePosition(){
     if(!dragState) return;
@@ -9982,12 +14462,20 @@ function restoreDraggedNodePosition(){
 }
 function pruneSmartGroupMembershipsForNode(node){
     if(!node || !node.id) return false;
-    // 节点拖出分组：从所有分组移除自己（保持当前尺寸，不自动放大）。
-    // 分组合并已改为“释放被拖分组、只并入其成员”，所以这里只需处理单个节点的退组。
     let changed = false;
     nodes.forEach(group => {
         if(!isSmartGroupNode(group) || !Array.isArray(group.items) || !group.items.includes(node.id)) return;
+        const memberRect = nodeRect(node);
+        const contentRect = smartGroupContentRect(group);
+        if(rectContainsRect(contentRect, memberRect) || rectsIntersect(contentRect, memberRect)) return;
         group.items = group.items.filter(id => id !== node.id);
+        restoreSmartGroupMemberOriginalLayout(node);
+        const members = smartGroupMembers(group);
+        if(members.length) fitSmartGroupBounds(group, members);
+        else {
+            group.w = SMART_GROUP_DEFAULT_WIDTH;
+            group.h = SMART_GROUP_DEFAULT_HEIGHT;
+        }
         changed = true;
     });
     return changed;
@@ -10013,6 +14501,7 @@ function deleteNode(id){
         if(Array.isArray(node.inputNodeIds)) node.inputNodeIds = node.inputNodeIds.filter(inputId => !deleteIds.has(inputId));
         if(isSmartGroupNode(node) && Array.isArray(node.items)) node.items = node.items.filter(itemId => !deleteIds.has(itemId));
     });
+    pruneDisconnectedMentionTokensForAllNodes();
     if(selectedId === id) selectedId = '';
     selectedIds = selectedIds.filter(selected => !deleteIds.has(selected));
     if(deleteIds.has(selectedImage.nodeId)) selectedImage = {nodeId:'', index:-1};
@@ -10021,7 +14510,7 @@ function deleteNode(id){
 }
 function clearNodeMediaBeforeDelete(id){
     const node = nodes.find(n => n.id === id);
-    if(!node || (node.type && node.type !== 'smart-image')) return false;
+    if(!isSmartImageNode(node)) return false;
     const hadMedia = Boolean((node.images || []).length || node.pending);
     if(!hadMedia) return false;
     pushUndo();
@@ -10075,6 +14564,7 @@ function disconnectConnections(spec){
             demoteHistoryGroupNode(group);
         }
     });
+    pruneDisconnectedMentionTokensForAllNodes();
     render();
     scheduleSave();
 }
@@ -10121,6 +14611,7 @@ function finishConnectionErase(){
             demoteHistoryGroupNode(group);
         }
     });
+    pruneDisconnectedMentionTokensForAllNodes();
     render();
     return true;
 }
@@ -10610,6 +15101,7 @@ function setImageEditMode(mode, userTouched=false){
     syncGridCustomCursor();
     document.querySelectorAll('[data-image-edit-mode]').forEach(btn => btn.classList.toggle('active', btn.dataset.imageEditMode === imageEditMode));
     document.getElementById('imagePreviewTools').classList.toggle('active', isPreview && !isVideoPreview);
+    document.getElementById('mediaTransformTools')?.classList.toggle('active', isPreview && isVideoPreview);
     document.getElementById('imageCropTools')?.classList.toggle('active', imageEditMode === 'crop');
     document.getElementById('imageMaskTools').classList.toggle('active', imageEditMode === 'mask');
     document.getElementById('imageBrushTools').classList.toggle('active', imageEditMode === 'brush');
@@ -11159,13 +15651,20 @@ function refreshComparePanel(){
         if(currentVideo){
             const previewSrc = displayMediaUrl(editing.image || curUrl);
             currentVideo.style.display = 'block';
-            currentVideo.onloadedmetadata = onCurrentLoaded;
-            currentVideo.onloadeddata = onCurrentLoaded;
+            const syncVideoDuration = () => {
+                onCurrentLoaded();
+                if(smartMediaTransformState?.kind === 'video'){
+                    smartMediaTransformState.duration = Number(currentVideo.duration) || 0;
+                    setMediaTransformInputValues('video', 0, smartMediaTransformState.duration, smartMediaTransformState.duration);
+                }
+            };
+            currentVideo.onloadedmetadata = syncVideoDuration;
+            currentVideo.onloadeddata = syncVideoDuration;
             if(currentVideo.getAttribute('src') !== previewSrc){
                 currentVideo.src = previewSrc;
                 currentVideo.load?.();
             }
-            if(currentVideo.readyState >= 1) requestAnimationFrame(onCurrentLoaded);
+            if(currentVideo.readyState >= 1) requestAnimationFrame(syncVideoDuration);
         }
         previewCompareOn = false;
         previewCompareIndex = -1;
@@ -11477,6 +15976,35 @@ function gridCustomLineHit(point){
     });
     return best;
 }
+function gridPresetLines(){
+    const {rows, cols} = gridSplitSettings();
+    return [
+        ...Array.from({length:Math.max(0, rows - 1)}, (_, index) => ({type:'h', index, pos:(index + 1) / rows})),
+        ...Array.from({length:Math.max(0, cols - 1)}, (_, index) => ({type:'v', index, pos:(index + 1) / cols}))
+    ];
+}
+function gridPresetLineHit(point){
+    const canvasEl = editDrawCanvas();
+    const threshold = Math.max(8, Math.min(canvasEl.width, canvasEl.height) / 80);
+    return gridPresetLines().map(line => ({
+        ...line,
+        dist:line.type === 'h' ? Math.abs(point.y - line.pos * canvasEl.height) : Math.abs(point.x - line.pos * canvasEl.width)
+    })).filter(line => line.dist <= threshold).sort((a, b) => a.dist - b.dist)[0] || null;
+}
+function beginPresetGridLineDrag(point, pointerId){
+    const hit = gridPresetLineHit(point);
+    if(!hit) return false;
+    const {rows, cols} = gridSplitSettings();
+    gridCustomMode = true;
+    gridCustomLines = gridPresetLines().map(line => ({type:line.type, pos:line.pos}));
+    gridCustomHistory = [];
+    const sameType = gridCustomLines.map((line, index) => ({line, index})).filter(entry => entry.line.type === hit.type);
+    gridPresetDrag = {index:sameType[hit.index]?.index ?? -1, pointerId, rows, cols};
+    gridCustomDrag = {index:gridPresetDrag.index, pointerId};
+    syncGridCustomControls();
+    syncGridCustomCursor();
+    return gridCustomDrag.index >= 0;
+}
 function setGridCustomLinePos(index, point){
     const canvasEl = editDrawCanvas();
     const line = gridCustomLines[index];
@@ -11560,11 +16088,15 @@ function beginEditDraw(event){
     const p = editDrawPoint(event);
     if(imageEditMode === 'grid'){
         if(gridOperationMode === 'join') return;
-        if(!gridCustomMode) return;
+        if(!gridCustomMode && !beginPresetGridLineDrag(p, event.pointerId)) return;
         const hit = gridCustomLineHit(p);
-        gridCustomHistory.push([...gridCustomLines.map(line => ({...line}))]);
-        if(hit >= 0){ gridCustomDrag = {index:hit, pointerId:event.pointerId}; setGridCustomLinePos(hit, p); }
-        else { gridCustomLines.push({type:gridCustomOrientation, pos:gridCustomOrientation === 'h' ? p.y / canvasEl.height : p.x / canvasEl.width}); gridCustomDrag = {index:gridCustomLines.length - 1, pointerId:event.pointerId}; }
+        if(!gridPresetDrag){
+            gridCustomHistory.push([...gridCustomLines.map(line => ({...line}))]);
+            if(hit >= 0){ gridCustomDrag = {index:hit, pointerId:event.pointerId}; setGridCustomLinePos(hit, p); }
+            else { gridCustomLines.push({type:gridCustomOrientation, pos:gridCustomOrientation === 'h' ? p.y / canvasEl.height : p.x / canvasEl.width}); gridCustomDrag = {index:gridCustomLines.length - 1, pointerId:event.pointerId}; }
+        } else {
+            setGridCustomLinePos(gridCustomDrag.index, p);
+        }
         syncGridCustomUndoBtn(); refreshGridSplitPreview(); return;
     }
     const ctx = canvasEl.getContext('2d');
@@ -11595,7 +16127,7 @@ function moveEditDraw(event){
 function endEditDraw(event){
     if(editDrawState && event?.pointerId != null) editDrawCanvas().releasePointerCapture?.(event.pointerId);
     if(gridCustomDrag && event?.pointerId != null) editDrawCanvas().releasePointerCapture?.(event.pointerId);
-    editDrawState = null; gridCustomDrag = null; syncEditDrawingHistoryButtons();
+    editDrawState = null; gridCustomDrag = null; gridPresetDrag = null; syncEditDrawingHistoryButtons();
 }
 function beginGridJoinDrag(event){
     if(imageEditMode !== 'grid' || gridOperationMode !== 'join') return;
@@ -11648,6 +16180,19 @@ function gridJoinDragTarget(){
         .filter(item => item.inside || item.score < Math.max(dragged.w, dragged.h, item.entry.w, item.entry.h) * 0.55)
         .sort((a, b) => (b.inside - a.inside) || a.score - b.score)[0]?.entry || null;
 }
+function gridJoinDropSlot(){
+    if(!gridJoinDrag || !gridJoinLayout) return null;
+    const dragged = gridJoinLayout.items.find(entry => Number(entry.index) === Number(gridJoinDrag.index));
+    if(!dragged) return null;
+    const cellW = Math.max(1, Number(gridJoinLayout.cellW || dragged.w || 1));
+    const cellH = Math.max(1, Number(gridJoinLayout.cellH || dragged.h || 1));
+    const gap = Math.max(0, Number(gridJoinLayout.gap || 0));
+    const cx = dragged.x + (gridJoinDrag.dx || 0) + dragged.w / 2;
+    const cy = dragged.y + (gridJoinDrag.dy || 0) + dragged.h / 2;
+    const col = Math.max(0, Math.min(Number(gridJoinLayout.cols || 1) - 1, Math.floor(cx / (cellW + gap))));
+    const row = Math.max(0, Math.min(Number(gridJoinLayout.rows || 1) - 1, Math.floor(cy / (cellH + gap))));
+    return {row, col, x:col * (cellW + gap), y:row * (cellH + gap)};
+}
 function endGridJoinDrag(event){
     if(!gridJoinDrag) return;
     const host = document.getElementById('gridJoinCanvas');
@@ -11656,12 +16201,16 @@ function endGridJoinDrag(event){
     if(draggedEl) draggedEl.style.transform = '';
     const dragged = gridJoinLayout?.items?.find(entry => Number(entry.index) === Number(gridJoinDrag.index));
     const target = gridJoinDragTarget();
+    const slot = gridJoinDropSlot();
     if(dragged && target){
-        const order = gridJoinVisualOrder();
-        const a = order.indexOf(Number(dragged.index));
-        const b = order.indexOf(Number(target.index));
-        if(a >= 0 && b >= 0) [order[a], order[b]] = [order[b], order[a]];
-        setGridJoinLayoutOrder(order, gridJoinLayout.rows, gridJoinLayout.cols, gridJoinLayout.gap);
+        const old = {x:dragged.x, y:dragged.y};
+        dragged.x = target.x; dragged.y = target.y;
+        target.x = old.x; target.y = old.y;
+        gridJoinUserMoved = true;
+        renderGridJoinPreview();
+    } else if(dragged && slot){
+        dragged.x = slot.x;
+        dragged.y = slot.y;
         gridJoinUserMoved = true;
         renderGridJoinPreview();
     }
@@ -11845,10 +16394,15 @@ function setGridOperationMode(mode){
 }
 function syncGridOperationControls(){
     const join = gridOperationMode === 'join';
-    document.getElementById('gridSplitModeBtn')?.classList.toggle('primary', !join);
-    document.getElementById('gridSplitModeBtn')?.classList.toggle('secondary', join);
+    const splitBtn = document.getElementById('gridSplitModeBtn');
+    if(splitBtn){
+        splitBtn.style.display = join ? 'none' : '';
+        splitBtn.classList.toggle('primary', !join);
+        splitBtn.classList.toggle('secondary', join);
+    }
     const joinBtn = document.getElementById('gridJoinModeBtn');
     if(joinBtn){
+        joinBtn.style.display = join ? '' : 'none';
         joinBtn.disabled = !canGridJoinCurrentNode();
         joinBtn.classList.toggle('primary', join);
         joinBtn.classList.toggle('secondary', !join);
@@ -12352,12 +16906,532 @@ function openImagePreview(nodeId, imageIndex=0){
 }
 // 双击组内图片时按整组预览；非分组成员退回单节点预览。
 function openImagePreviewSmart(nodeId, imageIndex=0){
+    const node = nodes.find(n => n.id === nodeId);
+    if(isTextMediaItem(node?.images?.[imageIndex] || {})){
+        openTextMaterialEditor(nodeId, imageIndex);
+        return;
+    }
     const group = smartGroupContainingNode(nodeId);
     if(group){
         openGroupImagePreview(group, nodeId, imageIndex);
         return;
     }
     openImagePreview(nodeId, imageIndex);
+}
+function audioPreviewDurationLabel(duration){
+    const total = Math.max(0, Math.round(Number(duration) || 0));
+    const minutes = Math.floor(total / 60);
+    const seconds = String(total % 60).padStart(2, '0');
+    return `${minutes}:${seconds}`;
+}
+function audioPreviewFormatLabel(item){
+    return extensionForMediaItem(item, '.mp3').replace(/^\./, '').toUpperCase();
+}
+function smartMediaToolCapabilityMessage(){
+    if(!smartMediaToolCapabilities.loaded) return tr('smart.mediaToolChecking') || '正在检查媒体处理环境…';
+    if(smartMediaToolCapabilities.media_transform) return tr('smart.mediaToolReady') || '媒体处理可用';
+    const tools = (smartMediaToolCapabilities.missing || []).join('、') || 'FFmpeg';
+    return trf('smart.mediaToolUnavailable', {tools}) || `缺少${tools}，播放预览仍可用`;
+}
+function applySmartMediaToolCapabilities(root=document){
+    const available = Boolean(smartMediaToolCapabilities.loaded && smartMediaToolCapabilities.media_transform);
+    const message = smartMediaToolCapabilityMessage();
+    root.querySelectorAll?.('[data-media-transform-action]').forEach(button => {
+        button.disabled = !available;
+        button.classList.toggle('is-unavailable', !available);
+        button.title = message;
+    });
+    root.querySelectorAll?.('[data-media-transform-capability]').forEach(label => {
+        label.textContent = message;
+        label.classList.toggle('is-unavailable', !available);
+    });
+}
+async function loadSmartMediaToolCapabilities(){
+    if(smartMediaToolCapabilities.loaded) return smartMediaToolCapabilities;
+    if(smartMediaToolCapabilitiesPromise) return smartMediaToolCapabilitiesPromise;
+    smartMediaToolCapabilitiesPromise = fetch('/api/canvas-media-capabilities')
+        .then(response => response.json().then(data => ({response, data})))
+        .then(({response, data}) => {
+            if(!response.ok) throw new Error(apiErrorMessage(data, '媒体处理环境检查失败'));
+            const capabilities = data.capabilities || {};
+            const missing = Object.entries(capabilities).filter(([, item]) => !item?.available).map(([key]) => key === 'ffprobe' ? 'FFprobe' : 'FFmpeg');
+            smartMediaToolCapabilities = {loaded:true, media_transform:Boolean(data.media_transform && !missing.length), missing};
+            applySmartMediaToolCapabilities(document);
+            return smartMediaToolCapabilities;
+        })
+        .catch(error => {
+            smartMediaToolCapabilities = {loaded:true, media_transform:false, missing:['FFmpeg/FFprobe']};
+            applySmartMediaToolCapabilities(document);
+            return smartMediaToolCapabilities;
+        });
+    return smartMediaToolCapabilitiesPromise;
+}
+function ensureSmartAudioPreviewModal(){
+    let modal = document.getElementById('smartAudioPreviewModal');
+    if(modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'smartAudioPreviewModal';
+    modal.className = 'smart-audio-preview-modal';
+    modal.innerHTML = `<div class="smart-audio-preview-panel">
+        <div class="smart-audio-preview-head"><div><strong data-audio-preview-name>音频</strong><span>音频预览</span></div><button type="button" data-audio-preview-close title="关闭"><i data-lucide="x"></i></button></div>
+        <div class="smart-audio-preview-wave" aria-hidden="true">${Array.from({length:64}).map((_, index) => `<i style="--wave:${18 + ((index * 37) % 72)}%"></i>`).join('')}</div>
+        <div class="audio-preview-controls" data-audio-preview-controls>
+            <button class="audio-preview-control" type="button" data-audio-preview-mute aria-pressed="false"><i data-lucide="volume-2"></i><span data-audio-preview-mute-label>${escapeHtml(tr('smart.audioPreviewMute') || '静音')}</span></button>
+            <label class="audio-preview-volume"><span>${escapeHtml(tr('smart.audioPreviewVolume') || '音量')}</span><input data-audio-preview-volume type="range" min="0" max="1" step="0.01" value="1"></label>
+            <label class="audio-preview-speed"><span>${escapeHtml(tr('smart.audioPreviewSpeed') || '倍速')}</span><select data-audio-preview-speed><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
+            <button class="audio-preview-control" type="button" data-audio-preview-loop aria-pressed="false"><i data-lucide="repeat-2"></i><span>${escapeHtml(tr('smart.audioPreviewLoop') || '循环播放')}</span></button>
+            <div class="audio-preview-meta" data-audio-preview-meta><span>${escapeHtml(tr('smart.audioPreviewDuration') || '时长')} <b data-audio-preview-duration>--:--</b></span><span>${escapeHtml(tr('smart.audioPreviewFormat') || '格式')} <b data-audio-preview-format>MP3</b></span></div>
+        </div>
+        <audio controls preload="metadata"></audio>
+        <div class="media-transform-tools image-edit-tools active" data-audio-transform-tools>
+            <span class="image-edit-sub">时间范围</span>
+            <label><span>开始</span><input data-audio-transform-start type="range" min="0" max="1" step="0.01" value="0"><output data-audio-transform-start-value>0.00s</output></label>
+            <label><span>结束</span><input data-audio-transform-end type="range" min="0.1" max="1" step="0.01" value="1"><output data-audio-transform-end-value>1.00s</output></label>
+            <span data-audio-transform-duration class="image-edit-sub"></span>
+            <span data-audio-transform-capability class="media-transform-capability"></span>
+            <button class="image-edit-btn secondary" type="button" data-audio-transform="trim" data-media-transform-action><i data-lucide="scissors" class="w-4 h-4"></i><span>${escapeHtml(tr('smart.mediaToolTrim') || '生成裁剪结果')}</span></button>
+        </div>
+    </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', event => {
+        event.stopPropagation();
+        if(event.target === modal || event.target.closest('[data-audio-preview-close]')) closeSmartAudioPreview();
+    });
+    modal.addEventListener('mousedown', event => event.stopPropagation());
+    const audio = modal.querySelector('audio');
+    const muteButton = modal.querySelector('[data-audio-preview-mute]');
+    const volumeInput = modal.querySelector('[data-audio-preview-volume]');
+    const speedSelect = modal.querySelector('[data-audio-preview-speed]');
+    const loopButton = modal.querySelector('[data-audio-preview-loop]');
+    const syncAudioPreviewControls = () => {
+        const muted = Boolean(audio.muted);
+        const looping = Boolean(audio.loop);
+        muteButton.classList.toggle('active', muted);
+        muteButton.setAttribute('aria-pressed', muted ? 'true' : 'false');
+        muteButton.title = muted ? '取消静音' : (tr('smart.audioPreviewMute') || '静音');
+        loopButton.classList.toggle('active', looping);
+        loopButton.setAttribute('aria-pressed', looping ? 'true' : 'false');
+        volumeInput.value = String(Number.isFinite(audio.volume) ? audio.volume : 1);
+        speedSelect.value = String(Number.isFinite(audio.playbackRate) ? audio.playbackRate : 1);
+    };
+    const syncAudioPreviewMetadata = () => {
+        const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+        modal.querySelector('[data-audio-preview-duration]').textContent = audioPreviewDurationLabel(duration);
+        if(smartMediaTransformState?.kind === 'audio' && duration > 0){
+            smartMediaTransformState.duration = duration;
+            setMediaTransformInputValues('audio', 0, duration, duration);
+        }
+    };
+    muteButton.addEventListener('click', () => { audio.muted = !audio.muted; syncAudioPreviewControls(); });
+    volumeInput.addEventListener('input', event => { audio.volume = Math.max(0, Math.min(1, Number(event.target.value) || 0)); if(audio.volume > 0) audio.muted = false; syncAudioPreviewControls(); });
+    speedSelect.addEventListener('change', event => { audio.playbackRate = Number(event.target.value) || 1; syncAudioPreviewControls(); });
+    loopButton.addEventListener('click', () => { audio.loop = !audio.loop; syncAudioPreviewControls(); });
+    audio.addEventListener('loadedmetadata', syncAudioPreviewMetadata);
+    audio.addEventListener('volumechange', syncAudioPreviewControls);
+    audio.addEventListener('ratechange', syncAudioPreviewControls);
+    modal.querySelector('[data-audio-transform-start]').addEventListener('input', event => updateSmartAudioTransformRange('start', event.target.value));
+    modal.querySelector('[data-audio-transform-end]').addEventListener('input', event => updateSmartAudioTransformRange('end', event.target.value));
+    modal.querySelector('[data-audio-transform="trim"]').addEventListener('click', () => runSmartMediaTransform('trim', 'audio'));
+    refreshIcons();
+    applySmartMediaToolCapabilities(modal);
+    loadSmartMediaToolCapabilities().then(() => applySmartMediaToolCapabilities(modal));
+    return modal;
+}
+function mediaTransformValues(kind='video'){
+    const state = smartMediaTransformState || {};
+    const duration = Math.max(0.1, Number(state.duration) || 0.1);
+    if(kind === 'audio'){
+        const modal = document.getElementById('smartAudioPreviewModal');
+        return {duration, start:Number(modal?.querySelector('[data-audio-transform-start]')?.value || 0), end:Number(modal?.querySelector('[data-audio-transform-end]')?.value || duration)};
+    }
+    return {duration, start:Number(document.getElementById('mediaTransformStart')?.value || 0), end:Number(document.getElementById('mediaTransformEnd')?.value || duration)};
+}
+function setMediaTransformInputValues(kind, start, end, duration){
+    const root = kind === 'audio' ? document.getElementById('smartAudioPreviewModal') : document;
+    const selector = suffix => kind === 'audio' ? `[data-audio-transform-${suffix}]` : `#mediaTransform${suffix[0].toUpperCase()}${suffix.slice(1)}`;
+    const startInput = root?.querySelector(selector('start'));
+    const endInput = root?.querySelector(selector('end'));
+    const startValue = root?.querySelector(kind === 'audio' ? '[data-audio-transform-start-value]' : '#mediaTransformStartValue');
+    const endValue = root?.querySelector(kind === 'audio' ? '[data-audio-transform-end-value]' : '#mediaTransformEndValue');
+    const durationLabel = root?.querySelector(kind === 'audio' ? '[data-audio-transform-duration]' : '#mediaTransformDuration');
+    if(!startInput || !endInput) return;
+    const safeDuration = Math.max(0.1, Number(duration) || 0.1);
+    const safeStart = Math.max(0, Math.min(safeDuration - 0.1, Number(start) || 0));
+    const safeEnd = Math.max(safeStart + 0.1, Math.min(safeDuration, Number(end) || safeDuration));
+    startInput.max = String(safeDuration); endInput.max = String(safeDuration);
+    startInput.value = String(safeStart); endInput.value = String(safeEnd);
+    if(startValue) startValue.textContent = `${safeStart.toFixed(2)}s`;
+    if(endValue) endValue.textContent = `${safeEnd.toFixed(2)}s`;
+    if(durationLabel) durationLabel.textContent = `${safeDuration.toFixed(2)}s`;
+}
+function updateSmartAudioTransformRange(which, value){
+    const values = mediaTransformValues('audio');
+    setMediaTransformInputValues('audio', which === 'start' ? Number(value) : values.start, which === 'end' ? Number(value) : values.end, values.duration);
+}
+function updateSmartVideoTransformRange(which, value){
+    const values = mediaTransformValues('video');
+    setMediaTransformInputValues('video', which === 'start' ? Number(value) : values.start, which === 'end' ? Number(value) : values.end, values.duration);
+}
+async function runSmartMediaTransform(operation='trim', kind='video'){
+    const state = smartMediaTransformState;
+    if(!state?.url || !state.nodeId) return;
+    const capabilities = await loadSmartMediaToolCapabilities();
+    if(!capabilities.media_transform){
+        toast(smartMediaToolCapabilityMessage());
+        applySmartMediaToolCapabilities(document);
+        return;
+    }
+    const values = mediaTransformValues(kind);
+    if(values.end - values.start < 0.1){ toast('时间范围至少需要 0.1 秒'); return; }
+    const sourceNode = nodes.find(node => node.id === state.nodeId);
+    const sourceItem = sourceNode?.images?.[state.imageIndex];
+    if(!sourceNode || !sourceItem) return;
+    const button = kind === 'audio' ? document.querySelector('[data-audio-transform="trim"]') : document.getElementById(operation === 'extract_audio' ? 'mediaExtractAudioBtn' : 'mediaTrimBtn');
+    if(button) button.disabled = true;
+    try {
+        const response = await fetch('/api/canvas-media-transform', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:state.url, operation, start:values.start, end:values.end, name:sourceItem.name || '媒体', canvas_id:canvas?.id || '', canvas_title:canvas?.title || ''})});
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok) throw new Error(apiErrorMessage(data, '媒体处理失败'));
+        const outputNode = createEditedResultNode(sourceNode, data, {kind:data.kind || (operation === 'extract_audio' ? 'audio' : kind), derivation:data.derivation || {}, mediaInfo:data.media_info || {}});
+        if(!outputNode) throw new Error('媒体结果创建失败');
+    if(kind === 'audio') closeSmartAudioPreview(); else closeImageEditor();
+        render(); scheduleSave();
+        toast(operation === 'extract_audio' ? '已抽出音频并生成新素材' : '已生成裁剪素材');
+    } catch(error) {
+        toast((error.message || '媒体处理失败').slice(0, 160));
+    } finally {
+        if(button) button.disabled = false;
+    }
+}
+function openAudioMaterialPreview(nodeId, imageIndex=0){
+    const node = nodes.find(item => item.id === nodeId);
+    const item = node?.images?.[imageIndex];
+    if(mediaKindForItem(item || {}) !== 'audio' || !item?.url) return;
+    const modal = ensureSmartAudioPreviewModal();
+    smartMediaTransformState = {nodeId, imageIndex, url:item.url, kind:'audio', duration:0};
+    modal.querySelector('[data-audio-preview-name]').textContent = item.name || '音频';
+    modal.querySelector('[data-audio-preview-format]').textContent = audioPreviewFormatLabel(item);
+    applySmartMediaToolCapabilities(modal);
+    loadSmartMediaToolCapabilities().then(() => applySmartMediaToolCapabilities(modal));
+    const audio = modal.querySelector('audio');
+    audio.muted = false;
+    audio.volume = 1;
+    audio.playbackRate = 1;
+    audio.loop = false;
+    audio.onloadedmetadata = () => {
+        smartMediaTransformState.duration = Number(audio.duration) || 0;
+        setMediaTransformInputValues('audio', 0, smartMediaTransformState.duration, smartMediaTransformState.duration);
+    };
+    audio.src = displayMediaUrl(item);
+    audio.load?.();
+    modal.classList.add('open');
+    audio.play?.().catch(() => {});
+}
+function closeSmartAudioPreview(){
+    const modal = document.getElementById('smartAudioPreviewModal');
+    const audio = modal?.querySelector('audio');
+    audio?.pause?.();
+    audio?.removeAttribute('src');
+    audio?.load?.();
+    audio.onloadedmetadata = null;
+    modal?.classList.remove('open');
+    smartMediaTransformState = null;
+}
+function openSmartMaterialPreview(nodeId, imageIndex=0, target=null){
+    const node = nodes.find(item => item.id === nodeId);
+    const item = node?.images?.[imageIndex];
+    const kind = mediaKindForItem(item || {});
+    if(kind === 'text') return openTextMaterialEditor(nodeId, imageIndex);
+    if(kind === 'audio') return openAudioMaterialPreview(nodeId, imageIndex);
+    if(kind === 'video'){
+        openImagePreviewSmart(nodeId, imageIndex);
+        return;
+    }
+    openImagePreviewSmart(nodeId, imageIndex);
+}
+function smartNodeFocusBounds(nodeId){
+    const node = nodes.find(item => item.id === nodeId);
+    if(!node) return null;
+    let bounds = nodeRect(node);
+    const nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(nodeId)}"]`);
+    const scale = safeScale(viewport.scale);
+    const shellRect = shell.getBoundingClientRect();
+    const includeElement = element => {
+        if(!element || !world.contains(element)) return;
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        if(style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) <= 0.01 || rect.width < 1 || rect.height < 1) return;
+        const candidate = {
+            x:(rect.left - shellRect.left - viewport.x) / scale,
+            y:(rect.top - shellRect.top - viewport.y) / scale,
+            width:rect.width / scale,
+            height:rect.height / scale
+        };
+        const left = Math.min(bounds.x, candidate.x);
+        const top = Math.min(bounds.y, candidate.y);
+        const right = Math.max(bounds.x + bounds.width, candidate.x + candidate.width);
+        const bottom = Math.max(bounds.y + bounds.height, candidate.y + candidate.height);
+        bounds = {x:left, y:top, width:right - left, height:bottom - top};
+    };
+    includeElement(nodeEl);
+    nodeEl?.querySelectorAll('.smart-popover,.model-popover,.capability-param-popover,[role="dialog"]').forEach(includeElement);
+    document.querySelectorAll(`[data-smart-node-id="${CSS.escape(nodeId)}"]`).forEach(includeElement);
+    return bounds;
+}
+function focusSmartNodeInViewport(nodeId){
+    const bounds = smartNodeFocusBounds(nodeId);
+    if(!bounds) return false;
+    const horizontalReserve = Math.min(180, Math.max(96, shell.clientWidth * 0.14));
+    const verticalReserve = Math.min(170, Math.max(110, shell.clientHeight * 0.16));
+    const availableW = Math.max(320, shell.clientWidth - horizontalReserve);
+    const availableH = Math.max(240, shell.clientHeight - verticalReserve);
+    const fitScale = Math.min(1.4, availableW / Math.max(1, bounds.width), availableH / Math.max(1, bounds.height));
+    const targetScale = Math.max(0.35, safeScale(fitScale));
+    viewport.scale = targetScale;
+    viewport.x = shell.clientWidth / 2 - (bounds.x + bounds.width / 2) * targetScale;
+    viewport.y = shell.clientHeight / 2 - (bounds.y + bounds.height / 2) * targetScale;
+    clearTimeout(smartFocusTransitionTimer);
+    shell.classList.remove('smart-focus-transition');
+    void world.offsetWidth;
+    shell.classList.add('smart-focus-transition');
+    applyViewport();
+    smartFocusTransitionTimer = setTimeout(() => {
+        shell.classList.remove('smart-focus-transition');
+        smartFocusTransitionTimer = 0;
+    }, 380);
+    scheduleSave();
+    return true;
+}
+function handleSmartNodeShiftDoubleClick(event){
+    if(!event.shiftKey) return;
+    if(Date.now() - lastShiftConnectionDragAt < 500) return;
+    const nodeEl = event.target?.closest?.('.image-node');
+    const ownedOverlay = event.target?.closest?.('[data-smart-node-id]');
+    const nodeId = nodeEl?.dataset?.id || ownedOverlay?.dataset?.smartNodeId || '';
+    if(!nodeId || (!nodeEl && !nodes.some(node => node.id === nodeId))) return;
+    if(!nodeId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    focusSmartNodeInViewport(nodeId);
+}
+world.addEventListener('dblclick', handleSmartNodeShiftDoubleClick, true);
+function ensureSmartTextEditorModal(){
+    let modal = document.getElementById('smartTextEditorModal');
+    if(modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'smartTextEditorModal';
+    modal.className = 'smart-text-editor-modal';
+    modal.innerHTML = `<div class="smart-text-editor-panel">
+        <div class="smart-text-editor-head"><div><strong>文本结果</strong><span>Markdown</span></div><button type="button" data-text-editor-close title="关闭"><i data-lucide="x"></i></button></div>
+        <textarea data-text-editor-input spellcheck="false"></textarea>
+        <div class="smart-text-editor-actions"><span>保存后生成新的文本结果，原文保留</span><button type="button" data-text-editor-cancel>取消</button><button type="button" data-text-editor-save>保存为新结果</button></div>
+    </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('mousedown', event => event.stopPropagation());
+    modal.addEventListener('click', event => {
+        event.stopPropagation();
+        if(event.target === modal || event.target.closest('[data-text-editor-close],[data-text-editor-cancel]')) closeTextMaterialEditor();
+    });
+    modal.querySelector('[data-text-editor-save]').addEventListener('click', saveTextMaterialEditor);
+    refreshIcons();
+    return modal;
+}
+let smartTextEditorState = null;
+let smartInlineTextEditState = null;
+function beginSmartInlineTextEdit(nodeId, imageIndex=0){
+    const node = nodes.find(item => item.id === nodeId);
+    const item = node?.images?.[imageIndex];
+    if(!node || node.type !== SMART_NODE_TYPES.material || !isTextMediaItem(item || {})) return false;
+    if(smartInlineTextEditState?.nodeId === nodeId && smartInlineTextEditState?.imageIndex === imageIndex) return true;
+    if(smartInlineTextEditState) finishSmartInlineTextEdit();
+    const nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(nodeId)}"]`);
+    const preview = nodeEl?.querySelector(`[data-image-index="${imageIndex}"] [data-text-preview="1"], [data-text-preview="1"]`);
+    if(!preview) return false;
+    const text = SMART_NODE_CONTRACT.textContentForMediaItem(item);
+    const editor = document.createElement('textarea');
+    editor.className = 'media-text-inline-editor';
+    editor.value = text;
+    editor.setAttribute('aria-label', '编辑文本素材');
+    editor.addEventListener('mousedown', event => event.stopPropagation());
+    editor.addEventListener('click', event => event.stopPropagation());
+    editor.addEventListener('contextmenu', event => event.stopPropagation());
+    editor.addEventListener('dblclick', event => event.stopPropagation());
+    editor.addEventListener('wheel', event => {
+        event.stopPropagation();
+    }, {passive:true});
+    editor.addEventListener('keydown', event => {
+        if(event.key !== 'Escape') return;
+        event.preventDefault();
+        finishSmartInlineTextEdit();
+    });
+    preview.replaceChildren(editor);
+    preview.classList.add('is-inline-editing');
+    smartInlineTextEditState = {nodeId, imageIndex, item, originalText:text, editor};
+    editor.focus({preventScroll:true});
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+    return true;
+}
+async function persistSmartInlineTextEdit(nodeId, imageIndex, text){
+    const sourceNode = nodes.find(node => node.id === nodeId);
+    const sourceItem = sourceNode?.images?.[imageIndex];
+    if(!sourceNode || !sourceItem || !text) return;
+    const isInputText = sourceNode.sourceKind === 'input' && !sourceItem.url;
+    if(isInputText){
+        pushUndo();
+        sourceItem.text = text;
+        sourceItem.content = text;
+        sourceItem.name = sourceItem.name || '未命名文本.md';
+        sourceNode.title = sourceItem.name;
+        render();
+        scheduleSave();
+        return;
+    }
+    try {
+        const base = String(sourceItem.name || '文本结果').replace(/\.(md|markdown|txt)$/i, '') || '文本结果';
+        const stored = await fetch('/api/canvas-text-results', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({text, name:`${base}-编辑.md`, canvas_id:canvas?.id || '', canvas_title:canvas?.title || ''})
+        }).then(async response => {
+            const data = await response.json().catch(() => ({}));
+            if(!response.ok) throw new Error(apiErrorMessage(data, '文本结果保存失败'));
+            return data;
+        });
+        pushUndo();
+        const pos = nextOutputPositionForSource(sourceNode, {w:316, h:220});
+        const created = SMART_NODE_CONTRACT.createTextResultMaterial(sourceNode, text, {
+            id:uid('material'),
+            x:pos.x,
+            y:pos.y,
+            url:stored.url,
+            resultId:stored.id,
+            name:stored.display_name || `${base}-编辑.md`
+        });
+        if(created){
+            created.node.scale = MEDIA_NODE_DEFAULT_SCALE;
+            nodes.push(created.node);
+            addConnection(created.connection.from, created.connection.to, created.connection.kind);
+            selectedId = created.node.id;
+        }
+        render();
+        scheduleSave();
+    } catch(error) {
+        toast((error.message || '文本结果保存失败').slice(0, 160));
+        render();
+    }
+}
+function finishSmartInlineTextEdit(){
+    const state = smartInlineTextEditState;
+    if(!state || state.saving) return;
+    state.saving = true;
+    const text = String(state.editor?.value || '').trim();
+    const originalText = String(state.originalText || '').trim();
+    smartInlineTextEditState = null;
+    if(!text){
+        toast('文本不能为空');
+        render();
+        return;
+    }
+    if(text === originalText){
+        render();
+        return;
+    }
+    render();
+    persistSmartInlineTextEdit(state.nodeId, state.imageIndex, text);
+}
+function closeSmartInlineTextEditOnOutsidePointer(event){
+    const state = smartInlineTextEditState;
+    if(!state || state.saving) return;
+    const nodeEl = event.target?.closest?.(`.image-node[data-id="${CSS.escape(state.nodeId)}"]`);
+    if(nodeEl) return;
+    finishSmartInlineTextEdit();
+}
+document.addEventListener('pointerdown', closeSmartInlineTextEditOnOutsidePointer, true);
+async function openTextMaterialEditor(nodeId, imageIndex=0){
+    const node = nodes.find(n => n.id === nodeId);
+    const item = node?.images?.[imageIndex];
+    if(!node || !isTextMediaItem(item || {})) return;
+    const modal = ensureSmartTextEditorModal();
+    const input = modal.querySelector('[data-text-editor-input]');
+    smartTextEditorState = {nodeId, imageIndex};
+    input.value = SMART_NODE_CONTRACT.textContentForMediaItem(item);
+    modal.classList.add('open');
+    if(!input.value && item.url){
+        input.placeholder = '正在读取文本...';
+        try {
+            const response = await fetch(item.url);
+            if(!response.ok) throw new Error('读取文本失败');
+            input.value = await response.text();
+        } catch(error) {
+            input.placeholder = error.message || '读取文本失败';
+        }
+    }
+    input.focus({preventScroll:true});
+    input.setSelectionRange(0, 0);
+}
+function closeTextMaterialEditor(){
+    document.getElementById('smartTextEditorModal')?.classList.remove('open');
+    smartTextEditorState = null;
+}
+async function saveTextMaterialEditor(){
+    const state = smartTextEditorState;
+    const modal = document.getElementById('smartTextEditorModal');
+    const input = modal?.querySelector('[data-text-editor-input]');
+    const sourceNode = nodes.find(node => node.id === state?.nodeId);
+    const sourceItem = sourceNode?.images?.[state?.imageIndex];
+    const text = String(input?.value || '').trim();
+    if(!sourceNode || !sourceItem || !text){ toast('文本不能为空'); return; }
+    const saveButton = modal.querySelector('[data-text-editor-save]');
+    saveButton.disabled = true;
+    try {
+        const isBlankTextInputMaterial = sourceNode.sourceKind === 'input'
+            && isTextMediaItem(sourceItem)
+            && !String(sourceItem.text || sourceItem.content || '').trim();
+        if(isBlankTextInputMaterial){
+            sourceItem.text = text;
+            sourceItem.content = text;
+            sourceItem.name = sourceItem.name || '未命名文本.md';
+            sourceNode.title = sourceItem.name;
+            closeTextMaterialEditor();
+            render();
+            scheduleSave();
+            return;
+        }
+        const base = String(sourceItem.name || '文本结果').replace(/\.(md|markdown|txt)$/i, '') || '文本结果';
+        const stored = await fetch('/api/canvas-text-results', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({text, name:`${base}-编辑.md`, canvas_id:canvas?.id || '', canvas_title:canvas?.title || ''})
+        }).then(async response => {
+            const data = await response.json().catch(() => ({}));
+            if(!response.ok) throw new Error(apiErrorMessage(data, '文本结果保存失败'));
+            return data;
+        });
+        pushUndo();
+        const pos = nextOutputPositionForSource(sourceNode, {w:316, h:220});
+        const created = SMART_NODE_CONTRACT.createTextResultMaterial(sourceNode, text, {
+            id:uid('material'),
+            x:pos.x,
+            y:pos.y,
+            url:stored.url,
+            resultId:stored.id,
+            name:stored.display_name || `${base}-编辑.md`
+        });
+        if(created){
+            created.node.scale = MEDIA_NODE_DEFAULT_SCALE;
+            nodes.push(created.node);
+            addConnection(created.connection.from, created.connection.to, 'result');
+            selectedId = created.node.id;
+        }
+        closeTextMaterialEditor();
+        render();
+        scheduleSave();
+    } catch(error) {
+        toast((error.message || '文本结果保存失败').slice(0, 160));
+    } finally {
+        saveButton.disabled = false;
+    }
 }
 // 打开整组图片预览：以被双击图片为起点，左右切换遍历分组内所有图片。
 function openGroupImagePreview(group, startNodeId, startIndex=0){
@@ -12380,10 +17454,9 @@ function openImageEditor(nodeId, imageIndex=0){
     const image = imageForDisplay(node?.images?.[imageIndex]);
     if(!image?.url) return;
     const kind = mediaKindForItem(image);
-    if(kind !== 'image' && kind !== 'video'){
-        downloadPreviewFile(image);
-        return;
-    }
+    if(kind === 'text') return openTextMaterialEditor(nodeId, imageIndex);
+    if(kind === 'audio') return openAudioMaterialPreview(nodeId, imageIndex);
+    if(kind !== 'image' && kind !== 'video') return;
     selectedId = nodeId;
     selectedImage = {nodeId, index:imageIndex};
     previewNavState = {nodeId, index:imageIndex, count:(node.images || []).filter(img => img?.url).length};
@@ -12410,6 +17483,9 @@ function openImageEditor(nodeId, imageIndex=0){
     disposePanoramaPreview();
     resetPreviewTransform();
     if(kind === 'video'){
+        smartMediaTransformState = {nodeId, imageIndex, url:image.url, kind:'video', duration:0};
+        applySmartMediaToolCapabilities(document);
+        loadSmartMediaToolCapabilities().then(() => applySmartMediaToolCapabilities(document));
         img.onload = null;
         img.onerror = null;
         img.removeAttribute('src');
@@ -12475,6 +17551,7 @@ function openImageEditor(nodeId, imageIndex=0){
 function closeImageEditor(){
     cleanupSmartLogPreviewNode();
     imageEditModal.classList.remove('open');
+    smartMediaTransformState = null;
     document.querySelector('.image-edit-panel')?.classList.remove('video-preview-mode');
     const img = document.getElementById('cropImage');
     const previewVideo = document.getElementById('previewCurrentVideo');
@@ -12619,22 +17696,41 @@ function resizeCropFromDrag(dx, dy){
 async function uploadCroppedBlob(blob, name){
     const form = new FormData();
     form.append('files', blob, name);
-    const data = await fetch('/api/ai/upload', {method:'POST', body:form}).then(r => r.json());
+    form.append('canvas_id', canvas?.id || '');
+    form.append('canvas_title', canvas?.title || '');
+    const response = await fetch('/api/canvas-media-results', {method:'POST', body:form});
+    const data = await response.json().catch(() => ({}));
+    if(!response.ok) throw new Error(apiErrorMessage(data, '生成结果保存失败'));
     return data.files?.[0];
 }
 async function uploadImageBlobs(blobs){
     const form = new FormData();
     blobs.forEach(item => form.append('files', item.blob, item.name));
-    const data = await fetch('/api/ai/upload', {method:'POST', body:form}).then(r => r.json());
+    form.append('canvas_id', canvas?.id || '');
+    form.append('canvas_title', canvas?.title || '');
+    const response = await fetch('/api/canvas-media-results', {method:'POST', body:form});
+    const data = await response.json().catch(() => ({}));
+    if(!response.ok) throw new Error(apiErrorMessage(data, '生成结果保存失败'));
     return data.files || [];
 }
-function replaceEditedImage(file, extra={}){
-    const {node, index} = currentEditImage();
-    if(!node || !file) return false;
-    node.images[index] = {...(node.images[index] || {}), url:file.url, name:file.name, kind:file.kind || mediaKindForItem(file), natural_w:0, natural_h:0, ...extra};
-    if((node.images || []).length === 1){ delete node.w; delete node.h; }
-    selectedId = node.id; selectedImage = {nodeId:node.id, index};
-    return true;
+function createEditedResultNode(sourceNode, file, extra={}){
+    if(!sourceNode || !file?.url) return null;
+    pushUndo();
+    const rect = nodeRect(sourceNode);
+    const item = {
+        url:file.url,
+        name:file.name,
+        kind:file.kind || mediaKindForItem(file),
+        resultId:file.id || file.result_id || '',
+        generatedResult:true,
+        natural_w:Number(file.natural_w || file.width || extra.natural_w || 0),
+        natural_h:Number(file.natural_h || file.height || extra.natural_h || 0),
+        ...extra
+    };
+    const outputNode = createImageNodeAt({x:rect.x + rect.width + 220, y:rect.y + rect.height / 2}, [item], {select:true, skipUndo:true, sourceKind:'result'});
+    outputNode.title = file.name || '编辑结果';
+    addConnection(sourceNode.id, outputNode.id, 'result');
+    return outputNode;
 }
 function applyOutpaintSizeToSmartParams(width, height){
     const w = Math.max(1, Math.round(Number(width) || 0));
@@ -12663,7 +17759,7 @@ async function applyImageCrop(){
     const blob = await new Promise(resolve => canvasEl.toBlob(resolve, 'image/png'));
     const base = (image.name || 'image').replace(/\.[^.]+$/, '');
     const file = blob ? await uploadCroppedBlob(blob, `${base}_crop.png`) : null;
-    if(file && replaceEditedImage(file)){ closeImageEditor(); render(); scheduleSave(); }
+    if(file && createEditedResultNode(node, file, {natural_w:sw, natural_h:sh})){ closeImageEditor(); render(); scheduleSave(); }
 }
 async function applyImageOutpaint(){
     if(!cropState) return;
@@ -12685,10 +17781,10 @@ async function applyImageOutpaint(){
     const blob = await new Promise(resolve => canvasEl.toBlob(resolve, 'image/png'));
     const base = (image.name || 'image').replace(/\.[^.]+$/, '');
     const file = blob ? await uploadCroppedBlob(blob, `${base}_outpaint.png`) : null;
-    if(file && replaceEditedImage(file)){
-        applyOutpaintSizeToSmartParams(outW, outH);
-        setPromptDraftForNode(node, 'Remove white area and fill the scene');
-        promptInput.dataset.preserveDraftOnce = '1';
+    if(file){
+        const outputNode = createEditedResultNode(node, file, {natural_w:outW, natural_h:outH});
+        if(!outputNode) return;
+        applyOutpaintSizeToSmartParams.call(null, outW, outH);
         closeImageEditor();
         render();
         scheduleSave();
@@ -12702,9 +17798,7 @@ async function applyImageMask(){
     const blob = await new Promise(resolve => mask.toBlob(resolve, 'image/png'));
     const base = (image.name || 'image').replace(/\.[^.]+$/, '');
     const file = blob ? await uploadCroppedBlob(blob, `${base}_mask.png`) : null;
-    if(file){
-        node.images.push({url:file.url, name:file.name, role:'mask'});
-        selectedId = node.id; selectedImage = {nodeId:node.id, index:node.images.length - 1};
+    if(file && createEditedResultNode(node, file, {role:'mask', natural_w:mask.width, natural_h:mask.height})){
         closeImageEditor(); render(); scheduleSave();
     }
 }
@@ -12741,7 +17835,7 @@ async function applyImageBrush(){
     const blob = await new Promise(resolve => canvasEl.toBlob(resolve, 'image/png'));
     const base = (image.name || 'image').replace(/\.[^.]+$/, '');
     const file = blob ? await uploadCroppedBlob(blob, `${base}_paint.png`) : null;
-    if(file && replaceEditedImage(file)){ closeImageEditor(); render(); scheduleSave(); }
+    if(file && createEditedResultNode(node, file, {natural_w:canvasEl.width, natural_h:canvasEl.height})){ closeImageEditor(); render(); scheduleSave(); }
 }
 async function applyImageGridSplit(){
     if(!cropState) return;
@@ -12769,9 +17863,13 @@ async function applyImageGridSplit(){
         const outputNode = createNode((node.x || 0) + imageLayout(node.images || [], nodeScale(node), node).width + 40, node.y || 0, files.map((file, i) => ({
             url:file.url,
             name:file.name,
+            kind:file.kind || 'image',
+            resultId:file.id || file.result_id || '',
+            generatedResult:true,
             grid:{...layout, row:rects[i]?.row || 0, col:rects[i]?.col || 0, w:rects[i]?.w || 1, h:rects[i]?.h || 1}
-        })));
+        })), {sourceKind:'result'});
         outputNode.title = 'Grid';
+        addConnection(node.id, outputNode.id, 'result');
         closeImageEditor(); render(); scheduleSave();
     }
 }
@@ -12839,15 +17937,19 @@ async function applyImageGridJoin(){
     const base = safeExportFileName((downloadNameForMediaItem(image || items[0]?.item, 'image') || 'image').replace(/\.[^.]+$/, ''), 'image');
     const file = blob ? await uploadCroppedBlob(blob, `${base}_join.png`) : null;
     if(file){
-        const rect = nodeRect(node);
+        const sourceNode = gridJoinGroupId ? nodes.find(item => item.id === gridJoinGroupId && isSmartGroupNode(item)) || node : node;
+        const rect = nodeRect(sourceNode);
         const outputNode = createImageNodeAt({x:rect.x + rect.width + 240, y:rect.y + rect.height / 2}, [{
             url:file.url,
             name:file.name,
             kind:'image',
+            resultId:file.id || file.result_id || '',
+            generatedResult:true,
             natural_w:canvasEl.width,
             natural_h:canvasEl.height
-        }], {select:true, skipUndo:true});
+        }], {select:true, skipUndo:true, sourceKind:'result'});
         outputNode.title = 'Grid Join';
+        addConnection(sourceNode.id, outputNode.id, 'result');
         closeImageEditor();
         render();
         scheduleSave();
@@ -12870,7 +17972,7 @@ async function applyImageResize(){
     const suffix = `${Math.round(resized.scale * 100)}pct`;
     const file = await uploadCroppedBlob(resized.blob, `${base}_resize_${suffix}.png`);
     if(!file) return;
-    if(!replaceEditedImage(file, {kind:'image', role:image.role || '', natural_w:resized.targetW, natural_h:resized.targetH})){
+    if(!createEditedResultNode(node, file, {kind:'image', role:image.role || '', natural_w:resized.targetW, natural_h:resized.targetH})){
         return;
     }
     closeImageEditor();
@@ -12929,13 +18031,48 @@ function loadPromptDraft(subject){
     }
 }
 function positionComposerForNode(node){
-    if(!node) return;
+    if(!node || !composer || !shell) return;
     const rect = nodeRect(node);
     const gap = 14;
-    const cardW = 540;
+    const safeScreen = 14;
+    const scale = safeScale(viewport.scale);
+    const maxWorldWidth = Math.max(280, (shell.clientWidth - safeScreen * 2) / scale);
+    const visibleLeft = (safeScreen - viewport.x) / scale;
+    const visibleRight = (shell.clientWidth - safeScreen - viewport.x) / scale;
+    const visibleTop = (safeScreen - viewport.y) / scale;
+    const visibleBottom = (shell.clientHeight - safeScreen - viewport.y) / scale;
+    const forceBelow = node.type === SMART_NODE_TYPES.aiApp;
+    const cardW = Math.min(forceBelow ? 440 : 540, maxWorldWidth);
     composer.style.width = `${cardW}px`;
-    composer.style.left = `${rect.x + rect.width / 2 - cardW / 2}px`;
-    composer.style.top = `${rect.y + rect.height + gap}px`;
+    const availableBelow = Math.max(1, visibleBottom - (rect.y + rect.height + gap));
+    composer.style.height = '';
+    composer.style.setProperty('--ai-app-param-list-max-height', `${Math.max(60, availableBelow - 180)}px`);
+    let cardH = Math.max(1, composer.offsetHeight || composer.getBoundingClientRect().height / scale || 1);
+    if(forceBelow && availableBelow >= 180 && cardH > availableBelow){
+        composer.style.height = `${availableBelow}px`;
+        cardH = availableBelow;
+    }
+    const belowTop = rect.y + rect.height + gap;
+    const aboveTop = rect.y - gap - cardH;
+    const hasRoomBelow = belowTop + cardH <= visibleBottom;
+    const hasRoomAbove = aboveTop >= visibleTop;
+    let top;
+    let left;
+    top = forceBelow ? belowTop : (hasRoomBelow || !hasRoomAbove ? belowTop : aboveTop);
+    left = rect.x + rect.width / 2 - cardW / 2;
+    left = Math.min(Math.max(left, visibleLeft), Math.max(visibleLeft, visibleRight - cardW));
+    if(!forceBelow) top = Math.min(Math.max(top, visibleTop), Math.max(visibleTop, visibleBottom - cardH));
+    composer.style.left = `${left}px`;
+    composer.style.top = `${top}px`;
+    composer.classList.remove('composer-side');
+    composer.classList.toggle('composer-above', !forceBelow && top < rect.y);
+}
+function setSmartNodeOverlayOwner(element, nodeId=''){
+    if(!element) return;
+    const id = String(nodeId || '').trim();
+    element.classList.toggle('smart-node-owned-overlay', Boolean(id));
+    if(id) element.dataset.smartNodeId = id;
+    else delete element.dataset.smartNodeId;
 }
 let composerUpdateTimer = 0;
 let composerUpdateSeq = 0;
@@ -12958,41 +18095,50 @@ function updateComposer(){
     }
     composerUpdateSeq++;
     const node = selectedNode();
+    pruneDisconnectedMentionTokensForAllNodes();
     syncRunButtonState(node);
     if(smartCascadeSilentSelection && !activeComposerSubject){
+        composer.classList.remove('ai-app-composer');
         composer.classList.remove('open');
         if(cascadeRunBtn) cascadeRunBtn.style.display = 'none';
         activeComposerSubject = null;
         lastComposerNodeId = '';
+        setSmartNodeOverlayOwner(composer, '');
         return;
     }
     if(node?.type === 'smart-minimax'){
+        composer.classList.remove('ai-app-composer');
         savePromptDraftForCurrent();
         composer.classList.remove('open');
         if(cascadeRunBtn) cascadeRunBtn.style.display = 'none';
         activeComposerSubject = null;
         lastComposerNodeId = '';
+        setSmartNodeOverlayOwner(composer, '');
         setPromptInputLocked(false);
         return;
     }
     composer.classList.toggle('open', !!node);
     if(!isSmartRunnableNode(node)){
+        composer.classList.remove('ai-app-composer');
         if(cascadeRunBtn) cascadeRunBtn.style.display = 'none';
         savePromptDraftForCurrent();
         composer.classList.remove('open');
         activeComposerSubject = null;
         lastComposerNodeId = '';
+        setSmartNodeOverlayOwner(composer, '');
         setPromptInputLocked(false);
         if(!node) setPromptText('');
         return;
     }
     // composer 只绑定节点本身：图片只是素材/结果，不携带提示词或参数状态。
     const subject = node;
+    composer.classList.toggle('ai-app-composer', node.type === SMART_NODE_TYPES.aiApp);
     const composerKey = `${node.id}:node`;
     const switchedNode = lastComposerNodeId !== composerKey;
     if(switchedNode) savePromptDraftForCurrent();
     lastComposerNodeId = composerKey;
     activeComposerSubject = subject;
+    setSmartNodeOverlayOwner(composer, subject.id);
     const hasPromptInput = promptInputNodesFor(node).length > 0;
     if(switchedNode){
         settings = smartSettingsForNode(subject);
@@ -13004,25 +18150,45 @@ function updateComposer(){
     const ph = Math.max(60, Math.min(380, Number(settings.promptH) || 124));
     promptInput.style.setProperty('--prompt-h', `${ph}px`);
     renderInputThumbsRow(node);
-    renderInputPromptPreview(node);
     syncCascadeRunButton(node);
     scheduleDynamicParamsRefresh(140);
 }
-function renderInputPromptPreview(node){
-    if(!inputPromptPreview) return;
-    const groupText = isSmartGroupNode(node) ? textForNode(node).trim() : '';
-    const text = node ? [groupText, inputPromptTextFor(node).trim()].filter(Boolean).join('\n\n') : '';
-    inputPromptPreview.classList.toggle('has-text', Boolean(text));
-    inputPromptPreview.innerHTML = text
-        ? `<div class="input-prompt-preview-label">${escapeHtml(tr('smart.inputUpstream'))}</div><div class="input-prompt-preview-text">${escapeHtml(text)}</div>`
-        : '';
+function inputThumbLabel(kind, count){
+    const keys = {
+        text:'smart.inputTextNum',
+        image:'smart.inputImageNum',
+        video:'smart.inputVideoNum',
+        audio:'smart.inputAudioNum'
+    };
+    return trf(keys[kind] || 'smart.inputNum', {n:count});
+}
+function numberedReferenceItems(items){
+    const counters = {image:0, video:0, audio:0, text:0, file:0};
+    return (items || []).map(item => {
+        const kind = mediaKindForItem(item);
+        const count = (counters[kind] = (counters[kind] || 0) + 1);
+        return {...item, alias:inputThumbLabel(kind, count)};
+    });
 }
 function renderInputThumbsRow(node){
     if(!inputThumbsRow) return;
     syncJimengModelPillForRefs();
     syncJimengVideoModelPillForRefs();
-    const dedup = node ? visibleReferenceImagesFor(node) : [];
+    const dedup = node ? numberedReferenceItems(visibleReferenceImagesFor(node)) : [];
+    if(node && syncNodeMentionLabels(node, dedup)) scheduleSave();
+    const capabilityCounts = {text:1, image:0, video:0, audio:0};
+    dedup.forEach(item => {
+        const kind = mediaKindForItem(item);
+        if(Object.prototype.hasOwnProperty.call(capabilityCounts, kind)) capabilityCounts[kind] += 1;
+    });
+    const capabilitySignature = JSON.stringify(capabilityCounts);
+    if(inputThumbsRow.dataset.capabilitySig !== capabilitySignature){
+        inputThumbsRow.dataset.capabilitySig = capabilitySignature;
+        if(composer?.classList?.contains('open') && node?.id === activeComposerNode()?.id) scheduleDynamicParamsRefresh(60);
+    }
     const manualRefKeys = new Set(manualReferenceImagesFor(node).map(img => inputRefKey(img)));
+    const connectedRefKeys = new Set(dedup.filter(img => isConnectedInputReference(node, img)).map(img => inputRefKey(img)));
+    const canSwapConnectedRefs = connectedRefKeys.size > 1;
     const addActive = mentionInsertMode === 'manual-ref';
     // 仅当参考图集合/状态真正变化时才重建缩略图 DOM。否则每敲一个字都重建并重新解码所有图片，
     // 参考图多时会让输入框打字明显卡顿。
@@ -13034,6 +18200,7 @@ function renderInputThumbsRow(node){
         mode: node ? smartImageMode(node) : ''
     });
     if(inputThumbsRow.dataset.thumbsSig === thumbsSignature) return;
+    hideReferenceHoverPreview();
     inputThumbsRow.dataset.thumbsSig = thumbsSignature;
     inputThumbsRow.classList.toggle('has-items', Boolean(node));
     if(!node){ inputThumbsRow.innerHTML = ''; return; }
@@ -13052,26 +18219,30 @@ function renderInputThumbsRow(node){
         const title = isSelf
             ? tr('smart.inputSelf')
             : (smartImageMode(node) === 'workflow' ? tr('smart.inputUpstreamWorkflow') : tr('smart.inputUpstream'));
-        const inner = kind === 'audio'
+        const inner = kind === 'text'
+            ? `<div class="input-thumb-text"><i data-lucide="file-text"></i></div>`
+            : kind === 'audio'
             ? `<div class="input-thumb-audio"><i data-lucide="file-audio"></i></div>`
             : isVid
             ? smartVideoPreviewHtml(img, 256, 'draggable="false" alt=""')
             : smartPreviewImgHtml(img, 256, 'draggable="false"');
         const count = (mediaCounters[kind] = (mediaCounters[kind] || 0) + 1);
-        const label = kind === 'audio' ? `音频${count}` : kind === 'video' ? `视频${count}` : `图${count}`;
+        const label = inputThumbLabel(kind, count);
         const sourceUrl = img.originalLocalUrl || img.url || '';
         const key = inputRefKey(img);
-        const removable = manualRefKeys.has(key);
-        const removeBtn = removable ? `<button class="input-thumb-remove" type="button" data-input-remove-reference="${escapeHtml(inputRefKey(img))}" title="删除参考图" aria-label="删除参考图">×</button>` : '';
-        return `<div class="input-thumb ${isSelf ? 'input-self' : ''} ${removable ? 'input-manual-ref' : ''}" draggable="false" data-thumb-index="${i}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${img.imageIndex ?? ''}" data-url="${escapeHtml(img.url || '')}" data-source-url="${escapeHtml(sourceUrl)}" title="${escapeHtml(`${img.name || tr('smart.inputNum').replace('{n}', String(i + 1))} · ${title}`)}">${inner}<span class="input-thumb-label">${escapeHtml(label)}</span>${removeBtn}</div>`;
+        const removable = manualRefKeys.has(key) || connectedRefKeys.has(key);
+        const swappable = canSwapConnectedRefs && connectedRefKeys.has(key);
+        const removeLabel = capabilityUiText('删除引用','Remove reference');
+        const removeBtn = removable ? `<button class="input-thumb-remove" type="button" data-input-remove-index="${i}" title="${escapeAttr(removeLabel)}" aria-label="${escapeAttr(removeLabel)}">×</button>` : '';
+        return `<div class="input-thumb ${isSelf ? 'input-self' : ''} ${removable ? 'input-manual-ref' : ''}" draggable="false" data-input-ref-swappable="${swappable ? '1' : '0'}" data-thumb-index="${i}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${img.imageIndex ?? ''}" data-url="${escapeHtml(img.url || '')}" data-source-url="${escapeHtml(sourceUrl)}" title="${escapeHtml(`${img.name || tr('smart.inputNum').replace('{n}', String(i + 1))} · ${title}`)}"><div class="input-thumb-media">${inner}</div><span class="input-thumb-label">${escapeHtml(label)}</span>${removeBtn}</div>`;
     }).join('');
     inputThumbsRow.innerHTML = `<div class="input-thumb-list">${thumbsHtml}${dedup.length > 1 ? `<span class="input-thumb-count">${escapeHtml(tr('smart.inputCount').replace('{n}', String(dedup.length)))}</span>` : ''}</div><div class="input-thumb-actions">${addButton}</div>`;
     bindSmartPreviewImageFallbacks(inputThumbsRow);
     bindInputThumbsDrag(node, dedup, manualRefKeys);
-    bindInputThumbReferenceActions();
+    bindInputThumbReferenceActions(dedup);
     refreshIcons();
 }
-function bindInputThumbReferenceActions(){
+function bindInputThumbReferenceActions(items=[]){
     inputThumbsRow?.querySelectorAll('[data-input-add-reference]').forEach(btn => {
         btn.addEventListener('click', event => {
             event.preventDefault();
@@ -13079,24 +18250,29 @@ function bindInputThumbReferenceActions(){
             toggleAssetMentionPickerFromThumbs();
         });
     });
-    inputThumbsRow?.querySelectorAll('[data-input-remove-reference]').forEach(btn => {
+    inputThumbsRow?.querySelectorAll('[data-input-remove-index]').forEach(btn => {
         btn.addEventListener('click', event => {
             event.preventDefault();
             event.stopPropagation();
-            removeManualReferenceFromSelectedNode(btn.dataset.inputRemoveReference || '');
+            removeInputReferenceFromSelectedNode(Number(btn.dataset.inputRemoveIndex));
         });
+    });
+    inputThumbsRow?.querySelectorAll('.input-thumb[data-thumb-index]').forEach(thumb => {
+        const reference = items[Number(thumb.dataset.thumbIndex || 0)];
+        if(!reference) return;
+        thumb.addEventListener('mouseenter', () => showReferenceHoverPreview(thumb, reference));
+        thumb.addEventListener('mouseleave', hideReferenceHoverPreview);
     });
 }
 function bindInputThumbsDrag(node, items, manualRefKeys=new Set()){
     if(!inputThumbsRow) return;
     let thumbDragIndex = -1;
+    let thumbDragGlobal = false;
     inputThumbsRow.querySelectorAll('.input-thumb').forEach(el => {
         const index = Number(el.dataset.thumbIndex || -1);
         const item = items[index];
-        const key = inputRefKey(item);
-        const canReorderManual = items.length > 1 && manualRefKeys.has(key);
-        const canReorderSource = items.length > 1 && Boolean(item?.nodeId);
-        el.draggable = canReorderManual || canReorderSource;
+        const swappable = el.dataset.inputRefSwappable === '1' && isConnectedInputReference(node, item);
+        el.draggable = swappable;
         el.addEventListener('click', e => {
             e.preventDefault();
             e.stopPropagation();
@@ -13105,40 +18281,30 @@ function bindInputThumbsDrag(node, items, manualRefKeys=new Set()){
         el.addEventListener('dragstart', e => {
             e.stopPropagation();
             thumbDragIndex = index;
+            thumbDragGlobal = Boolean(e.shiftKey);
             el.classList.add('dragging');
             e.dataTransfer.effectAllowed = 'move';
-            if(canReorderManual) e.dataTransfer.setData('application/x-smart-manual-ref', key);
-            else e.dataTransfer.setData('application/x-smart-input-thumb', String(index));
+            e.dataTransfer.setData('application/x-smart-input-thumb', String(index));
+            e.dataTransfer.setData('application/x-smart-input-global-swap', thumbDragGlobal ? '1' : '0');
         });
         el.addEventListener('dragend', e => {
             e.stopPropagation();
             thumbDragIndex = -1;
+            thumbDragGlobal = false;
             clearInputThumbDropMarkers();
             el.classList.remove('dragging');
         });
         el.addEventListener('dragover', e => {
-            const manualFromKey = e.dataTransfer.getData('application/x-smart-manual-ref');
-            if(manualFromKey){
-                if(!manualRefKeys.has(key) || manualFromKey === key) return;
-                e.preventDefault();
-                e.stopPropagation();
-                e.dataTransfer.dropEffect = 'move';
-                clearInputThumbDropMarkers();
-                const placement = inputThumbDropPlacement(el, e);
-                el.dataset.dropPlacement = placement;
-                el.classList.add(placement === 'before' ? 'drop-before' : 'drop-after');
-                return;
-            }
             const rawFrom = e.dataTransfer.getData('application/x-smart-input-thumb');
             const from = rawFrom === '' ? thumbDragIndex : Number(rawFrom);
-            if(!Number.isFinite(from) || from < 0 || from === index || !items[index]?.nodeId) return;
+            if(!swappable || !Number.isFinite(from) || from < 0 || from === index || !isConnectedInputReference(node, items[from])) return;
+            if(mediaKindForItem(items[from]) !== mediaKindForItem(item)) return;
             e.preventDefault();
             e.stopPropagation();
             e.dataTransfer.dropEffect = 'move';
             clearInputThumbDropMarkers();
-            const placement = inputThumbDropPlacement(el, e);
-            el.dataset.dropPlacement = placement;
-            el.classList.add(placement === 'before' ? 'drop-before' : 'drop-after');
+            el.dataset.dropPlacement = 'before';
+            el.classList.add('drop-before');
         });
         el.addEventListener('dragleave', e => {
             if(el.contains(e.relatedTarget)) return;
@@ -13146,24 +18312,15 @@ function bindInputThumbsDrag(node, items, manualRefKeys=new Set()){
             el.classList.remove('drop-before', 'drop-after');
         });
         el.addEventListener('drop', e => {
-            const manualFromKey = e.dataTransfer.getData('application/x-smart-manual-ref');
-            if(manualFromKey){
-                if(!manualRefKeys.has(key) || manualFromKey === key) return;
-                e.preventDefault();
-                e.stopPropagation();
-                const placement = inputThumbDropPlacement(el, e);
-                clearInputThumbDropMarkers();
-                reorderManualInputRefs(node, manualFromKey, key, placement);
-                return;
-            }
             const rawFrom = e.dataTransfer.getData('application/x-smart-input-thumb');
             const from = rawFrom === '' ? thumbDragIndex : Number(rawFrom);
-            if(!Number.isFinite(from) || from < 0 || from === index || !items[index]?.nodeId) return;
+            if(!swappable || !Number.isFinite(from) || from < 0 || from === index || !isConnectedInputReference(node, items[from])) return;
+            if(mediaKindForItem(items[from]) !== mediaKindForItem(item)) return;
             e.preventDefault();
             e.stopPropagation();
-            const placement = inputThumbDropPlacement(el, e);
             clearInputThumbDropMarkers();
-            reorderInputThumb(node, items, from, index, placement);
+            const globalSwap = thumbDragGlobal || e.shiftKey || e.dataTransfer.getData('application/x-smart-input-global-swap') === '1';
+            reorderInputThumb(node, items, from, index, {globalSwap});
         });
     });
 }
@@ -13220,119 +18377,211 @@ function bindInputThumbVideoActions(){
         };
     });
 }
-function movedBeforeAfterIds(ids, movedId, targetId, placement='before'){
-    const list = (ids || []).filter(Boolean);
-    const from = list.indexOf(movedId);
-    const target = list.indexOf(targetId);
-    if(from < 0 || target < 0 || movedId === targetId) return list;
-    const [moved] = list.splice(from, 1);
-    let insertAt = list.indexOf(targetId);
-    if(insertAt < 0) return ids || [];
-    if(placement === 'after') insertAt += 1;
-    list.splice(insertAt, 0, moved);
-    return list;
+const MEDIA_SLOT_IDENTITY_FIELDS = ['id', 'resultId', 'result_id', 'materialId', 'material_id', 'assetId', 'asset_id'];
+function referenceFromMentionToken(token){
+    return {
+        url:token?.dataset?.url || '',
+        kind:token?.dataset?.kind || 'image',
+        name:token?.dataset?.name || '',
+        text:token?.dataset?.text || '',
+        content:token?.dataset?.text || '',
+        nodeId:token?.dataset?.nodeId || '',
+        sourceNodeId:token?.dataset?.sourceNodeId || '',
+        imageIndex:Number(token?.dataset?.imageIndex || 0)
+    };
 }
-function sameOrderedIds(a, b){
-    if((a || []).length !== (b || []).length) return false;
-    return (a || []).every((id, index) => id === b[index]);
-}
-function reorderInputSourceNodes(currentNode, movedId, targetId, placement='before'){
-    if(!currentNode || !movedId || !targetId || movedId === targetId) return false;
-    const sourceNodes = smartImageUsesWorkflowInput(currentNode, smartLoopContext)
-        ? workflowInputNodesFor(currentNode)
-        : inputNodesFor(currentNode);
-    const sourceIds = sourceNodes.map(n => n.id).filter(Boolean);
-    if(!sourceIds.includes(movedId) || !sourceIds.includes(targetId)) return false;
-    const nextIds = movedBeforeAfterIds(sourceIds, movedId, targetId, placement);
-    if(sameOrderedIds(sourceIds, nextIds)) return false;
-    const oldExplicitIds = Array.isArray(currentNode.inputNodeIds) ? currentNode.inputNodeIds.filter(Boolean) : [];
-    currentNode.inputNodeIds = [
-        ...nextIds.filter(id => oldExplicitIds.includes(id)),
-        ...oldExplicitIds.filter(id => !nextIds.includes(id))
-    ];
-    if(canvas && Array.isArray(canvas.connections)){
-        const order = new Map(nextIds.map((id, index) => [id, index]));
-        const relevantSlots = new Set();
-        const relevant = [];
-        canvas.connections.forEach((conn, index) => {
-            const kind = conn?.kind || 'flow';
-            if(conn?.to === currentNode.id && ['input', 'flow'].includes(kind) && order.has(conn.from)){
-                relevantSlots.add(index);
-                relevant.push({conn, index});
-            }
-        });
-        if(relevant.length){
-            relevant.sort((a, b) => (order.get(a.conn.from) - order.get(b.conn.from)) || (a.index - b.index));
-            let cursor = 0;
-            canvas.connections = canvas.connections.map((conn, index) => relevantSlots.has(index) ? relevant[cursor++].conn : conn);
-        }
-    }
+function updateMentionTokenReference(token, ref){
+    if(!token || !ref) return false;
+    const kind = mediaKindForItem(ref);
+    const name = token.dataset.name || ref.name || (kind === 'text' ? '文本' : kind === 'audio' ? '音频' : kind === 'video' ? '视频' : '图片');
+    const text = SMART_NODE_CONTRACT.textContentForMediaItem(ref);
+    token.dataset.url = ref.url || '';
+    token.dataset.kind = kind;
+    token.dataset.name = name;
+    token.dataset.text = text;
+    token.dataset.nodeId = ref.nodeId || '';
+    token.dataset.sourceNodeId = inputReferenceSourceNodeId(ref);
+    token.dataset.imageIndex = String(ref.imageIndex ?? '');
+    token.dataset.assetUris = JSON.stringify(ref.asset_uris || {});
+    token.innerHTML = `${mentionTokenMediaHtml(ref, kind)}<span>${escapeHtml(name)}</span>`;
     return true;
 }
-function reorderInputThumb(currentNode, items, from, to, placement='before'){
-    // items are already sourced from inputImagesFor → multiple source nodes possible.
-    // Reorder within a source group's images first; separate input nodes use the
-    // current node's input order, with a visual-position swap as a final fallback.
-    if(from < 0 || to < 0 || from >= items.length || to >= items.length) return;
-    // 强制让缩略图条在重排后重建（绕过 renderInputThumbsRow 的“无变化跳过”缓存），否则顺序看起来没变。
-    if(inputThumbsRow) delete inputThumbsRow.dataset.thumbsSig;
+function syncMentionTokensInRoot(root, replacements){
+    let changed = false;
+    root?.querySelectorAll?.('.mention-image-token').forEach(token => {
+        const replacement = replacements.get(inputRefKey(referenceFromMentionToken(token)));
+        if(replacement) changed = updateMentionTokenReference(token, replacement) || changed;
+    });
+    return changed;
+}
+function syncNodeMentionReferences(node, replacements){
+    if(!node || !replacements?.size) return false;
+    let changed = false;
+    if(node.promptDraftHtml){
+        const template = document.createElement('template');
+        template.innerHTML = node.promptDraftHtml;
+        if(syncMentionTokensInRoot(template.content, replacements)){
+            node.promptDraftHtml = template.innerHTML;
+            changed = true;
+        }
+    }
+    if(activeComposerNode()?.id === node.id && promptInput){
+        if(syncMentionTokensInRoot(promptInput, replacements)){
+            node.promptDraftHtml = promptInput.innerHTML;
+            node.promptDraftText = promptPlainText();
+            bindSmartPreviewImageFallbacks(promptInput);
+            changed = true;
+        }
+    }
+    return changed;
+}
+function syncMentionLabelsInRoot(root, labels){
+    let changed = false;
+    root?.querySelectorAll?.('.mention-image-token').forEach(token => {
+        const label = labels.get(inputRefKey(referenceFromMentionToken(token)));
+        if(!label || token.dataset.name === label) return;
+        token.dataset.name = label;
+        const labelElement = token.lastElementChild;
+        if(labelElement?.tagName === 'SPAN') labelElement.textContent = label;
+        changed = true;
+    });
+    return changed;
+}
+function syncNodeMentionLabels(node, refs){
+    if(!node) return false;
+    const labels = new Map((refs || []).map(ref => [inputRefKey(ref), ref.alias || '']).filter(([key, label]) => key && label));
+    if(!labels.size) return false;
+    let changed = false;
+    if(node.promptDraftHtml){
+        const template = document.createElement('template');
+        template.innerHTML = node.promptDraftHtml;
+        if(syncMentionLabelsInRoot(template.content, labels)){
+            node.promptDraftHtml = template.innerHTML;
+            changed = true;
+        }
+    }
+    if(activeComposerNode()?.id === node.id && promptInput && syncMentionLabelsInRoot(promptInput, labels)){
+        node.promptDraftHtml = promptInput.innerHTML;
+        node.promptDraftText = promptPlainText();
+        changed = true;
+    }
+    return changed;
+}
+function pruneDisconnectedMentionTokens(node){
+    if(!node || !isSmartRunnableNode(node)) return false;
+    const connectedKeys = new Set(lineImagesFor(node).map(inputRefKey).filter(Boolean));
+    let changed = false;
+    const pruneRoot = root => {
+        root?.querySelectorAll?.('.mention-image-token').forEach(token => {
+            if(!token.dataset.nodeId) return;
+            const key = inputRefKey(referenceFromMentionToken(token));
+            if(!key || connectedKeys.has(key)) return;
+            token.remove();
+            changed = true;
+        });
+    };
+    if(node.promptDraftHtml){
+        const template = document.createElement('template');
+        template.innerHTML = node.promptDraftHtml;
+        const before = changed;
+        pruneRoot(template.content);
+        if(changed !== before) node.promptDraftHtml = template.innerHTML;
+    }
+    if(activeComposerNode()?.id === node.id && promptInput){
+        const before = changed;
+        pruneRoot(promptInput);
+        if(changed !== before){
+            node.promptDraftHtml = promptInput.innerHTML;
+            node.promptDraftText = promptPlainText();
+        }
+    }
+    return changed;
+}
+function pruneDisconnectedMentionTokensForAllNodes(){
+    let changed = false;
+    nodes.filter(isSmartRunnableNode).forEach(node => {
+        changed = pruneDisconnectedMentionTokens(node) || changed;
+    });
+    return changed;
+}
+function sourceMediaSlotForReference(ref){
+    const nodeId = String(ref?.nodeId || '').trim();
+    const imageIndex = Number(ref?.imageIndex);
+    const node = nodeId ? nodes.find(item => item.id === nodeId) : null;
+    if(!node || !Number.isInteger(imageIndex) || imageIndex < 0 || !Array.isArray(node.images) || !node.images[imageIndex]) return null;
+    return {node, imageIndex, item:node.images[imageIndex]};
+}
+function mediaContentForStableSlot(content, stableSlot){
+    const next = {...content};
+    MEDIA_SLOT_IDENTITY_FIELDS.forEach(key => {
+        if(Object.prototype.hasOwnProperty.call(stableSlot, key)) next[key] = stableSlot[key];
+        else delete next[key];
+    });
+    return next;
+}
+function referenceForSourceSlot(slot){
+    return slot ? imagesForNode(slot.node).find(item => Number(item.imageIndex) === slot.imageIndex) || null : null;
+}
+function refreshSourceBackedManualReferences(replacements){
+    nodes.forEach(node => {
+        if(!Array.isArray(node.manualInputRefs)) return;
+        node.manualInputRefs = node.manualInputRefs.map(ref => {
+            const replacement = replacements.get(inputRefKey(ref));
+            return replacement ? {...replacement, manualAdded:true} : ref;
+        });
+    });
+}
+function swapGlobalInputReferences(firstRef, secondRef){
+    const firstSlot = sourceMediaSlotForReference(firstRef);
+    const secondSlot = sourceMediaSlotForReference(secondRef);
+    if(!firstSlot || !secondSlot || (firstSlot.node.id === secondSlot.node.id && firstSlot.imageIndex === secondSlot.imageIndex)) return false;
+    const firstItem = {...firstSlot.item};
+    const secondItem = {...secondSlot.item};
+    firstSlot.node.images[firstSlot.imageIndex] = mediaContentForStableSlot(secondItem, firstItem);
+    secondSlot.node.images[secondSlot.imageIndex] = mediaContentForStableSlot(firstItem, secondItem);
+    const replacements = new Map([
+        [inputRefKey(firstRef), referenceForSourceSlot(firstSlot)],
+        [inputRefKey(secondRef), referenceForSourceSlot(secondSlot)]
+    ].filter(([, ref]) => ref));
+    refreshSourceBackedManualReferences(replacements);
+    nodes.filter(isSmartRunnableNode).forEach(node => syncNodeMentionReferences(node, replacements));
+    return true;
+}
+function reorderInputThumb(currentNode, items, from, to, options={}){
+    if(!currentNode || from < 0 || to < 0 || from >= items.length || to >= items.length || from === to) return false;
     const fromImg = items[from];
     const toImg = items[to];
-    if(!fromImg || !toImg) return;
-    if(fromImg.nodeId === toImg.nodeId){
-        const src = nodes.find(n => n.id === fromImg.nodeId);
-        if(!src) return;
-        pushUndo();
-        const fi = Number(fromImg.imageIndex);
-        const ti = Number(toImg.imageIndex);
-        if(Number.isFinite(fi) && Number.isFinite(ti) && (src.images || [])[fi]){
-            const arr = src.images;
-            let insertAt = Math.max(0, Math.min(arr.length, ti + (placement === 'after' ? 1 : 0)));
-            const item = arr.splice(fi, 1)[0];
-            if(fi < insertAt) insertAt -= 1;
-            arr.splice(Math.max(0, Math.min(arr.length, insertAt)), 0, item);
-        }
-        render();
-        scheduleSave();
-        return;
-    }
-    // 分组：缩略图来自各成员节点，跨成员拖动应改变 group.items 的成员顺序（= 图1234 的编号顺序），
-    // 而不是去交换节点的画布位置（那只改了图层上下层级）。
-    if(isSmartGroupNode(currentNode) && Array.isArray(currentNode.items)
-        && fromImg.nodeId !== toImg.nodeId
-        && currentNode.items.includes(fromImg.nodeId) && currentNode.items.includes(toImg.nodeId)){
-        const next = movedBeforeAfterIds(currentNode.items.slice(), fromImg.nodeId, toImg.nodeId, placement);
-        if(!sameOrderedIds(currentNode.items, next)){
-            pushUndo();
-            currentNode.items = next;
-            if(inputThumbsRow) delete inputThumbsRow.dataset.thumbsSig;
-            render();
-            scheduleSave();
-        }
-        return;
-    }
-    const canReorderSources = currentNode && fromImg.nodeId && toImg.nodeId;
-    const a = nodes.find(n => n.id === fromImg.nodeId);
-    const b = nodes.find(n => n.id === toImg.nodeId);
-    if(!canReorderSources || !a || !b) return;
+    if(mediaKindForItem(fromImg) !== mediaKindForItem(toImg)) return false;
+    if(!isConnectedInputReference(currentNode, fromImg) || !isConnectedInputReference(currentNode, toImg)) return false;
+    const fromKey = inputRefKey(fromImg);
+    const toKey = inputRefKey(toImg);
+    if(!fromKey || !toKey || fromKey === toKey) return false;
     pushUndo();
-    if(reorderInputSourceNodes(currentNode, fromImg.nodeId, toImg.nodeId, placement)){
-        render();
-        scheduleSave();
-        return;
+    let changed = false;
+    if(options.globalSwap){
+        changed = swapGlobalInputReferences(fromImg, toImg);
+    } else {
+        const entries = items.map((item, index) => ({key:inputRefKey(item) || `index|${index}`, item}));
+        currentNode.inputRefOrder = SMART_NODE_CONTRACT.swapReferenceSlotOrder(entries, currentNode.inputRefOrder || [], fromKey, toKey);
+        changed = syncNodeMentionReferences(currentNode, new Map([[fromKey, toImg], [toKey, fromImg]])) || true;
     }
-    // Cross-node fallback: swap X positions of source nodes
-    const ax = a.x, ay = a.y;
-    a.x = b.x; a.y = b.y;
-    b.x = ax; b.y = ay;
+    if(!changed) return false;
+    if(inputThumbsRow) delete inputThumbsRow.dataset.thumbsSig;
     render();
     scheduleSave();
+    return true;
 }
 function isSupportedUploadFile(file){
     const type = String(file?.type || '').toLowerCase();
     const name = String(file?.name || '').toLowerCase();
-    return type.startsWith('image/') || type.startsWith('video/') || type.startsWith('audio/')
+    return type.startsWith('image/') || type.startsWith('video/') || type.startsWith('audio/') || isSupportedTextFile(file)
         || /\.(png|jpe?g|webp|gif|mp4|webm|mov|m4v|mp3|wav|m4a|aac|ogg|flac)(\?|$)/.test(name);
+}
+function isSupportedTextFile(file){
+    const type = String(file?.type || '').toLowerCase();
+    const name = String(file?.name || '').toLowerCase();
+    return ['text/plain','text/markdown','application/json','application/ld+json'].includes(type)
+        || /\.(txt|md|markdown|json)(\?|$)/.test(name);
 }
 function dataTransferItemEntry(item){
     try { return item?.webkitGetAsEntry?.() || null; } catch { return null; }
@@ -13561,8 +18810,17 @@ function appendImagesToSmartNode(uploaded, targetId='', opts={}){
         }
         delete node.w;
         delete node.h;
+        delete node.mediaSizeMode;
     }
-    if(node.images.length === 1){ node.title = uploadTitleForItems(node.images, node.title || 'Image'); delete node.w; delete node.h; }
+    if(node.images.length === 1){
+        node.title = uploadTitleForItems(node.images, node.title || 'Image');
+        if(previousCount === 0){
+            const size = defaultSingleMaterialSize(node.images[0]);
+            node.w = size.width;
+            node.h = size.height;
+            node.mediaSizeMode = 'auto';
+        }
+    }
     if(targetGroup) addNodeToSmartGroup(targetGroup, node);
     selectedId = node.id;
     render();
@@ -13573,10 +18831,23 @@ async function handleFiles(files, targetId='', opts={}){
     try {
         const fileList = [...(files || [])].filter(isSupportedUploadFile).slice(0, SMART_UPLOAD_MAX);
         if(!fileList.length) return;
-        const uploaded = await uploadFiles(fileList);
-        if(!uploaded.length) return;
+        const targetNode = nodes.find(node => node.id === targetId);
+        if(targetNode && isTextMediaItem(targetNode.images?.[0] || {})){
+            await replaceTextMaterialFromFiles(targetNode, fileList);
+            return;
+        }
+        const textFiles = fileList.filter(isSupportedTextFile);
+        const mediaFiles = fileList.filter(file => !isSupportedTextFile(file));
         if(!opts.skipUndo) pushUndo();
-        appendImagesToSmartNode(uploaded.map((file, index) => ({...file, kind:file.kind || mediaKindForFile(fileList[index])})), targetId, opts);
+        for(const [index, file] of textFiles.entries()){
+            const text = await file.text();
+            const point = opts.point || viewportCenter();
+            createTextMaterialNodeAt({x:point.x + index * 28, y:point.y + index * 28}, text, {skipUndo:true, name:file.name || '导入文本.md', select:index === textFiles.length - 1 && !mediaFiles.length});
+        }
+        if(mediaFiles.length){
+            const uploaded = await uploadFiles(mediaFiles);
+            if(uploaded.length) appendImagesToSmartNode(uploaded.map((file, index) => ({...file, kind:file.kind || mediaKindForFile(mediaFiles[index])})), textFiles.length ? '' : targetId, opts);
+        }
     } catch(e) { toast(e.message || tr('smart.toastUploadFail')); }
 }
 async function importSmartLocalImages(paths){
@@ -13605,10 +18876,21 @@ async function handleSmartImageDropPayload(payload, targetId='', opts={}){
     }
 }
 function sizeForRun(sourceSettings=settings){
-    const fallbackResolution = sourceSettings.engine === 'api' && isGptImageAutoSizeModel(sourceSettings.model)
-        ? defaultSmartApiResolution(sourceSettings.model)
+    const profile = capabilityProfileFor(sourceSettings.provider_id, sourceSettings.model, 'image_generation');
+    const effective = capabilityImageParameterValues(profile, sourceSettings);
+    const explicitSize = String(effective.size || '').trim();
+    const parsedSize = parseSizeValue(explicitSize);
+    if(parsedSize) return `${parsedSize.width}x${parsedSize.height}`;
+    const aspectRatio = String(effective.aspect_ratio || (/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(explicitSize) ? explicitSize : '')).trim();
+    const resolution = ['1k','2k','4k'].includes(String(effective.resolution || '').toLowerCase())
+        ? String(effective.resolution).toLowerCase()
         : '1k';
-    return apiImageSize(sourceSettings.ratio || 'square', sourceSettings.resolution || fallbackResolution, sourceSettings.customRatio || '', sourceSettings.customSize || '') || '1024x1024';
+    if(aspectRatio && parseRatioValue(aspectRatio)){
+        const presetKey = Object.entries(API_RATIO_VALUES).find(([, value]) => value === aspectRatio)?.[0] || 'custom';
+        return apiImageSize(presetKey, resolution, aspectRatio, '') || '1024x1024';
+    }
+    if(isGptImageAutoSizeModel(sourceSettings.model) && String(effective.resolution || '').toLowerCase() === 'auto') return 'auto';
+    return '1024x1024';
 }
 function expectedOutputSize(){
     if(settings.engine === 'comfy'){
@@ -13630,7 +18912,7 @@ function expectedOutputSize(){
     return {w:1024, h:1024};
 }
 function explicitRequestOutputSizeForPending(){
-    if(isApiLikeEngine(settings.engine) && settings.apiKind !== 'video'){
+    if(isApiLikeEngine(settings.engine) && settings.apiKind === 'image'){
         const parsed = parseSizeValue(sizeForRun());
         if(parsed) return {w:Number(parsed.width) || 1024, h:Number(parsed.height) || 1024};
     }
@@ -13670,7 +18952,7 @@ function pendingSourceBoxSize(options={}){
 function displayBoxFromNaturalSize(size){
     const layout = singleImageLayout(
         {natural_w:size?.w || size?.width || 1024, natural_h:size?.h || size?.height || 1024},
-        {type:'smart-image', images:[{}]},
+        {type:SMART_NODE_TYPES.material, images:[{}]},
         MEDIA_NODE_DEFAULT_SCALE
     );
     return {w:layout.width, h:layout.height};
@@ -13706,13 +18988,17 @@ function pendingBoxSize(count, options={}){
     return {w, h};
 }
 function mentionTokenHtml(img){
-    if(!img?.url) return '';
+    if(!hasMentionReferenceContent(img)) return '';
     const kind = mediaKindForItem(img);
-    const name = img.alias || img.name || (kind === 'audio' ? '音频' : kind === 'video' ? '视频' : '图片');
+    const name = img.alias || img.name || (kind === 'text' ? '文本' : kind === 'audio' ? '音频' : kind === 'video' ? '视频' : '图片');
+    const text = SMART_NODE_CONTRACT.textContentForMediaItem(img);
     const media = mentionTokenMediaHtml(img, kind);
-    return `<span class="mention-image-token" contenteditable="false" data-url="${escapeHtml(img.url)}" data-kind="${escapeHtml(kind)}" data-name="${escapeHtml(name)}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${escapeHtml(img.imageIndex ?? '')}">${media}<span>${escapeHtml(name)}</span></span>`;
+    return `<span class="mention-image-token" contenteditable="false" data-url="${escapeHtml(img.url || '')}" data-kind="${escapeHtml(kind)}" data-name="${escapeHtml(name)}" data-text="${escapeHtml(text)}" data-node-id="${escapeHtml(img.nodeId || '')}" data-source-node-id="${escapeHtml(inputReferenceSourceNodeId(img))}" data-image-index="${escapeHtml(img.imageIndex ?? '')}" data-asset-uris="${escapeHtml(JSON.stringify(img.asset_uris || {}))}">${media}<span>${escapeHtml(name)}</span></span>`;
 }
 function mentionTokenMediaHtml(img, kind=mediaKindForItem(img)){
+    if(kind === 'text'){
+        return `<div class="mention-text-thumb"><i data-lucide="file-text"></i></div>`;
+    }
     if(kind === 'audio'){
         return `<div class="mention-audio-thumb"><i data-lucide="file-audio"></i></div>`;
     }
@@ -13723,14 +19009,17 @@ function mentionTokenMediaHtml(img, kind=mediaKindForItem(img)){
 }
 function mentionOptionMediaHtml(img){
     const kind = mediaKindForItem(img);
+    if(kind === 'text'){
+        return `<div class="media-thumb text-thumb mention-option-text"><i data-lucide="file-text"></i></div>`;
+    }
     if(kind === 'audio'){
-        return `<div class="media-thumb audio-thumb mention-option-audio"><i data-lucide="file-audio"></i><span>${escapeHtml(img.alias || img.name || 'Audio')}</span></div>`;
+        return `<div class="media-thumb audio-thumb mention-option-audio"><i data-lucide="file-audio"></i></div>`;
     }
     return kind === 'video' ? smartVideoPreviewHtml(img, 256, 'alt=""') : smartPreviewImgHtml(img, 256, 'alt=""');
 }
 function promptHtmlWithMentionTokens(text, refs=[]){
     const value = String(text || '');
-    const items = (refs || []).filter(ref => ref?.url && ref?.name).sort((a, b) => String(b.name || '').length - String(a.name || '').length);
+    const items = (refs || []).filter(ref => hasMentionReferenceContent(ref) && ref?.name).sort((a, b) => String(b.name || '').length - String(a.name || '').length);
     if(!value || !items.length || !value.includes('@')) return '';
     let html = '';
     let index = 0;
@@ -13754,8 +19043,8 @@ function snapshotRunMeta(prompt, sourceId, displayPrompt='', refs=[]){
         displayPrompt:displayPrompt || promptPlainText() || prompt,
         promptHtml: promptInput ? promptInput.innerHTML : '',
         promptText: promptPlainText(),
-        promptRefs:(refs || []).map(ref => ({url:ref.url || '', name:ref.name || '', nodeId:ref.nodeId || '', imageIndex:ref.imageIndex ?? ''})).filter(ref => ref.url),
-        inputRefs:(refs || []).map(ref => ({url:ref.url || '', name:ref.name || '', nodeId:ref.nodeId || '', imageIndex:ref.imageIndex ?? '', kind:ref.kind || ''})).filter(ref => ref.url),
+        promptRefs:(refs || []).map(ref => ({url:ref.url || '', text:SMART_NODE_CONTRACT.textContentForMediaItem(ref), name:ref.name || '', nodeId:ref.nodeId || '', sourceNodeId:ref.sourceNodeId || '', imageIndex:ref.imageIndex ?? '', kind:ref.kind || mediaKindForItem(ref)})).filter(hasMentionReferenceContent),
+        inputRefs:(refs || []).map(ref => ({url:ref.url || '', text:SMART_NODE_CONTRACT.textContentForMediaItem(ref), name:ref.name || '', nodeId:ref.nodeId || '', sourceNodeId:ref.sourceNodeId || '', imageIndex:ref.imageIndex ?? '', kind:ref.kind || mediaKindForItem(ref)})).filter(hasMentionReferenceContent),
         sourceNodeId:sourceId,
         settings:JSON.parse(JSON.stringify(settings)),
         createdAt:Date.now()
@@ -13768,11 +19057,14 @@ function attachRunMeta(targetNode, meta){
     targetNode.runPromptRefs = meta.promptRefs || [];
     targetNode.runInputRefs = (meta.inputRefs || meta.promptRefs || []).map(ref => ({
         url:ref.url || '',
+        text:SMART_NODE_CONTRACT.textContentForMediaItem(ref),
+        content:SMART_NODE_CONTRACT.textContentForMediaItem(ref),
         name:ref.name || '',
         nodeId:ref.nodeId || '',
+        sourceNodeId:ref.sourceNodeId || '',
         imageIndex:ref.imageIndex ?? '',
         kind:ref.kind || ''
-    })).filter(ref => ref.url);
+    })).filter(hasMentionReferenceContent);
     targetNode.runSettings = meta.settings;
     if(meta.sourceNodeId) targetNode.sourceNodeId = meta.sourceNodeId;
     else delete targetNode.sourceNodeId;
@@ -13809,20 +19101,30 @@ function stripImageGenerationMeta(img){
     delete img.promptDraftText;
     return img;
 }
-function addConnection(fromId, toId, kind='flow'){
+function connectionSourceResultId(connection){
+    return String(connection?.sourceResultId || connection?.source_result_id || '').trim();
+}
+function connectionSourceMediaKey(connection){
+    return String(connection?.sourceMediaKey || connection?.source_media_key || '').trim();
+}
+function addConnection(fromId, toId, kind='flow', options={}){
     if(!fromId || !toId || fromId === toId) return;
     canvas.connections = canvas.connections || [];
-    if(canvas.connections.some(c => c.from === fromId && c.to === toId && (c.kind || 'flow') === kind)) return;
-    canvas.connections.push({from:fromId, to:toId, kind});
+    const sourceResultId = String(options?.sourceResultId || '').trim();
+    const sourceMediaKey = String(options?.sourceMediaKey || options?.source_media_key || '').trim();
+    const targetFieldKey = String(options?.targetFieldKey || options?.target_field_key || '').trim();
+    if(canvas.connections.some(c => c.from === fromId && c.to === toId && (c.kind || 'flow') === kind && connectionSourceResultId(c) === sourceResultId && connectionSourceMediaKey(c) === sourceMediaKey && connectionTargetFieldKey(c) === targetFieldKey)) return;
+    canvas.connections.push({from:fromId, to:toId, kind, ...(sourceResultId ? {sourceResultId} : {}), ...(sourceMediaKey ? {sourceMediaKey} : {}), ...(targetFieldKey ? {targetFieldKey} : {})});
 }
-function connectInputNode(fromId, toId){
+function connectInputNode(fromId, toId, options={}){
     const from = nodes.find(n => n.id === fromId);
     const to = nodes.find(n => n.id === toId);
     if(!from || !to || from.id === to.id) return false;
+    if(!SMART_NODE_CONTRACT.canConnectNodes(from, to)) return false;
     if(to.type === 'smart-loop'){
-        const groupImages = isSmartGroupNode(from) ? imagesForNode(from).filter(img => img?.url) : [];
+        const groupImages = isSmartGroupNode(from) || isSmartResultGroupNode(from) ? imagesForNode(from).filter(img => img?.url) : [];
         const groupPrompts = isSmartGroupNode(from) ? promptTextItemsForNode(from).filter(Boolean) : [];
-        const looksImage = isSmartImageNode(from) || groupImages.length > 0 || (from.type === 'smart-loop' && from.imageInput);
+        const looksImage = isSmartImageNode(from) || isSmartResultGroupNode(from) || groupImages.length > 0 || (from.type === 'smart-loop' && from.imageInput);
         const looksPrompt = from.type === 'smart-prompt' || groupPrompts.length > 0 || (from.type === 'smart-loop' && from.showPrompt);
         if(looksImage && !to.imageInput) to.imageInput = true;
         if(looksPrompt && !to.showPrompt) to.showPrompt = true;
@@ -13831,20 +19133,22 @@ function connectInputNode(fromId, toId){
         const canPrompt = Boolean(to.showPrompt) && looksPrompt;
         if(!canImage && !canPrompt) return false;
     }
-    to.inputNodeIds = Array.from(new Set([...(to.inputNodeIds || []), from.id]));
-    addConnection(from.id, to.id, 'input');
+    const kind = SMART_NODE_CONTRACT.connectionKindForNodes(from, to);
+    if(kind === 'input') to.inputNodeIds = Array.from(new Set([...(to.inputNodeIds || []), from.id]));
+    addConnection(from.id, to.id, kind, options);
     return true;
+}
+function upstreamConnectionsForKinds(node, kinds=['input']){
+    if(!node) return [];
+    const allowed = new Set(kinds);
+    const connections = (canvas?.connections || []).filter(conn => conn.to === node.id && allowed.has(conn.kind || 'flow'));
+    if(connections.length || canvasUsesConnections || !allowed.has('input')) return connections;
+    return (node.inputNodeIds || []).filter(id => nodes.some(item => item.id === id)).map(from => ({from, to:node.id, kind:'input'}));
 }
 function upstreamNodesForKinds(node, kinds=['input']){
     if(!node) return [];
-    const allowed = new Set(kinds);
     const ids = new Set();
-    (canvas?.connections || []).forEach(conn => {
-        if(conn.to === node.id && allowed.has(conn.kind || 'flow')) ids.add(conn.from);
-    });
-    if(!canvasUsesConnections && allowed.has('input')){
-        (node.inputNodeIds || []).forEach(id => ids.add(id));
-    }
+    upstreamConnectionsForKinds(node, kinds).forEach(conn => ids.add(conn.from));
     return [...ids].map(id => nodes.find(n => n.id === id)).filter(Boolean);
 }
 function inputNodesFor(node){
@@ -13878,6 +19182,7 @@ function cleanupDetachedRunInputRefs(){
     return changed;
 }
 function imagesForNode(node){
+    if(isSmartResultGroupNode(node)) return resultGroupMediaItems(node);
     if(isSmartGroupNode(node)){
         return smartGroupImageRefs(node).map((ref, index) => ({
             ...ref.item,
@@ -13890,14 +19195,14 @@ function imagesForNode(node){
     return (node?.images || []).map((img, index) => ({...imageForDisplay(img), nodeId:node.id, imageIndex:index}));
 }
 function nodeHasReferenceContent(node){
-    return imagesForNode(node).some(img => img?.url);
+    return imagesForNode(node).some(hasMentionReferenceContent);
 }
 function isSelfReferenceForNode(node, img){
     return Boolean(node?.id && img?.nodeId === node.id);
 }
 function candidateInputImagesFor(node, consume=false, ctx=smartLoopContext){
     const inputs = (smartImageUsesWorkflowInput(node, ctx) ? workflowInputImagesFor(node, consume, ctx) : inputImagesFor(node, consume, ctx))
-        .filter(img => img?.url);
+        .filter(hasMentionReferenceContent);
     if(!inputs.length) return [];
     if(smartImageUsesWorkflowInput(node, ctx)) return inputs;
     if(nodeHasReferenceContent(node)) return [];
@@ -13996,10 +19301,7 @@ function smartLoopPrompt(node, ctx=smartLoopContext){
 }
 function smartLoopInputImages(node, ctx=smartLoopContext){
     if(!node?.imageInput) return [];
-    const refs = inputNodesFor(node).flatMap(input => {
-        if(input?.type === 'smart-loop') return smartLoopInputImages(input, ctx);
-        return imagesForNode(input);
-    }).filter(img => img?.url);
+    const refs = inputImagesFor(node, false, ctx).filter(img => img?.url);
     if(!refs.length) return [];
     const startBase = Math.max(1, Number(node.loopStart) || 1);
     const batchSize = Math.max(1, Math.min(100, Number(node.imageBatchSize) || 1));
@@ -14009,37 +19311,55 @@ function smartLoopInputImages(node, ctx=smartLoopContext){
 }
 function smartLoopPreviewImages(node){
     if(!node?.imageInput) return [];
-    return inputNodesFor(node).flatMap(input => {
-        if(input?.type === 'smart-loop') return smartLoopInputImages(input, {index:Number(node.loopStart) || 1});
-        return imagesForNode(input);
-    }).filter(img => img?.url);
+    return inputImagesFor(node, false, {index:Number(node.loopStart) || 1}).filter(img => img?.url);
 }
 function outputImagesForNode(node, consume=false, ctx=smartLoopContext){
-    if(node?.type === 'smart-group') return imagesForNode(node).filter(img => img?.url);
+    if(isSmartResultGroupNode(node)) return resultGroupMediaItems(node).filter(hasMentionReferenceContent);
+    if(node?.type === 'smart-group') return imagesForNode(node).filter(hasMentionReferenceContent);
     if(node?.type === 'smart-loop') return smartLoopInputImages(node, ctx);
     const roundOutputs = ctx?.roundOutputs;
     if(node?.id && roundOutputs && typeof roundOutputs.get === 'function' && roundOutputs.has(node.id)){
-        return (roundOutputs.get(node.id) || []).filter(img => img?.url);
+        return (roundOutputs.get(node.id) || []).filter(hasMentionReferenceContent);
     }
-    return imagesForNode(node).filter(img => img?.url);
+    return imagesForNode(node).filter(hasMentionReferenceContent);
+}
+function outputImagesForConnection(connection, consume=false, ctx=smartLoopContext){
+    const source = nodes.find(node => node.id === connection?.from);
+    if(!source) return [];
+    const connectionIndex = (canvas?.connections || []).indexOf(connection);
+    const sourceMediaKey = connectionSourceMediaKey(connection);
+    const select = items => (items || []).filter((item, index) => !sourceMediaKey || SMART_NODE_CONTRACT.mediaReferenceKey(item, index) === sourceMediaKey);
+    const annotate = items => select(items).map(item => ({
+        ...item,
+        inputSourceNodeId:connection.from,
+        inputConnectionIndex:connectionIndex,
+        inputTargetFieldKey:connectionTargetFieldKey(connection),
+        inputSourceResultId:connectionSourceResultId(connection)
+    }));
+    if(isSmartResultGroupNode(source)){
+        return annotate(SMART_NODE_CONTRACT.resultGroupMediaForConnection(source, connection, id => nodes.find(item => item.id === id)).filter(hasMentionReferenceContent));
+    }
+    return annotate(outputImagesForNode(source, consume, ctx));
 }
 function selfReferenceImagesForNode(node, consume=false, ctx=smartLoopContext){
-    return outputImagesForNode(node, consume, ctx).filter(img => img?.url);
+    return outputImagesForNode(node, consume, ctx).filter(hasMentionReferenceContent);
 }
 function textForNode(node, ctx=smartLoopContext){
     if(!node) return '';
     if(node.type === 'smart-prompt') return promptNodePromptItems(node).join('\n\n');
     if(node.type === 'smart-loop') return smartLoopPrompt(node, ctx);
     if(node.type === 'smart-group') return smartGroupMembers(node).map(member => textForNode(member, ctx)).filter(Boolean).join('\n\n');
+    if(isSmartMaterialNode(node)) return SMART_NODE_CONTRACT.textContentForNode(node);
     return '';
 }
 function promptInputNodesFor(node){
-    return inputNodesFor(node).filter(input => input?.type === 'smart-prompt' || input?.type === 'smart-loop' || input?.type === 'smart-group');
+    return inputNodesFor(node).filter(input => input?.type === 'smart-prompt' || input?.type === 'smart-loop' || input?.type === 'smart-group' || (isSmartMaterialNode(input) && SMART_NODE_CONTRACT.textContentForNode(input)));
 }
-function inputPromptTextFor(node, ctx=smartLoopContext){
-    const directText = promptInputNodesFor(node).map(input => textForNode(input, ctx)).filter(Boolean);
+function inputPromptTextFor(node, ctx=smartLoopContext, excludedSourceNodeIds=new Set()){
+    const excluded = excludedSourceNodeIds instanceof Set ? excludedSourceNodeIds : new Set(excludedSourceNodeIds || []);
+    const directText = promptInputNodesFor(node).filter(input => !excluded.has(input.id)).map(input => textForNode(input, ctx)).filter(Boolean);
     const relayText = Array.isArray(ctx?.relayPromptNodeIds)
-        ? ctx.relayPromptNodeIds.map(id => nodes.find(n => n.id === id)).map(input => textForNode(input, ctx)).filter(Boolean)
+        ? ctx.relayPromptNodeIds.filter(id => !excluded.has(id)).map(id => nodes.find(n => n.id === id)).map(input => textForNode(input, ctx)).filter(Boolean)
         : [];
     const seen = new Set();
     return [...directText, ...relayText].filter(text => {
@@ -14053,10 +19373,10 @@ function upstreamLoopPromptNodesFor(node){
     return promptInputNodesFor(node).filter(input => input?.type === 'smart-loop' && input.showPrompt);
 }
 function inputImagesFor(node, consume=false, ctx=smartLoopContext){
-    return inputNodesFor(node).flatMap(input => outputImagesForNode(input, consume, ctx));
+    return upstreamConnectionsForKinds(node, ['input']).flatMap(connection => outputImagesForConnection(connection, consume, ctx));
 }
 function workflowInputImagesFor(node, consume=false, ctx=smartLoopContext){
-    return workflowInputNodesFor(node).flatMap(input => outputImagesForNode(input, consume, ctx));
+    return upstreamConnectionsForKinds(node, ['input', 'flow']).flatMap(connection => outputImagesForConnection(connection, consume, ctx));
 }
 function rememberRoundOutputs(ctx, node, outputs){
     if(!ctx || !node?.id || !Array.isArray(outputs)) return outputs || [];
@@ -14065,11 +19385,43 @@ function rememberRoundOutputs(ctx, node, outputs){
     return outputs;
 }
 function inputRefKey(img){
-    if(!img?.url) return '';
+    if(!img) return '';
     const nodeId = img.nodeId || '';
     const imageIndex = Number.isFinite(Number(img.imageIndex)) ? String(Number(img.imageIndex)) : '';
     if(nodeId && imageIndex !== '') return `${nodeId}|${imageIndex}`;
+    const text = SMART_NODE_CONTRACT.textContentForMediaItem(img);
+    if(text) return `text|${text}`;
+    if(!img.url) return '';
     return `url|${img.url}`;
+}
+function hasMentionReferenceContent(img){
+    return Boolean(img?.url || SMART_NODE_CONTRACT.textContentForMediaItem(img));
+}
+function inputReferenceSourceNodeId(img){
+    return String(img?.inputSourceNodeId || img?.groupNodeId || img?.resultGroupId || img?.nodeId || '').trim();
+}
+function isConnectedInputReference(node, img){
+    if(!node || !hasMentionReferenceContent(img)) return false;
+    const sourceNodeId = inputReferenceSourceNodeId(img);
+    if(!sourceNodeId) return false;
+    const kinds = smartImageUsesWorkflowInput(node, smartLoopContext) ? ['input', 'flow'] : ['input'];
+    return upstreamConnectionsForKinds(node, kinds).some(connection => connection.from === sourceNodeId);
+}
+const REFERENCE_MEDIA_ORDER = Object.freeze(['text', 'image', 'video', 'audio']);
+function groupReferenceItemsByMediaKind(items, mediaOrder=REFERENCE_MEDIA_ORDER){
+    const groups = new Map(mediaOrder.map(kind => [kind, []]));
+    const remaining = [];
+    (items || []).forEach(item => {
+        const group = groups.get(mediaKindForItem(item));
+        if(group) group.push(item);
+        else remaining.push(item);
+    });
+    return [...mediaOrder.flatMap(kind => groups.get(kind) || []), ...remaining];
+}
+function orderedInputReferencesForNode(node, refs){
+    const entries = (refs || []).map((item, index) => ({key:inputRefKey(item) || `index|${index}`, item}));
+    const ordered = SMART_NODE_CONTRACT.applyReferenceSlotOrder(entries, node?.inputRefOrder || []).map(entry => entry.item);
+    return groupReferenceItemsByMediaKind(ordered, REFERENCE_MEDIA_ORDER);
 }
 function blockedInputRefKeys(node){
     return new Set(Array.isArray(node?.blockedInputRefs) ? node.blockedInputRefs.filter(Boolean) : []);
@@ -14106,13 +19458,16 @@ function toggleInputRefBlocked(node, img){
 }
 function defaultReferenceImagesFor(node, consume=false, ctx=smartLoopContext){
     if(!node) return [];
-    const self = selfReferenceImagesForNode(node, consume, ctx).filter(img => img?.url);
+    const self = selfReferenceImagesForNode(node, consume, ctx).filter(hasMentionReferenceContent);
     const upstream = (smartImageUsesWorkflowInput(node, ctx) ? workflowInputImagesFor(node, consume, ctx) : inputImagesFor(node, consume, ctx))
-        .filter(img => img?.url);
+        .filter(hasMentionReferenceContent);
     const manual = manualReferenceImagesFor(node);
-    if(smartImageUsesWorkflowInput(node, ctx)) return uniqueReferenceImages([...upstream, ...manual]);
-    if(self.length) return uniqueReferenceImages([...self, ...upstream, ...manual]);
-    return uniqueReferenceImages([...upstream, ...manual]);
+    const refs = smartImageUsesWorkflowInput(node, ctx)
+        ? uniqueReferenceImages([...upstream, ...manual])
+        : self.length
+        ? uniqueReferenceImages([...self, ...upstream, ...manual])
+        : uniqueReferenceImages([...upstream, ...manual]);
+    return orderedInputReferencesForNode(node, refs);
 }
 function lineConnectionsFor(node){
     if(!node) return [];
@@ -14169,7 +19524,7 @@ function lineImagesFor(node){
     return ids.flatMap(id => {
         const source = nodes.find(n => n.id === id);
         return imagesForNode(source);
-    }).filter(img => img?.url);
+    }).filter(hasMentionReferenceContent);
 }
 function collectMentionedImagesFromPrompt(){
     const images = [];
@@ -14182,8 +19537,9 @@ function uniqueReferenceImages(images){
     const refs = [];
     const seen = new Set();
     (images || []).forEach((img, index) => {
-        if(!img?.url || seen.has(img.url)) return;
-        seen.add(img.url);
+        const key = inputRefKey(img) || `index|${index}`;
+        if(!hasMentionReferenceContent(img) || seen.has(key)) return;
+        seen.add(key);
         if(refs.length >= SMART_REFERENCE_IMAGE_MAX) return;
         refs.push({
             ...img,
@@ -14196,19 +19552,20 @@ function uniqueReferenceImages(images){
 }
 function visibleReferenceImagesFor(node){
     const base = defaultReferenceImagesFor(node);
-    return uniqueReferenceImages([...base, ...collectMentionedImagesFromPrompt()]);
+    return groupReferenceItemsByMediaKind(uniqueReferenceImages([...base, ...collectMentionedImagesFromPrompt()]));
 }
 function inputMentionCandidateImages(node){
-    const current = node ? [...lineImagesFor(node), ...manualReferenceImagesFor(node)] : [];
+    const current = node ? orderedInputReferencesForNode(node, [...lineImagesFor(node), ...manualReferenceImagesFor(node)]) : [];
     const seen = new Set();
-    return current.filter(img => {
-        if(!img?.url || seen.has(img.url)) return false;
-        seen.add(img.url);
+    const unique = current.filter(img => {
+        const key = inputRefKey(img);
+        if(!hasMentionReferenceContent(img) || !key || seen.has(key)) return false;
+        seen.add(key);
         return true;
-    }).map((img, index) => ({
+    });
+    return numberedReferenceItems(unique).map((img, index) => ({
         ...img,
-        mentionId:`mention_${index}_${Math.random().toString(36).slice(2, 7)}`,
-        alias:img.name || `图片${index + 1}`
+        mentionId:`mention_${index}_${Math.random().toString(36).slice(2, 7)}`
     }));
 }
 // 一个素材可注册到多个平台：收集所有「已通过」的 asset:// 地址，按平台映射。
@@ -14228,18 +19585,20 @@ function assetMentionCandidateImages(categoryId=''){
     mentionAssetCategoryId = cat.id;
     const items = (cat.items || []).map(item => ({...item, categoryName:cat.name || '', categoryId:cat.id}));
     const seen = new Set();
-    return items.filter(item => {
+    const unique = items.filter(item => {
         if(!item?.url || seen.has(item.url)) return false;
         seen.add(item.url);
         return true;
-    }).map((item, index) => ({
+    }).map(item => ({
         url:item.url,
         kind:assetMediaKind(item),
-        name:item.name || `资产${index + 1}`,
-        alias:item.name || `资产${index + 1}`,
+        name:item.name || '素材',
         role:'asset',
         categoryName:item.categoryName || '',
-        asset_uris:assetRegisteredUris(item),
+        asset_uris:assetRegisteredUris(item)
+    }));
+    return numberedReferenceItems(unique).map((item, index) => ({
+        ...item,
         mentionId:`asset_${index}_${Math.random().toString(36).slice(2, 7)}`
     }));
 }
@@ -14430,6 +19789,40 @@ function addManualReferenceToSelectedNode(img){
     renderInputThumbsRow(node);
     scheduleSave();
 }
+function connectionIndicesForInputReference(node, img){
+    if(!node || !img) return [];
+    const sourceNodeId = inputReferenceSourceNodeId(img);
+    if(!sourceNodeId) return [];
+    const allowedKinds = new Set(smartImageUsesWorkflowInput(node, smartLoopContext) ? ['input','flow'] : ['input']);
+    const directIndex = Number(img.inputConnectionIndex);
+    const direct = canvas?.connections?.[directIndex];
+    if(Number.isInteger(directIndex)
+        && direct?.from === sourceNodeId
+        && direct?.to === node.id
+        && allowedKinds.has(direct.kind || 'flow')) return [directIndex];
+    const targetFieldKey = String(img.inputTargetFieldKey || '').trim();
+    const sourceResultId = String(img.inputSourceResultId || '').trim();
+    return (canvas?.connections || []).map((connection, index) => ({connection, index})).filter(({connection}) => {
+        if(connection?.from !== sourceNodeId || connection?.to !== node.id || !allowedKinds.has(connection.kind || 'flow')) return false;
+        if(targetFieldKey && connectionTargetFieldKey(connection) !== targetFieldKey) return false;
+        if(sourceResultId && connectionSourceResultId(connection) !== sourceResultId) return false;
+        return true;
+    }).map(item => item.index).slice(0, 1);
+}
+function removeInputReferenceFromSelectedNode(index){
+    const node = selectedNode();
+    if(!node || !Number.isInteger(index) || index < 0) return;
+    const ref = numberedReferenceItems(visibleReferenceImagesFor(node))[index];
+    if(!ref) return;
+    hideReferenceHoverPreview();
+    const key = inputRefKey(ref);
+    if(manualReferenceImagesFor(node).some(item => inputRefKey(item) === key)){
+        removeManualReferenceFromSelectedNode(key);
+        return;
+    }
+    const indices = connectionIndicesForInputReference(node, ref);
+    if(indices.length) disconnectConnections(indices);
+}
 function removeManualReferenceFromSelectedNode(key){
     const node = selectedNode();
     if(!node || !key || !Array.isArray(node.manualInputRefs)) return;
@@ -14497,7 +19890,7 @@ function maybeOpenMentionPicker(){
     else closeMentionPicker();
 }
 function insertMentionToken(img){
-    if(!img?.url) return;
+    if(!hasMentionReferenceContent(img)) return;
     promptInput.focus();
     const sel = window.getSelection();
     if(mentionRange){
@@ -14527,10 +19920,12 @@ function insertMentionToken(img){
     const token = document.createElement('span');
     token.className = 'mention-image-token';
     token.contentEditable = 'false';
-    token.dataset.url = img.url;
+    token.dataset.url = img.url || '';
     token.dataset.kind = mediaKindForItem(img);
-    token.dataset.name = img.alias || img.name || (token.dataset.kind === 'audio' ? '音频' : token.dataset.kind === 'video' ? '视频' : '图片');
+    token.dataset.name = img.alias || img.name || (token.dataset.kind === 'text' ? '文本' : token.dataset.kind === 'audio' ? '音频' : token.dataset.kind === 'video' ? '视频' : '图片');
+    token.dataset.text = SMART_NODE_CONTRACT.textContentForMediaItem(img);
     token.dataset.nodeId = img.nodeId || '';
+    token.dataset.sourceNodeId = inputReferenceSourceNodeId(img);
     token.dataset.imageIndex = String(img.imageIndex ?? '');
     token.dataset.assetUris = JSON.stringify(img.asset_uris || {});
     token.innerHTML = `${mentionTokenMediaHtml(img, token.dataset.kind)}<span>${escapeHtml(token.dataset.name)}</span>`;
@@ -14544,7 +19939,9 @@ function insertMentionToken(img){
     sel.addRange(range);
     closeMentionPicker();
     promptInput.focus();
+    savePromptDraftForCurrent();
     renderInputThumbsRow(selectedNode());
+    scheduleSave();
 }
 function collectPromptParts(){
     const parts = [];
@@ -14558,7 +19955,8 @@ function collectPromptParts(){
             let assetUris = {};
             try { assetUris = JSON.parse(node.dataset.assetUris || '{}') || {}; } catch(e) { assetUris = {}; }
             const kind = node.dataset.kind || 'image';
-            parts.push({type:'image', kind, url:node.dataset.url || '', name:node.dataset.name || (kind === 'audio' ? '音频' : '图片'), nodeId:node.dataset.nodeId || '', imageIndex:Number(node.dataset.imageIndex || 0), asset_uris:assetUris});
+            const text = SMART_NODE_CONTRACT.textContentForMediaItem({kind, text:node.dataset.text || ''});
+            parts.push({type:'image', kind, url:node.dataset.url || '', text, content:text, name:node.dataset.name || (kind === 'text' ? '文本' : kind === 'audio' ? '音频' : kind === 'video' ? '视频' : '图片'), nodeId:node.dataset.nodeId || '', sourceNodeId:node.dataset.sourceNodeId || '', imageIndex:Number(node.dataset.imageIndex || 0), asset_uris:assetUris});
             return;
         }
         if(node.tagName === 'BR'){
@@ -14592,15 +19990,21 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
     const hasOverrideImages = Array.isArray(overrideDefaultImages);
     const filteredDefaultImages = (hasOverrideImages ? overrideDefaultImages : defaultReferenceImagesFor(node, consumeDefault, ctx))
         .filter(img => !blockedRefs.has(inputRefKey(img)));
-    const defaultRefs = uniqueReferenceImages(filteredDefaultImages);
+    const defaultRefs = uniqueReferenceImages(filteredDefaultImages).filter(img => img?.url && mediaKindForItem(img) !== 'text');
     const refs = defaultRefs.map((img, index) => ({...img, role:`image_${index + 1}`}));
     let hasMentionToken = false;
     const refMap = new Map();
     refs.forEach((img, index) => refMap.set(img.url, index + 1));
     let body = '';
+    const mentionedTextSourceNodeIds = new Set();
     parts.forEach(part => {
         if(part.type === 'text'){
             body += part.text;
+            return;
+        }
+        if(part.kind === 'text'){
+            if(part.sourceNodeId) mentionedTextSourceNodeIds.add(part.sourceNodeId);
+            body += part.text ? `\n\n${part.text}\n\n` : '';
             return;
         }
         if(!part.url) return;
@@ -14623,7 +20027,10 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
     body = body.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
     const groupPrompt = isSmartGroupNode(node) ? textForNode(node, ctx).trim() : '';
     const inputPrompt = inputPromptTextFor(node, ctx).trim();
-    if(groupPrompt || inputPrompt) body = [groupPrompt, inputPrompt, body].filter(Boolean).join('\n\n');
+    const effectiveInputPrompt = mentionedTextSourceNodeIds.size
+        ? inputPromptTextFor(node, ctx, mentionedTextSourceNodeIds).trim()
+        : inputPrompt;
+    if(groupPrompt || effectiveInputPrompt) body = [groupPrompt, effectiveInputPrompt, body].filter(Boolean).join('\n\n');
     if(!body && settings.engine === 'runninghub'){
         body = rhDefaultPromptSuggestion();
     }
@@ -14656,7 +20063,8 @@ function nextOutputPositionForSource(sourceNode, pendingBox, options={}){
     const sourceRect = nodeRect(sourceNode);
     const x = (sourceRect.x || 0) + sourceRect.width + 80;
     const gap = 28;
-    const outputs = outgoingConnectionsFor(sourceNode, ['input','flow'])
+    const outputs = (canvas?.connections || [])
+        .filter(conn => conn.from === sourceNode.id && SMART_NODE_CONTRACT.isOutputLayoutConnection(conn))
         .map(conn => nodes.find(n => n.id === conn.to))
         .filter(n => isSmartImageNode(n))
         .map(n => nodeRect(n))
@@ -14671,15 +20079,20 @@ function nextOutputPositionForSource(sourceNode, pendingBox, options={}){
     return {x, y};
 }
 function createPendingOutputFromSource(sourceNode, expectedCount, meta, options={}){
-    const pendingBox = pendingBoxSize(expectedCount, {sourceNode, refs:options.refs || meta?.promptRefs || []});
+    const pendingBox = sourceNode?.type === SMART_NODE_TYPES.textGenerator
+        ? {w:316, h:220}
+        : pendingBoxSize(expectedCount, {sourceNode, refs:options.refs || meta?.promptRefs || []});
     const pos = nextOutputPositionForSource(sourceNode, pendingBox);
     const output = {
-        id:uid('smart'),
-        type:'smart-image',
+        id:uid('material'),
+        type:SMART_NODE_TYPES.material,
+        sourceKind:'result',
+        ...(isSmartExecutionNode(sourceNode) ? {sourceExecutionNodeId:sourceNode.id} : {}),
         x:pos.x,
         y:pos.y,
-        title:'Image',
+        title:sourceNode?.type === SMART_NODE_TYPES.textGenerator ? 'Text' : 'Result',
         images:[],
+        isRunPlaceholder:true,
         pending:Math.max(1, Number(expectedCount) || 1),
         runStartedAt:nowMs(),
         runTimerHidden:false,
@@ -14688,20 +20101,109 @@ function createPendingOutputFromSource(sourceNode, expectedCount, meta, options=
         scale:MEDIA_NODE_DEFAULT_SCALE,
         created_at:Date.now()
     };
+    SMART_NODE_CONTRACT.markExecutionRunStarted(output, output.runStartedAt);
     output._selectAfterRunId = options.selectOutput ? output.id : sourceNode.id;
     nodes.push(output);
-    if(options.connectSource === false) addConnection(sourceNode.id, output.id, 'flow');
+    if(options.connectSource === false || isSmartExecutionNode(sourceNode)) addConnection(sourceNode.id, output.id, 'result');
     else connectInputNode(sourceNode.id, output.id);
     attachRunMeta(output, options.stripInputMeta ? stripRunInputMeta(meta) : meta);
     selectedId = sourceNode.id;
     selectedImage = {nodeId:'', index:-1};
     return output;
 }
+function removeEmptyRunPlaceholder(node){
+    if(!node?.id || node.isRunPlaceholder !== true) return false;
+    const hasResult = (node.images || []).some(item => item?.url || item?.resultId || item?.result_id);
+    if(hasResult || node.jimengPending || smartPendingTasks(node).length || smartRecoverableImageTask(node)) return false;
+    nodes = nodes.filter(item => item.id !== node.id);
+    canvas.connections = (canvas?.connections || []).filter(connection => connection.from !== node.id && connection.to !== node.id);
+    if(selectedId === node.id) selectedId = '';
+    selectedIds = selectedIds.filter(id => id !== node.id);
+    if(selectedImage.nodeId === node.id) selectedImage = {nodeId:'', index:-1};
+    scheduleSave();
+    return true;
+}
+class CanvasRunCancelledSignal extends Error {
+    constructor(message=''){
+        super(message || tr('smart.runCancelled'));
+        this.canvasRunCancelled = true;
+    }
+}
+function isCanvasRunCancelled(node){
+    return Boolean(node && (
+        cancelledExecutionResultNodeIds.has(String(node.id || ''))
+        || String(node.runStatus || '') === 'cancelled'
+    ));
+}
+function throwIfCanvasRunCancelled(node){
+    if(isCanvasRunCancelled(node)) throw new CanvasRunCancelledSignal();
+}
+function executionResultAbortSignal(node){
+    return node?.id ? executionResultAbortControllers.get(node.id)?.signal : undefined;
+}
+async function cancelCanvasTaskIds(taskIds=[]){
+    const ids = [...new Set((taskIds || []).filter(Boolean))];
+    ids.forEach(taskId => cancelledCanvasTaskIds.add(taskId));
+    await Promise.allSettled(ids.map(taskId => fetch(`/api/canvas-tasks/${encodeURIComponent(taskId)}/cancel`, {
+        method:'POST'
+    })));
+}
+async function cancelExecutionResultRun(resultNodeId){
+    const resultNode = nodes.find(node => node.id === resultNodeId);
+    if(!resultNode || resultNode.cancelInProgress) return;
+    const executionNode = executionNodeForRunSubject(resultNode);
+    const taskIds = [...new Set([
+        ...smartPendingTasks(resultNode).map(task => task.taskId),
+        resultNode.jimengPending?.taskId || ''
+    ].filter(Boolean))];
+    resultNode.cancelInProgress = true;
+    render();
+    cancelledExecutionResultNodeIds.add(resultNode.id);
+    executionResultAbortControllers.get(resultNode.id)?.abort();
+    executionResultAbortControllers.delete(resultNode.id);
+    await cancelCanvasTaskIds(taskIds);
+    resultNode.runStatus = 'cancelled';
+    resultNode.runCancelledAt = nowMs();
+    delete resultNode.runError;
+    try {
+        await updateCanvasRunStatus(resultNode, 'cancelled');
+    } catch(error) {
+        resultNode.runRef = {...(resultNode.runRef || {}), syncError:String(error?.message || error || '')};
+    }
+    clearSmartNodeBusyState(resultNode);
+    delete resultNode.cancelInProgress;
+    removeEmptyRunPlaceholder(resultNode);
+    if(executionNode) selectedId = executionNode.id;
+    addSmartCanvasNoticeLog(tr('smart.runCancelledNotice'), executionNode || resultNode);
+    toast(tr('smart.runCancelledNotice'), {duration:3200});
+    render();
+    scheduleSave();
+}
+function executionNodeForRunSubject(subject){
+    if(!subject) return null;
+    const live = liveSmartNode(subject);
+    if(isSmartExecutionNode(live)) return live;
+    const sourceId = String(live?.sourceExecutionNodeId || '').trim()
+        || String((canvas?.connections || []).find(connection => connection.to === live?.id
+            && (connection.kind || 'flow') === 'result'
+            && isSmartExecutionNode(nodes.find(node => node.id === connection.from)))?.from || '').trim();
+    return sourceId ? nodes.find(node => node.id === sourceId && isSmartExecutionNode(node)) || null : null;
+}
+function bindExecutionResultMetadata(resultNode, sourceNode=null){
+    if(!resultNode || isSmartExecutionNode(resultNode)) return resultNode;
+    const executionNode = executionNodeForRunSubject(sourceNode || resultNode);
+    if(!executionNode) return resultNode;
+    resultNode.sourceExecutionNodeId = executionNode.id;
+    const runId = canvasRunId(resultNode) || canvasRunId(executionNode);
+    if(runId) resultNode.sourceRunId = runId;
+    return resultNode;
+}
 function createParallelLoopOutputNode(templateNode, sourceNode, roundIndex, roundOffset=0){
     const rect = nodeRect(templateNode);
     const output = cloneSmartNode(templateNode, 0, 0);
-    output.id = uid('smart');
-    output.type = 'smart-image';
+    output.id = uid('material');
+    output.type = SMART_NODE_TYPES.material;
+    output.sourceKind = 'result';
     output.x = (Number(templateNode.x) || 0) + (Number(rect.width) || 260) + 80;
     output.y = (Number(templateNode.y) || 0) + roundOffset * ((Number(rect.height) || 180) + 28);
     output.title = `Image ${roundIndex}`;
@@ -14730,7 +20232,10 @@ function createParallelLoopOutputNode(templateNode, sourceNode, roundIndex, roun
 }
 function loopOutputSlotsForRoot(rootNode){
     if(!rootNode?.id) return [];
-    return downstreamNodesForId(rootNode.id)
+    return (canvas?.connections || [])
+        .filter(connection => connection.from === rootNode.id && SMART_NODE_CONTRACT.isOutputLayoutConnection(connection))
+        .map(connection => nodes.find(node => node.id === connection.to))
+        .filter(Boolean)
         .filter(n => isSmartImageNode(n) && !isHistoryGroupNode(n))
         .sort((a, b) => {
             const ax = Number(a.x) || 0, bx = Number(b.x) || 0;
@@ -14761,8 +20266,9 @@ function tagLoopOutputSlot(output, rootNode, loopNode, roundIndex, slotIndex){
 function createLoopOutputSlot(rootNode, roundIndex, roundOffset=0, options={}){
     const rootRect = nodeRect(rootNode);
     const output = cloneSmartNode(rootNode, 0, 0);
-    output.id = uid('smart');
-    output.type = 'smart-image';
+    output.id = uid('material');
+    output.type = SMART_NODE_TYPES.material;
+    output.sourceKind = 'result';
     output.x = (Number(rootNode.x) || 0) + (Number(rootRect.width) || 260) + 80;
     output.title = `Image ${roundIndex}`;
     output.images = [];
@@ -14784,6 +20290,9 @@ function createLoopOutputSlot(rootNode, roundIndex, roundOffset=0, options={}){
     delete output.runModelPrompt;
     delete output.runPromptRefs;
     delete output.runInputRefs;
+    delete output.runSettings;
+    delete output.promptDraftHtml;
+    delete output.promptDraftText;
     delete output.runFinishedAt;
     delete output.runElapsedMs;
     // 同 createParallelLoopOutputNode：清空克隆带来的 inputNodeIds，否则输出槽虽只用 flow
@@ -14801,7 +20310,7 @@ function createLoopOutputSlot(rootNode, roundIndex, roundOffset=0, options={}){
     });
     output.y = y;
     nodes.push(output);
-    addConnection(rootNode.id, output.id, 'flow');
+    addConnection(rootNode.id, output.id, 'result');
         const runPath = smartCascadePathForCtx(options.ctx || options.runState);
         if(runPath?.states) runPath.states[`${rootNode.id}->${output.id}`] = 'wait';
     return output;
@@ -14812,8 +20321,9 @@ function extractCurrentImagesToSource(node, meta=null){
     const r = nodeRect(node);
     const newX = (node.x || 0) - Math.max(280, r.width + 60);
     const source = {
-        id: uid('smart'),
-        type: 'smart-image',
+        id: uid('material'),
+        type: SMART_NODE_TYPES.material,
+        sourceKind:'input',
         x: newX,
         y: node.y || 0,
         title: imgs.length > 1 ? 'Group' : 'Image',
@@ -14835,15 +20345,19 @@ function extractCurrentImagesToSource(node, meta=null){
 }
 function finalizePendingNode(pendingNode, urls, meta, kind='image'){
     if(!pendingNode) return;
+    throwIfCanvasRunCancelled(pendingNode);
     pendingNode = liveSmartNode(pendingNode);
+    throwIfCanvasRunCancelled(pendingNode);
     const ext = kind === 'video' ? 'mp4' : kind === 'audio' ? 'mp3' : kind === 'text' ? 'txt' : 'png';
     const imgs = cleanHistoryImages(urls.map((item, i) => {
         const url = typeof item === 'string' ? item : item?.url || '';
         const itemKind = (typeof item === 'object' && item.kind) || kind;
-        return copyMediaSizeFields(item, {url, name:(typeof item === 'object' && item.name) || `output-${i + 1}.${ext}`, kind:itemKind, generatedResult:true});
+        const source = item && typeof item === 'object' ? item : {};
+        return normalizeSmartMediaReference(copyMediaSizeFields(item, {...source, url, name:source.name || `output-${i + 1}.${ext}`, kind:itemKind, generatedResult:true}), i);
     }).filter(img => img.url));
     pendingNode.images = imgs;
     markSmartNodeComplete(pendingNode, meta);
+    bindExecutionResultMetadata(pendingNode);
     pendingNode.outputKind = kind;
     if(imgs.length > 1) pendingNode.title = kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : 'Group';
     else pendingNode.title = kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : kind === 'text' ? 'Text' : kind === 'file' ? 'File' : 'Image';
@@ -14899,11 +20413,10 @@ function refsForDirectLoopRound(loopNode, loopIndex, total){
     if(!loopNode?.imageInput) return [];
     return outputImagesForNode(loopNode, true, {index:loopIndex, total, nodeId:loopNode.id})
         .filter(ref => ref?.url)
-        .map((ref, index) => ({
+        .map((ref, index) => normalizeSmartMediaReference({
             ...ref,
-            role:ref.role || `image_${index + 1}`,
             name:ref.name || trf('canvas.loopImageLabel', {n:loopIndex + index})
-        }));
+        }, index));
 }
 function showDirectLoopRoundPreview(loopNode, target, refs, loopIndex, total){
     if(!loopNode?.imageInput || !isSmartImageNode(target)) return false;
@@ -14912,7 +20425,7 @@ function showDirectLoopRoundPreview(loopNode, target, refs, loopIndex, total){
     const preview = cleanRefs.map((ref, index) => stripImageGenerationMeta({
         url:ref.url || '',
         name:ref.name || trf('canvas.loopImageLabel', {n:loopIndex + index}),
-        kind:ref.kind || (isVideoMediaItem(ref) ? 'video' : 'image'),
+        kind:ref.kind || mediaKindForItem(ref),
         nodeId:ref.nodeId || '',
         imageIndex:ref.imageIndex ?? '',
         loopInputPreview:true
@@ -14932,7 +20445,7 @@ function showDirectLoopRoundPreview(loopNode, target, refs, loopIndex, total){
         imageIndex:ref.imageIndex ?? '',
         kind:ref.kind || ''
     })).filter(ref => ref.url);
-    target.outputKind = mediaKindForUrls(preview, preview.some(isVideoMediaItem) ? 'video' : 'image');
+    target.outputKind = mediaKindForUrls(preview, mediaKindForItem(preview[0]));
     target.scale = preview.length > 1 ? MEDIA_GROUP_DEFAULT_SCALE : MEDIA_NODE_DEFAULT_SCALE;
     target.title = total > 1 ? `Image ${loopIndex}/${total}` : (target.title || 'Image');
     delete target.w;
@@ -15058,6 +20571,18 @@ function downstreamImageTargetsFor(node){
             return (Number(a.y) || 0) - (Number(b.y) || 0);
         });
 }
+function downstreamExecutionTargetsFor(node){
+    if(!node?.id) return [];
+    return (canvas?.connections || [])
+        .filter(conn => conn.from === node.id && ['input','flow'].includes(conn.kind || 'flow'))
+        .map(conn => nodes.find(n => n.id === conn.to))
+        .filter(isSmartExecutionNode)
+        .sort((a, b) => {
+            const ax = Number(a.x) || 0, bx = Number(b.x) || 0;
+            if(ax !== bx) return ax - bx;
+            return (Number(a.y) || 0) - (Number(b.y) || 0);
+        });
+}
 function downstreamCascadeTargetsFor(node){
     if(!node?.id) return [];
     return (canvas?.connections || [])
@@ -15072,10 +20597,14 @@ function downstreamCascadeTargetsFor(node){
 }
 function directLoopRunTargets(loop){
     if(!loop?.id) return [];
-    return downstreamImageTargetsFor(loop)
-        .filter(node => !hasDownstreamWorkflowImageNode(node));
+    const executionTargets = downstreamExecutionTargetsFor(loop);
+    if(executionTargets.length) return executionTargets;
+    return downstreamImageTargetsFor(loop).filter(node => !hasDownstreamWorkflowImageNode(node));
 }
 function smartCascadeGraphForTail(tail){
+    if(isSmartExecutionNode(tail)){
+        return {root:tail, path:[tail], edges:[], children:new Map([[tail.id, []]])};
+    }
     const path = smartImageChainTo(tail?.id, {includeFlow:true}).filter(n => isSmartImageNode(n) && !isHistoryGroupNode(n));
     if(!path.length) return {root:null, path:[], edges:[], children:new Map()};
     const loop = resolveSmartCascadeLoop(tail?.id);
@@ -15108,10 +20637,10 @@ function cascadeTailForLoop(loopId){
     const loop = nodes.find(n => n.id === loopId && n.type === 'smart-loop');
     const directTargets = directLoopRunTargets(loop);
     if(directTargets.length) return directTargets[directTargets.length - 1];
-    const directImages = downstreamImageTargetsFor({id:loopId});
+    const directImages = [...downstreamExecutionTargetsFor({id:loopId}), ...downstreamImageTargetsFor({id:loopId})];
     const directIds = new Set(directImages.map(n => n.id));
     const candidates = downstreamNodesForId(loopId)
-        .filter(n => isSmartImageNode(n))
+        .filter(n => isSmartExecutionNode(n) || isSmartImageNode(n))
         .filter(n => !isHistoryGroupNode(n))
         .filter(n => canRunSmartCascade(n));
     if(!candidates.length) return null;
@@ -15125,7 +20654,7 @@ function cascadeTailForLoop(loopId){
     })[0];
 }
 function canRunSmartCascade(node){
-    if(!isSmartImageNode(node) || isHistoryGroupNode(node)) return false;
+    if((!isSmartExecutionNode(node) && !isSmartImageNode(node)) || isHistoryGroupNode(node)) return false;
     const graph = smartCascadeGraphForTail(node);
     const loop = resolveSmartCascadeLoop(node.id);
     if(loop && isDirectLoopTargetRun(loop, node, graph)) return true;
@@ -15136,8 +20665,8 @@ function canRunSmartCascade(node){
 function isDirectLoopTargetRun(loop, tail, graph){
     if(!loop?.node?.id || !tail?.id) return false;
     if(graph?.root?.id !== tail.id) return false;
-    if(hasDownstreamWorkflowImageNode(tail)) return false;
-    return downstreamImageTargetsFor(loop.node).some(node => node.id === tail.id);
+    if(isSmartImageNode(tail) && hasDownstreamWorkflowImageNode(tail)) return false;
+    return directLoopRunTargets(loop.node).some(node => node.id === tail.id);
 }
 function cascadeConnectionKeys(){
     const keys = new Set();
@@ -15264,8 +20793,9 @@ function ensureHistoryGroupForNode(node){
     if(!group){
         const r = nodeRect(node);
         group = {
-            id:uid('smart'),
-            type:'smart-image',
+            id:uid('material'),
+            type:SMART_NODE_TYPES.material,
+            sourceKind:'result',
             x:Math.round(Number(node.x || 0)),
             y:Math.round(Number(node.y || 0) + r.height + 56),
             title:'历史分组',
@@ -15277,7 +20807,8 @@ function ensureHistoryGroupForNode(node){
         };
         nodes.push(group);
     }
-    group.type = 'smart-image';
+    group.type = SMART_NODE_TYPES.material;
+    group.sourceKind = 'result';
     group.title = '历史分组';
     group.isHistoryGroup = true;
     group.historyFor = node.id;
@@ -15400,9 +20931,11 @@ async function createSmartComfyTask(payload){
 async function waitSmartComfyTaskResult(taskId){
     if(!taskId) throw new Error(tr('smart.errRunFailed'));
     while(true){
+        if(cancelledCanvasTaskIds.has(taskId)) throw new CanvasRunCancelledSignal();
         const res = await fetch(`/api/canvas-comfy-tasks/${encodeURIComponent(taskId)}`);
         if(!res.ok) throw new Error(await smartResponseErrorMessage(res, tr('smart.errRunFailed')));
         const data = await res.json();
+        if(cancelledCanvasTaskIds.has(taskId) || data.status === 'cancelled') throw new CanvasRunCancelledSignal();
         const readyResult = data?.result || data?.outputs || data?.images || data?.videos || data?.audios || data?.texts;
         if(readyResult && resultMediaUrls(readyResult).length) return data.result || data;
         if(data.status === 'succeeded') return data.result || {};
@@ -15410,8 +20943,14 @@ async function waitSmartComfyTaskResult(taskId){
         await sleep(1600);
     }
 }
-async function runQueuedSmartComfyGenerate(payload){
+async function runQueuedSmartComfyGenerate(payload, pendingNode=null){
     const task = await createSmartComfyTask(payload);
+    if(pendingNode && task?.task_id){
+        pendingNode.pendingTasks = [{taskId:task.task_id, kind:'comfy'}];
+        pendingNode.pending = Math.max(1, Number(pendingNode.pending || 0) || 1);
+        render();
+        scheduleSave();
+    }
     return waitSmartComfyTaskResult(task.task_id);
 }
 function comfyParamsFromWorkflowValues(config, values={}){
@@ -15447,7 +20986,7 @@ async function generateUrlsForCurrentSettings(node, prompt, refs, runSettings=se
     const activeSettings = runSettings || settings;
     if(activeSettings.engine === 'comfy') return generateComfyUrlsWithSettings(activeSettings, prompt, refs);
     if(activeSettings.engine === 'runninghub' && runningHubSelectedModel(activeSettings)){
-        const taskResult = await runApiGeneration(prompt, refs, runningHubModelApiSettings(activeSettings));
+        const taskResult = await runApiGeneration(prompt, refs, runningHubModelApiSettings(activeSettings), node);
         const taskIds = Array.isArray(taskResult?.taskIds) ? taskResult.taskIds : [];
         if(taskIds.length){
             const settled = await Promise.all(taskIds.map(taskId => pollSmartCanvasTask(taskId)));
@@ -15458,10 +20997,16 @@ async function generateUrlsForCurrentSettings(node, prompt, refs, runSettings=se
         return {urls, kind:mediaKindForUrls(urls, 'image')};
     }
     if(isApiLikeEngine(activeSettings.engine) && activeSettings.apiKind === 'video'){
-        return {urls:await runApiVideoGeneration(prompt, refs, activeSettings), kind:'video'};
+        return {urls:await runApiVideoGeneration(prompt, refs, activeSettings, node), kind:'video'};
+    }
+    if(isApiLikeEngine(activeSettings.engine) && activeSettings.apiKind === 'audio'){
+        return {urls:await runApiAudioGeneration(prompt, refs, activeSettings, node), kind:'audio'};
+    }
+    if(isApiLikeEngine(activeSettings.engine) && activeSettings.apiKind === 'music'){
+        return {urls:await runApiMusicGeneration(prompt, refs, activeSettings, node), kind:'audio'};
     }
     if(isApiLikeEngine(activeSettings.engine)){
-        const taskResult = await runApiGeneration(prompt, refs, activeSettings);
+        const taskResult = await runApiGeneration(prompt, refs, activeSettings, node);
         const taskIds = Array.isArray(taskResult?.taskIds) ? taskResult.taskIds : [];
         if(taskIds.length){
             const settled = await Promise.all(taskIds.map(taskId => pollSmartCanvasTask(taskId)));
@@ -15472,9 +21017,15 @@ async function generateUrlsForCurrentSettings(node, prompt, refs, runSettings=se
         return {urls, kind:mediaKindForUrls(urls, 'image')};
     }
     const urls = activeSettings.engine === 'runninghub'
-        ? await runRunningHubGeneration(prompt, refs, activeSettings)
+        ? await runRunningHubGeneration(prompt, runningHubRefsForNode(node, refs), activeSettings, node)
         : activeSettings.engine === 'modelscope'
-            ? await runModelscopeGeneration(prompt, refs, activeSettings)
+            ? await (async () => {
+                const taskResult = await runModelscopeGeneration(prompt, refs, activeSettings, node);
+                const taskIds = Array.isArray(taskResult?.taskIds) ? taskResult.taskIds : [];
+                if(!taskIds.length) return resultMediaUrls(taskResult);
+                const settled = await Promise.all(taskIds.map(taskId => pollSmartCanvasTask(taskId)));
+                return settled.flatMap(result => resultMediaUrls(result?.image_items?.length ? result.image_items : (result?.images?.length ? result.images : result))).filter(Boolean);
+            })()
             : [];
     return {urls, kind:mediaKindForUrls(urls, 'image')};
 }
@@ -15528,7 +21079,7 @@ async function generateComfyUrlsWithSettings(runSettings, prompt, refs){
             values[field.id] = runSettings.comfyParams?.[field.id] ?? field.default;
         }
     });
-    const result = await runQueuedSmartComfyGenerate({prompt, workflow_json:workflowName, params:comfyParamsFromWorkflowValues(wf.config || {fields:[]}, values), type:'workflow-custom', client_id:smartClientId});
+    const result = await runQueuedSmartComfyGenerate({prompt, workflow_json:workflowName, params:comfyParamsFromWorkflowValues(wf.config || {fields:[]}, values), type:'workflow-custom', client_id:smartClientId}, pendingNode);
     const urls = resultMediaUrls(result);
     const fallbackKind = result.videos?.length ? 'video' : result.audios?.length ? 'audio' : result.texts?.length ? 'text' : 'image';
     return {urls, kind:mediaKindForUrls(urls, fallbackKind)};
@@ -15570,7 +21121,13 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
         meta.promptHtml = requestNode.promptDraftHtml;
         meta.promptText = requestNode.promptDraftText || request.displayPrompt || '';
     }
-    const logKind = isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'video' ? 'video' : 'image';
+    const logKind = isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'video'
+        ? 'video'
+        : isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'music'
+        ? 'music'
+        : isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'audio'
+        ? 'audio'
+        : 'image';
     const runLog = smartRunSnapshot(requestNode, prompt, request.refs || [], logKind);
     const runLogStart = nowMs();
     const targetPromptState = {
@@ -15594,13 +21151,13 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
     settings = previousSettings;
     try {
         const result = await generateUrlsForCurrentSettings(outputNode, prompt, request.refs || [], runSettings);
-        if(!result.urls?.length) throw new Error(result.kind === 'video' ? tr('smart.errNoOutVideos') : tr('smart.errNoOutImages'));
+        if(!result.urls?.length) throw new Error(result.kind === 'video' ? tr('smart.errNoOutVideos') : result.kind === 'audio' ? tr('smart.errNoOutAudios') : tr('smart.errNoOutImages'));
         if(outpaintSize) delete requestNode.outpaintSize;
         addSmartGenerationLog({run:{...runLog, kind:result.kind || logKind}, outputs:result.urls, runMs:nowMs() - runLogStart});
         const ext = result.kind === 'video' ? 'mp4' : result.kind === 'audio' ? 'mp3' : result.kind === 'text' ? 'txt' : 'png';
         const additions = result.urls.map((item, i) => {
             const url = typeof item === 'string' ? item : item?.url || '';
-            return stripImageGenerationMeta(copyMediaSizeFields(item, {url, name:(typeof item === 'object' && item.name) || `output-${i + 1}.${ext}`, kind:(typeof item === 'object' && item.kind) || result.kind, generatedResult:true}));
+            return stripImageGenerationMeta(normalizeSmartMediaReference(copyMediaSizeFields(item, {url, name:(typeof item === 'object' && item.name) || `output-${i + 1}.${ext}`, kind:(typeof item === 'object' && item.kind) || result.kind, generatedResult:true}), i));
         }).filter(item => item.url);
         if(ctx?.appendLoopOutputs) {
             appendLoopOutputsToNode(outputNode, additions, result.kind, ctx);
@@ -15658,10 +21215,16 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
             settings:JSON.parse(JSON.stringify(runSettings)),
             createdAt:Date.now()
         };
-        const logKind = isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'video' ? 'video' : 'image';
+        const logKind = isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'video'
+            ? 'video'
+            : isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'music'
+            ? 'music'
+            : isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'audio'
+            ? 'audio'
+            : 'image';
         const runLog = smartRunSnapshot(rootNode, prompt, request.refs || [], logKind);
         const runLogStart = nowMs();
-        const expectedCount = isApiLikeEngine(runSettings.engine) && runSettings.apiKind !== 'video'
+        const expectedCount = isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'image'
             ? Math.max(1, Math.min(8, Number(runSettings.count || 1)))
             : 1;
         outputSlot.queued = false;
@@ -15679,8 +21242,8 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
         render();
         settings = previousSettings;
         let result;
-        if(isApiLikeEngine(runSettings.engine) && runSettings.apiKind !== 'video'){
-            const taskResult = await runApiGeneration(prompt, request.refs || [], runSettings);
+        if(isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'image'){
+            const taskResult = await runApiGeneration(prompt, request.refs || [], runSettings, outputSlot);
             const taskIds = Array.isArray(taskResult?.taskIds) ? taskResult.taskIds : [];
             if(!taskIds.length) throw new Error(tr('smart.errRunFailed'));
             const existing = cleanHistoryImages(outputSlot.images || []);
@@ -15709,9 +21272,9 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
         } else {
             result = await generateUrlsForCurrentSettings(outputSlot, prompt, request.refs || [], runSettings);
         }
-        if(!result.urls?.length) throw new Error(result.kind === 'video' ? tr('smart.errNoOutVideos') : tr('smart.errNoOutImages'));
+        if(!result.urls?.length) throw new Error(result.kind === 'video' ? tr('smart.errNoOutVideos') : result.kind === 'audio' ? tr('smart.errNoOutAudios') : tr('smart.errNoOutImages'));
         let additions;
-        if(isApiLikeEngine(runSettings.engine) && runSettings.apiKind !== 'video'){
+        if(isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'image'){
             additions = (outputSlot.images || []).map(img => stripImageGenerationMeta({...img})).filter(img => img?.url);
             if(meta) attachRunMeta(outputSlot, meta);
         } else {
@@ -15750,25 +21313,25 @@ function appendCascadeRefsToReceiver(node, refs, ctx=smartLoopContext){
     if(!node || !refs?.length) return [];
     const additions = refs
         .filter(ref => ref?.url)
-        .map((ref, i) => stripImageGenerationMeta({
+        .map((ref, i) => stripImageGenerationMeta(normalizeSmartMediaReference({
             url:ref.url,
-            name:ref.name || `output-${i + 1}.png`,
-            kind:ref.kind || (isVideoMediaItem(ref) ? 'video' : 'image')
-        }));
+            name:ref.name || `output-${i + 1}`,
+            kind:ref.kind || mediaKindForItem(ref),
+            result_id:ref.result_id || ref.resultId || ''
+        }, i)));
     if(!additions.length) return [];
     replaceOutputsToNodeWithHistory(node, additions, mediaKindForUrls(additions, additions.some(isVideoMediaItem) ? 'video' : 'image'), null, {skipShift:Boolean(ctx?.nodeId)});
     render();
     return rememberRoundOutputs(ctx, node, additions);
 }
 function cascadeRefsFromOutputs(outputs, targetNode){
-    return (outputs || []).filter(img => img?.url).map((img, index) => ({
+    return (outputs || []).filter(img => img?.url).map((img, index) => normalizeSmartMediaReference({
+        ...img,
         url:img.url,
-        name:img.name || `图${index + 1}`,
-        kind:img.kind || 'image',
-        role:`image_${index + 1}`,
+        name:img.name || `结果${index + 1}`,
         nodeId:targetNode?.id || '',
         imageIndex:targetNode ? (targetNode.images || []).length - outputs.length + index : index
-    }));
+    }, index));
 }
 function smartCascadeStopText(stopping=false){
     return stopping ? '停止中...' : '停止运行';
@@ -15886,7 +21449,7 @@ async function runSmartCascade(targetNode=null){
             if(parallelLimit === 1) smartLoopContext = ctx;
             if(singleNodeLoopRun){
                 const refs = refsForDirectLoopRound(loop.node, loopIndex, endIndex);
-                if(directLoopTargetRun && parallelLimit === 1) showDirectLoopRoundPreview(loop.node, tail, refs, loopIndex, endIndex);
+                if(directLoopTargetRun && parallelLimit === 1 && isSmartImageNode(tail)) showDirectLoopRoundPreview(loop.node, tail, refs, loopIndex, endIndex);
                 const slotIndex = Math.max(0, Math.floor((loopIndex - startIndex) / batchSize));
                 const outputTarget = tagLoopOutputSlot(
                     options.outputTarget || singleLoopSlots[slotIndex] || loopOutputSlotForRound(tail, loop.node, loopIndex, slotIndex) || createLoopOutputSlot(tail, loopIndex, slotIndex, {loopNode:loop.node, slotIndex, runState}),
@@ -15998,6 +21561,30 @@ async function runSmartCascade(targetNode=null){
         }
         throwIfSmartCascadeStopRequested(runState);
         if(parallelLimit === 1) smartLoopContext = null;
+        if(loop?.node?.id){
+            const resultEntries = singleLoopSlots
+                .filter(slot => slot?.id && (slot.images || []).some(item => item?.url))
+                .sort((a, b) => Number(a.loopSlotIndex || 0) - Number(b.loopSlotIndex || 0))
+                .map((slot, index) => ({
+                    nodeId:slot.id,
+                    media:slot.images || [],
+                    round:Number(slot.loopRoundIndex || startIndex + index * batchSize) || index + 1,
+                    label:`第 ${index + 1} 轮`
+                }));
+            if(resultEntries.length > 1){
+                const tailRect = nodeRect(tail);
+                const outputRects = resultEntries.map(entry => nodes.find(node => node.id === entry.nodeId)).filter(Boolean).map(nodeRect);
+                const groupX = outputRects.length ? Math.max(...outputRects.map(rect => rect.x + rect.width)) + 80 : (Number(tail.x) || 0) + tailRect.width + 80;
+                const groupY = outputRects.length ? Math.min(...outputRects.map(rect => rect.y)) : Number(tail.y) || 0;
+                createResultGroupNode(groupX, groupY, resultEntries, {
+                    skipUndo:true,
+                    select:false,
+                    groupKind:'loop',
+                    sourceNodeId:loop.node.id,
+                    title:`循环结果 · ${resultEntries.length} 轮`
+                });
+            }
+        }
         selectedId = '';
         selectedIds = [];
         selectedImage = {nodeId:'', index:-1};
@@ -16022,7 +21609,7 @@ async function runSmartCascade(targetNode=null){
         smartCascadeSilentSelection = false;
         syncRunButtonState();
         cascadeRunBtn.disabled = false;
-        if(directLoopTargetRun) finishLoopTargetPreviewState(tail);
+        if(directLoopTargetRun && isSmartImageNode(tail)) finishLoopTargetPreviewState(tail);
         scheduleSave();
         render();
     }
@@ -16040,10 +21627,12 @@ function runSmartCascadeFromLoop(loopId){
 async function runGeneration(){
     const node = selectedNode();
     if(node?.type === 'smart-minimax') return runMinimaxNode(node.id);
+    if(!isSmartExecutionNode(node) && !isSmartGroupNode(node)) return;
     const request = buildPromptRequest(node, null, true, smartLoopContext);
     const prompt = request.prompt.trim();
     if(!node) return;
     if(smartNodeInFlight(node)) return;
+    const clientOperationId = createCanvasOperationId(node.id);
     const refs = request.refs;
     const previousSettings = cloneSmartSettings(settings);
     const runSettings = smartSettingsForNode(node);
@@ -16056,7 +21645,7 @@ async function runGeneration(){
     const outpaintSize = node?.outpaintSize && Number(node.outpaintSize.width) > 0 && Number(node.outpaintSize.height) > 0
         ? {width:Math.round(Number(node.outpaintSize.width)), height:Math.round(Number(node.outpaintSize.height))}
         : null;
-    if(outpaintSize && isApiLikeEngine(settings.engine) && settings.apiKind !== 'video'){
+    if(outpaintSize && isApiLikeEngine(settings.engine) && settings.apiKind === 'image'){
         settings = {
             ...settings,
             resolution:'custom',
@@ -16067,7 +21656,13 @@ async function runGeneration(){
         };
     }
     const meta = snapshotRunMeta(prompt, node.id, request.displayPrompt, refs);
-    const logKind = isApiLikeEngine(settings.engine) && settings.apiKind === 'video' ? 'video' : 'image';
+    const logKind = isApiLikeEngine(settings.engine) && settings.apiKind === 'video'
+        ? 'video'
+        : isApiLikeEngine(settings.engine) && settings.apiKind === 'music'
+        ? 'music'
+        : isApiLikeEngine(settings.engine) && settings.apiKind === 'audio'
+        ? 'audio'
+        : 'image';
     const runLog = smartRunSnapshot(node, prompt, refs, logKind);
     rememberRecentSmartSettings(settings, node);
     const runLogStart = nowMs();
@@ -16091,12 +21686,18 @@ async function runGeneration(){
     let extracted = null;
     let branchNode = null;
     const groupRun = isSmartGroupNode(node);
-    const shouldCreateBranchOutput = groupRun || (nodeHasImages && !workflowModeRun);
+    const shouldCreateBranchOutput = isSmartExecutionNode(node) || groupRun || (nodeHasImages && !workflowModeRun);
     const pendingMeta = shouldCreateBranchOutput ? stripRunInputMeta(meta) : meta;
+    delete node.runStatus;
+    delete node.runError;
+    delete node.runErrorAt;
     undoSuppressed = true;
     if(shouldCreateBranchOutput) branchNode = createPendingOutputFromSource(node, expectedCount, pendingMeta, {connectSource:false, selectOutput:true, refs});
     undoSuppressed = false;
     const pendingNode = branchNode || node;
+    if(isSmartExecutionNode(node) && pendingNode?.id){
+        executionResultAbortControllers.set(pendingNode.id, new AbortController());
+    }
     if(extracted) pendingNode._runMetaTargetId = extracted.id;
     if(!branchNode){
         pendingNode.pending = Math.max(1, Number(expectedCount) || 1);
@@ -16126,7 +21727,7 @@ async function runGeneration(){
             return;
         }
         if(isApiLikeEngine(settings.engine) && settings.apiKind === 'video'){
-            const outVideos = await runApiVideoGeneration(prompt, refs);
+            const outVideos = await runApiVideoGeneration(prompt, refs, settings, pendingNode, clientOperationId);
             if(!outVideos.length) throw new Error(tr('smart.errNoOutVideos'));
             finalizePendingNode(pendingNode, outVideos, pendingMeta, 'video');
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
@@ -16136,17 +21737,45 @@ async function runGeneration(){
             scheduleSave();
             return;
         }
+        if(isApiLikeEngine(settings.engine) && settings.apiKind === 'audio'){
+            const outAudios = await runApiAudioGeneration(prompt, refs, settings, pendingNode, clientOperationId);
+            if(!outAudios.length) throw new Error(tr('smart.errNoOutAudios'));
+            finalizePendingNode(pendingNode, outAudios, pendingMeta, 'audio');
+            if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
+            addSmartGenerationLog({run:runLog, outputs:outAudios, runMs:nowMs() - runLogStart});
+            clearPromptInput({preserveDraft:true});
+            settings = previousSettings;
+            scheduleSave();
+            return;
+        }
+        if(isApiLikeEngine(settings.engine) && settings.apiKind === 'music'){
+            const outMusic = await runApiMusicGeneration(prompt, refs, settings, pendingNode, clientOperationId);
+            if(!outMusic.length) throw new Error(tr('smart.errNoOutAudios'));
+            finalizePendingNode(pendingNode, outMusic, pendingMeta, 'audio');
+            if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
+            addSmartGenerationLog({run:runLog, outputs:outMusic, runMs:nowMs() - runLogStart});
+            clearPromptInput({preserveDraft:true});
+            settings = previousSettings;
+            scheduleSave();
+            return;
+        }
         const rhModelMode = settings.engine === 'runninghub' && Boolean(runningHubSelectedModel(settings));
         const outImages = rhModelMode
-            ? await runApiGeneration(prompt, refs, runningHubModelApiSettings(settings))
+            ? await runApiGeneration(prompt, refs, runningHubModelApiSettings(settings), pendingNode, clientOperationId)
             : settings.engine === 'runninghub'
-                ? await runRunningHubGeneration(prompt, refs)
+                ? await runRunningHubGeneration(prompt, runningHubRefsForNode(node, refs), settings, pendingNode, clientOperationId)
                 : settings.engine === 'modelscope'
-                ? await runModelscopeGeneration(prompt, refs)
-                : await runApiGeneration(prompt, refs);
-        if(isApiLikeEngine(settings.engine) || rhModelMode){
+                ? await runModelscopeGeneration(prompt, refs, settings, pendingNode, clientOperationId)
+                : await runApiGeneration(prompt, refs, settings, pendingNode, clientOperationId);
+        if(isApiLikeEngine(settings.engine) || rhModelMode || settings.engine === 'modelscope'){
             const taskIds = Array.isArray(outImages?.taskIds) ? outImages.taskIds : [];
             if(!taskIds.length) throw new Error(tr('smart.errRunFailed'));
+            if(isCanvasRunCancelled(pendingNode)){
+                await cancelCanvasTaskIds(taskIds);
+                throw new CanvasRunCancelledSignal();
+            }
+            if(outImages?.runRef) pendingNode.runRef = cloneSmartSettings(outImages.runRef);
+            pendingNode.runSubmissionFailures = Array.isArray(outImages?.submissionFailures) ? [...outImages.submissionFailures] : [];
             pendingNode.pendingTasks = taskIds.map(taskId => ({taskId, kind:'image', providerId:outImages.providerId, model:outImages.model}));
             pendingNode.pending = Math.max(taskIds.length, Number(pendingNode.pending || 0) || taskIds.length);
             pendingNode.runStartedAt = nowMs();
@@ -16156,6 +21785,7 @@ async function runGeneration(){
             scheduleSave();
             await saveCanvas();
             await resumeSmartPendingNode(pendingNode, {run:runLog, runLogStart});
+            throwIfCanvasRunCancelled(pendingNode);
             if(pendingNode.jimengPending || smartRecoverableImageTask(pendingNode)){
                 if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
                 clearPromptInput({preserveDraft:true});
@@ -16182,30 +21812,36 @@ async function runGeneration(){
         scheduleSave();
     } catch(e) {
         settings = previousSettings;
+        if(e?.canvasRunCancelled || isCanvasRunCancelled(pendingNode)){
+            clearSmartNodeBusyState(pendingNode);
+            removeEmptyRunPlaceholder(pendingNode);
+            selectedId = node.id;
+            delete pendingNode._runMetaTargetId;
+            return;
+        }
         if(handleJimengPendingSignal(pendingNode, e)){
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             delete pendingNode._runMetaTargetId;
             clearPromptInput({preserveDraft:true});
             return;
         }
-        pendingNode.pending = 0;
-        if(branchNode){
-            nodes = nodes.filter(n => n.id !== branchNode.id);
-            canvas.connections = (canvas.connections || []).filter(c => c.from !== branchNode.id && c.to !== branchNode.id);
-            selectedId = node.id;
-        } else {
+        if(!e?.canvasRunStatusHandled) await failCanvasRun(pendingNode, e);
+        if(!branchNode){
             pendingNode.pending = 0;
             pendingNode.running = false;
             if(!(pendingNode.images || []).length){
                 delete pendingNode.w;
                 delete pendingNode.h;
             }
+        } else {
+            selectedId = node.id;
         }
         if(extracted) restoreFromExtraction(node, extracted);
         delete pendingNode._runMetaTargetId;
         if(!e?.smartGenerationLogged) addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStart, error:e.message || String(e)});
-        toast((e.message || tr('smart.errRunFailed')).slice(0, 160));
+        errorToast((e.message || tr('smart.errRunFailed')).slice(0, 160));
     } finally {
+        if(isSmartExecutionNode(node) && pendingNode?.id) executionResultAbortControllers.delete(pendingNode.id);
         if(!apiConcurrentRun){
             clearNodeRunningState(pendingNode);
             syncRunButtonState();
@@ -16215,46 +21851,204 @@ async function runGeneration(){
 }
 async function runPromptLLMNode(nodeId){
     const node = nodes.find(n => n.id === nodeId);
-    if(!node || node.type !== 'smart-prompt') return;
-    const message = promptNodeLLMInputText(node).trim();
+    const isTextGenerator = node?.type === SMART_NODE_TYPES.textGenerator;
+    if(!node || (!isTextGenerator && node.type !== 'smart-prompt')) return;
+    const clientOperationId = createCanvasOperationId(node.id);
+    const runSettings = isTextGenerator ? smartSettingsForNode(node) : null;
+    const textInputs = isTextGenerator ? textGenerationMediaForNode(node) : null;
+    const request = isTextGenerator
+        ? SMART_NODE_CONTRACT.createTextGenerationRequest(
+            activeComposerNode()?.id === node.id ? promptPlainText() : node.promptDraftText,
+            textInputs.texts,
+            textInputs.media
+        )
+        : null;
+    const message = (isTextGenerator ? request.message : promptNodeLLMInputText(node)).trim();
     if(!message){ toast(tr('smart.promptLlmNeedText')); return; }
-    const systemPrompt = (node.llmSystemPrompt || '').trim();
-    node.llmEnabled = true;
-    node.running = true;
+    const systemPrompt = String(isTextGenerator ? runSettings.textSystemPrompt : node.llmSystemPrompt || '').trim();
+    let textCapabilitySelection = null;
+    if(isTextGenerator){
+        try {
+            textCapabilitySelection = resolveCapabilityForRun(
+                runSettings.textProvider,
+                'text_generation',
+                request.inputCounts,
+                runSettings.textFamilyId,
+                runSettings.textModel,
+                '',
+                request.inputRoles,
+                capabilityParameterIntent(runSettings.textProvider, runSettings.textModel, 'text_generation', runSettings)
+            );
+            runSettings.textFamilyId = textCapabilitySelection.family.family_id;
+            runSettings.textModel = textCapabilitySelection.profile.model_id;
+        } catch(error) {
+            errorToast((error.message || tr('smart.noVerifiedTextModel')).slice(0, 160), {node});
+            return;
+        }
+    } else {
+        node.llmEnabled = true;
+    }
+    let pendingNode = null;
+    let pendingMeta = null;
+    let requestAbortController = null;
+    if(isTextGenerator){
+        pushUndo();
+        pendingMeta = stripRunInputMeta(snapshotRunMeta(message, node.id, message, request.references || []));
+        pendingNode = createPendingOutputFromSource(node, 1, pendingMeta, {connectSource:false, selectOutput:true, refs:request.references || []});
+        requestAbortController = new AbortController();
+        executionResultAbortControllers.set(pendingNode.id, requestAbortController);
+        delete node.runStatus;
+        delete node.runError;
+        delete node.runErrorAt;
+    } else {
+        SMART_NODE_CONTRACT.markExecutionRunStarted(node);
+        node.running = true;
+    }
+    const runSubject = pendingNode || node;
     render();
     try {
-        const provider = resolveChatProviderId(node.llmProvider || '');
-        const model = resolveChatModel(node.llmModel || '', provider);
-        const mediaRefs = promptNodeInputMediaForLLM(node);
-        const images = imageRefsOnly(mediaRefs).map(img => img.url).filter(Boolean);
-        const videos = videoRefsOnly(mediaRefs).map(video => video.url).filter(Boolean);
+        const provider = isTextGenerator ? runSettings.textProvider : resolveChatProviderId(node.llmProvider || '');
+        const model = isTextGenerator ? runSettings.textModel : resolveChatModel(node.llmModel || '', provider);
+        const mediaRefs = isTextGenerator ? request.references : promptNodeInputMediaForLLM(node);
+        const images = isTextGenerator ? request.images : imageRefsOnly(mediaRefs).map(img => img.url).filter(Boolean);
+        const videos = isTextGenerator ? request.videos : videoRefsOnly(mediaRefs).map(video => video.url).filter(Boolean);
+        const audios = isTextGenerator ? request.audios : audioRefsOnly(mediaRefs).map(audio => audio.url).filter(Boolean);
+        const textInputCounts = isTextGenerator
+            ? request.inputCounts
+            : {text:message ? 1 : 0, image:images.length, video:videos.length, audio:audios.length};
+        const textInputRoles = isTextGenerator
+            ? request.inputRoles
+            : capabilityInputRoles(mediaRefs, Boolean(message));
+        const textParameters = isTextGenerator
+            ? capabilityParameterSubmissionValues(textCapabilitySelection.profile, runSettings)
+            : {};
+        await preflightCanvasNodeRun({
+            node:runSubject,
+            clientOperationId,
+            providerId:provider,
+            modelId:model,
+            familyId:isTextGenerator ? (runSettings.textFamilyId || '') : '',
+            nodeType:'text_generation',
+            inputs:{prompt:message, reference:images, source_video:videos, reference_audio:audios},
+            inputCounts:textInputCounts,
+            inputRoles:textInputRoles,
+            parameters:textParameters
+        });
+        throwIfCanvasRunCancelled(runSubject);
+        await queueCanvasRun(runSubject);
         const result = await fetch('/api/canvas-llm', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
+            signal:requestAbortController?.signal,
             body:JSON.stringify({
                 message,
                 messages:[],
                 images,
                 videos,
+                audios,
+                input_roles:isTextGenerator ? request.inputRoles : capabilityInputRoles(mediaRefs, Boolean(message)),
                 model,
+                family_id:isTextGenerator ? (runSettings.textFamilyId || '') : '',
                 provider,
                 ms_model: provider === 'modelscope' ? model : '',
-                system_prompt:node.llmSystemEnabled ? (systemPrompt || 'You are a helpful prompt assistant.') : ''
+                system_prompt:(isTextGenerator ? runSettings.textSystemEnabled : node.llmSystemEnabled) ? (systemPrompt || 'You are a helpful prompt assistant.') : '',
+                parameters:textParameters
             })
         }).then(async r => {
             if(!r.ok) throw new Error(await r.text());
             return r.json();
         });
-        node.text = (result.text || '').trim();
-        node.llmProvider = provider;
-        node.llmModel = model;
+        throwIfCanvasRunCancelled(runSubject);
+        await submitCanvasRun(runSubject);
+        await processCanvasRun(runSubject);
+        const generatedText = (result.text || '').trim();
+        if(!generatedText) throw new Error(tr('smart.promptLlmFailed'));
+        if(!isTextGenerator){
+            node.text = generatedText;
+            node.llmProvider = provider;
+            node.llmModel = model;
+        }
+        if(generatedText){
+            const stored = await fetch('/api/canvas-text-results', {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                signal:requestAbortController?.signal,
+                body:JSON.stringify({
+                    text:generatedText,
+                    name:'文本结果.md',
+                    canvas_id:canvas?.id || '',
+                    canvas_title:canvas?.title || ''
+                })
+            }).then(async response => {
+                const data = await response.json().catch(() => ({}));
+                if(!response.ok) throw new Error(apiErrorMessage(data, '文本结果保存失败'));
+                return data;
+            });
+            stored.result_id = stored.result_id || stored.id || '';
+            throwIfCanvasRunCancelled(runSubject);
+            await finishCanvasRun(runSubject, [stored]);
+            const textMedia = {
+                url:stored.url,
+                resultId:stored.id,
+                result_id:stored.id,
+                kind:'text',
+                name:stored.display_name || '文本结果.md',
+                text:generatedText,
+                content:generatedText,
+                provider,
+                model
+            };
+            if(isTextGenerator){
+                finalizePendingNode(pendingNode, [textMedia], pendingMeta, 'text');
+                pendingNode.title = stored.display_name || '文本结果.md';
+                pendingNode.runSnapshot = {
+                        provider,
+                        model,
+                        familyId:runSettings.textFamilyId || '',
+                        variantId:textCapabilitySelection?.profile?.variant_id || '',
+                        localCommand:String(activeComposerNode()?.id === node.id ? promptPlainText() : node.promptDraftText || ''),
+                        connectedTexts:request.connectedTexts,
+                        images:[...images],
+                        videos:[...videos],
+                        audios:[...audios],
+                        systemPrompt:(runSettings.textSystemEnabled ? systemPrompt : ''),
+                        systemTemplate:cloneSmartSettings(runSettings.textSystemTemplateSnapshot || null),
+                        skill:cloneSmartSettings(runSettings.textSystemSkillSnapshot || null),
+                        createdAt:Date.now()
+                };
+                node.runSettings = settingsForStorage(runSettings);
+                selectedId = pendingNode.id;
+            } else {
+                const pos = nextOutputPositionForSource(node, {w:316, h:220});
+                const created = SMART_NODE_CONTRACT.createTextResultMaterial(node, generatedText, {
+                    id:uid('material'), x:pos.x, y:pos.y, url:stored.url, resultId:stored.id,
+                    name:stored.display_name || '文本结果.md', provider, model
+                });
+                created.node.scale = MEDIA_NODE_DEFAULT_SCALE;
+                nodes.push(created.node);
+                addConnection(created.connection.from, created.connection.to, created.connection.kind);
+                selectedId = created.node.id;
+            }
+        }
         scheduleSave();
     } catch(e) {
-        toast((e.message || tr('smart.promptLlmFailed')).slice(0, 160));
+        if(e?.canvasRunCancelled || isCanvasRunCancelled(pendingNode)){
+            if(pendingNode) removeEmptyRunPlaceholder(pendingNode);
+        } else {
+            await failCanvasRun(runSubject, e);
+            errorToast((e.message || tr('smart.promptLlmFailed')).slice(0, 160));
+        }
     } finally {
-        node.running = false;
+        if(pendingNode) executionResultAbortControllers.delete(pendingNode.id);
+        if(!isTextGenerator) node.running = false;
         render();
     }
+}
+async function runSelectedNode(){
+    savePromptDraftForCurrent();
+    const node = selectedNode();
+    if(node?.type === SMART_NODE_TYPES.textGenerator) return runPromptLLMNode(node.id);
+    return runGeneration();
 }
 function comfyFieldKind(field){
     if(['image','video','audio'].includes(field?.type)) return field.type;
@@ -16262,25 +22056,238 @@ function comfyFieldKind(field){
     if(field?.type === 'textarea' || /prompt|text|提示词|正向|负向/.test(key)) return 'prompt';
     return 'setting';
 }
-async function runApiGeneration(prompt, refs, runSettings=settings){
-    if(!runSettings.provider_id || !runSettings.model) throw new Error(tr('smart.errNoApiModel'));
+function createCanvasOperationId(nodeId=''){
+    const safeNodeId = String(nodeId || 'node').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 80) || 'node';
+    return `operation_${safeNodeId}_${smartClientId}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+function canvasRunId(node){
+    return String(node?.runRef?.runId || '').trim();
+}
+async function updateCanvasRunStatus(node, status, options={}){
+    const runId = canvasRunId(node);
+    if(!runId) return null;
+    const endpoint = '/api/canvas-runs/' + encodeURIComponent(runId) + '/status';
+    const response = await fetch(endpoint, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+            status,
+            provider_task_id:String(options.providerTaskId || ''),
+            error:String(options.error || '').slice(0, 4000),
+            last_polled_at:Number(options.lastPolledAt || 0) || 0
+        })
+    });
+    const result = await response.json().catch(() => ({}));
+    if(!response.ok){
+        const message = apiErrorMessage(result, `运行记录更新失败：${status}`);
+        if(options.required) throw new Error(message);
+        node.runRef = {...(node.runRef || {}), syncError:message};
+        console.warn(message);
+        scheduleSave();
+        return null;
+    }
+    const attempt = (result.attempts || []).slice(-1)[0] || {};
+    node.runRef = {
+        ...(node.runRef || {}),
+        status:String(attempt.status || status),
+        providerTaskId:String(attempt.provider_task_id || options.providerTaskId || ''),
+        syncError:''
+    };
+    scheduleSave();
+    return result;
+}
+async function appendCanvasRunResults(node, mediaItems=[]){
+    const runId = canvasRunId(node);
+    if(!runId) return null;
+    const resultIds = resultIdsForMediaItems(mediaItems);
+    if(!resultIds.length) return null;
+    const endpoint = '/api/canvas-runs/' + encodeURIComponent(runId) + '/results';
+    const response = await fetch(endpoint, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({result_ids:resultIds})
+    });
+    const result = await response.json().catch(() => ({}));
+    if(!response.ok){
+        const message = apiErrorMessage(result, '运行结果引用保存失败');
+        node.runRef = {...(node.runRef || {}), syncError:message};
+        console.warn(message);
+        scheduleSave();
+        return null;
+    }
+    return result;
+}
+async function queueCanvasRun(node){
+    return updateCanvasRunStatus(node, 'queued', {required:true});
+}
+async function submitCanvasRun(node, providerTaskId=''){
+    return updateCanvasRunStatus(node, 'submitted', {providerTaskId});
+}
+async function processCanvasRun(node){
+    return updateCanvasRunStatus(node, 'processing', {lastPolledAt:Date.now()});
+}
+async function recoverCanvasRun(node, error=''){
+    if(node) node.runStatus = 'recoverable';
+    return updateCanvasRunStatus(node, 'recoverable', {error:error?.message || error || '', lastPolledAt:Date.now()});
+}
+async function finishCanvasRun(node, mediaItems=[], status='succeeded'){
+    const executionNode = executionNodeForRunSubject(node);
+    if(isCanvasRunCancelled(node) || String(node?.runStatus || '') === 'cancelled') return null;
+    SMART_NODE_CONTRACT.markExecutionRunSucceeded(node, status);
+    bindExecutionResultMetadata(node, executionNode);
+    await appendCanvasRunResults(node, mediaItems);
+    const result = await updateCanvasRunStatus(node, status);
+    scheduleSave();
+    return result;
+}
+async function failCanvasRun(node, error){
+    if(isCanvasRunCancelled(node)) return null;
+    SMART_NODE_CONTRACT.markExecutionRunFailed(node, error);
+    clearSmartNodeBusyState(node);
+    node.runStatus = 'failed';
+    node.runError = String(error?.message || error || tr('smart.errRunFailed')).trim();
+    node.runErrorAt = nowMs();
+    const result = await updateCanvasRunStatus(node, 'failed', {error:error?.message || error || ''});
+    scheduleSave();
+    return result;
+}
+function canvasInputMetadataSource(url){
+    const target = String(url || '').split('#', 1)[0];
+    if(!target) return null;
+    const sameUrl = item => {
+        if(!item || typeof item !== 'object') return false;
+        return [item.url, item.sourceUrl, item.source_url, item.localUrl, item.local_url, item.originalLocalUrl]
+            .some(value => String(value || '').split('#', 1)[0] === target);
+    };
+    for(const node of nodes || []){
+        const item = (node.images || []).find(sameUrl);
+        if(item) return item;
+    }
+    return null;
+}
+function canvasInputMetadataElement(url){
+    const target = String(url || '').split('#', 1)[0];
+    if(!target) return null;
+    return [...document.querySelectorAll('img[src],video[src],audio[src]')].find(element => {
+        const source = String(element.currentSrc || element.src || '').split('#', 1)[0];
+        return source === target || source.endsWith(target) || target.endsWith(source);
+    }) || null;
+}
+function canvasInputMetadataForPreflight(inputs={}){
+    const result = {};
+    Object.entries(inputs || {}).forEach(([key, rawValue]) => {
+        const values = Array.isArray(rawValue) ? rawValue : (rawValue === null || rawValue === undefined || rawValue === '' ? [] : [rawValue]);
+        if(!values.length) return;
+        result[key] = values.map((rawItem, index) => {
+            if(typeof rawItem === 'string' && ['prompt','system_prompt','text','content'].includes(key)){
+                return {name:key === 'prompt' ? '节点提示词' : `文本 ${index + 1}`, characters:[...rawItem].length, bytes:new TextEncoder().encode(rawItem).length};
+            }
+            const value = rawItem && typeof rawItem === 'object' ? rawItem : {url:String(rawItem || '')};
+            const url = String(value.url || value.path || value.src || rawItem || '');
+            const source = canvasInputMetadataSource(url) || value;
+            const media = canvasInputMetadataElement(url);
+            const metadata = {
+                name:String(source.name || source.filename || value.name || decodeURIComponent(url.split('?', 1)[0].split('/').pop() || '') || `${key} ${index + 1}`),
+                url
+            };
+            const bytes = Number(source.bytes || source.file_size || source.fileSize || source.size_bytes || source.sizeBytes || value.bytes || 0);
+            const width = Number(source.natural_w || source.naturalWidth || source.width || source.w || value.width || media?.naturalWidth || media?.videoWidth || 0);
+            const height = Number(source.natural_h || source.naturalHeight || source.height || source.h || value.height || media?.naturalHeight || media?.videoHeight || 0);
+            const duration = Number(source.duration_seconds || source.duration || source.media_duration || value.duration_seconds || value.duration || media?.duration || 0);
+            if(Number.isFinite(bytes) && bytes > 0) metadata.bytes = bytes;
+            if(Number.isFinite(width) && width > 0) metadata.width = width;
+            if(Number.isFinite(height) && height > 0) metadata.height = height;
+            if(Number.isFinite(duration) && duration > 0) metadata.duration_seconds = duration;
+            return metadata;
+        });
+    });
+    return result;
+}
+async function preflightCanvasNodeRun(options={}){
+    const runNode = options.node || null;
+    const clientOperationId = String(options.clientOperationId || createCanvasOperationId(runNode?.id));
+    const request = SMART_NODE_CONTRACT.createCanvasPreflightRequest({
+        ...options,
+        canvasId,
+        nodeId:runNode?.id || '',
+        clientOperationId,
+        graphNodes:nodes,
+        graphConnections:canvas?.connections || [],
+        inputMetadata:options.inputMetadata || canvasInputMetadataForPreflight(options.inputs || {})
+    });
+    const response = await fetch('/api/canvas-preflight', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        signal:executionResultAbortSignal(runNode),
+        body:JSON.stringify(request)
+    });
+    const result = await response.json().catch(() => ({}));
+    if(!response.ok) throw new Error(apiErrorMessage(result, '运行前预检失败'));
+    if(result.network_requested !== false) throw new Error('运行前预检被阻止：预检过程不得请求第三方网络');
+    if(runNode && result.run_id && result.attempt_id && result.idempotency_key){
+        runNode.runRef = {
+            runId:String(result.run_id),
+            attemptId:String(result.attempt_id),
+            idempotencyKey:String(result.idempotency_key)
+        };
+        scheduleSave();
+    }
+    return result;
+}
+async function runApiGeneration(prompt, refs, runSettings=settings, runNode=null, clientOperationId=''){
+    if(!runSettings.provider_id) throw new Error(tr('smart.errNoApiModel'));
     const count = Math.max(1, Math.min(8, Number(runSettings.count || 1)));
+    const inputCounts = {text:prompt ? 1 : 0, image:imageRefsOnly(refs).length, video:0, audio:0};
+    const inputRoles = capabilityInputRoles(refs, Boolean(prompt));
+    const parameterIntent = capabilityParameterIntent(runSettings.provider_id, runSettings.model, 'image_generation', runSettings);
+    const selection = resolveCapabilityForRun(runSettings.provider_id, 'image_generation', inputCounts, runSettings.imageFamilyId, runSettings.model, '', inputRoles, parameterIntent);
+    const profile = selection.profile;
+    runSettings.imageFamilyId = selection.family.family_id;
+    runSettings.model = profile.model_id;
+    const effective = capabilityImageParameterValues(profile, runSettings);
     const payload = {
         prompt,
         provider_id:runSettings.provider_id,
         model:runSettings.model,
+        family_id:runSettings.imageFamilyId || '',
         size:sizeForRun(runSettings),
-        aspect_ratio:API_RATIO_VALUES[runSettings.ratio] || (runSettings.ratio === 'custom' ? String(runSettings.customRatio || '').trim() : ''),
-        resolution:['1k','2k','4k'].includes(runSettings.resolution) ? runSettings.resolution : '',
-        quality:runSettings.quality || 'auto',
+        aspect_ratio:effective.aspect_ratio || '',
+        resolution:effective.resolution || '',
+        quality:effective.quality || '',
         n:1,
-        reference_images:imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX)
+        reference_images:imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX),
+        input_roles:inputRoles,
+        parameters:effective
     };
-    const tasks = await Promise.all(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}).then(async r => {
+    await preflightCanvasNodeRun({
+        node:runNode || activeSettingsSubject(),
+        clientOperationId,
+        providerId:payload.provider_id,
+        modelId:payload.model,
+        familyId:payload.family_id,
+        nodeType:'image_generation',
+        inputs:{prompt:payload.prompt, reference:payload.reference_images.map(item => item.url).filter(Boolean)},
+        inputCounts,
+        inputRoles,
+        parameters:effective
+    });
+    const activeRunNode = runNode || activeSettingsSubject();
+    await queueCanvasRun(activeRunNode);
+    const settled = await Promise.allSettled(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, signal:executionResultAbortSignal(activeRunNode), body:JSON.stringify(payload)}).then(async r => {
         if(!r.ok) throw new Error(await r.text());
         return r.json();
     })));
-    return {taskIds:tasks.map(task => task.task_id).filter(Boolean), count, providerId:payload.provider_id, model:payload.model};
+    const tasks = settled.filter(item => item.status === 'fulfilled').map(item => item.value);
+    const submissionFailures = settled.filter(item => item.status === 'rejected').map(item => item.reason?.message || String(item.reason || tr('smart.errRunFailed')));
+    const taskIds = tasks.map(task => task.task_id).filter(Boolean);
+    if(!taskIds.length){
+        const error = new Error(submissionFailures[0] || tr('smart.errRunFailed'));
+        await failCanvasRun(activeRunNode, error);
+        throw error;
+    }
+    await submitCanvasRun(activeRunNode, taskIds.join(','));
+    if(submissionFailures.length) await recoverCanvasRun(activeRunNode, submissionFailures.join('\n'));
+    return {taskIds, count, providerId:payload.provider_id, model:payload.model, runRef:cloneSmartSettings(activeRunNode?.runRef || null), submissionFailures};
 }
 function smartCompactJson(value, max=4200){
     let text = '';
@@ -16310,34 +22317,19 @@ function runningHubPayloadError(stage, data, fallback, extra={}){
     if(code !== '') parts.push(`code=${code}`);
     return smartDetailedError(parts.join('：'), {stage, taskId, code, raw, ...(detailObj || {}), ...extra});
 }
-async function runRunningHubGeneration(prompt, refs, runSettings=settings){
-    const ref = selectedRunningHubRef(runSettings);
-    if(!ref) throw new Error(tr('smart.rhNeedConfig'));
-    const fields = rhActiveFields(runSettings);
-    if(!fields.length) throw new Error(tr('smart.rhNeedFields'));
-    const randomValues = {};
-    const mode = ref.kind;
-    const media = rhMediaForRun(prompt, refs);
-    const nodeInfoList = await rhBuildNodeInfoList(media, runSettings, randomValues);
-    const workflowExtras = mode === 'workflow' ? await rhBuildWorkflowRequestExtras(media, nodeInfoList, runSettings) : {};
-    const endpoint = mode === 'workflow' ? '/api/runninghub/workflow-submit' : '/api/runninghub/submit';
-    const body = mode === 'workflow'
-        ? {workflowId:ref.id, nodeInfoList, useWallet:runSettings.rhPayment === 'wallet', ...workflowExtras}
-        : {webappId:ref.id, nodeInfoList, instanceType:runSettings.rhInstanceType || '', useWallet:runSettings.rhPayment === 'wallet'};
-    if(mode === 'workflow') runSettings.rhWorkflowId = ref.id;
-    else runSettings.rhAppId = ref.id;
-    runSettings.rhMode = mode;
+async function submitAndPollRunningHub(endpoint, body, runSettings=settings, runNode=null){
     const submit = await fetch(endpoint, {
         method:'POST',
         headers:{'Content-Type':'application/json'},
+        signal:executionResultAbortSignal(runNode),
         body:JSON.stringify(body)
-    }).then(async r => {
-        const data = await r.clone().json().catch(async () => ({detail:await r.text().catch(() => '')}));
-        if(!r.ok || data.success === false) throw runningHubPayloadError('提交', data, tr('smart.rhFailed'), {
+    }).then(async response => {
+        const data = await response.clone().json().catch(async () => ({detail:await response.text().catch(() => '')}));
+        if(!response.ok || data.success === false) throw runningHubPayloadError('提交', data, tr('smart.rhFailed'), {
             endpoint,
             workflowId:body.workflowId || '',
             webappId:body.webappId || '',
-            nodeInfoList:nodeInfoList.slice(0, 40),
+            nodeInfoList:(body.nodeInfoList || []).slice(0, 40),
             hasWorkflow:Boolean(body.workflow)
         });
         return data.data || data;
@@ -16345,112 +22337,284 @@ async function runRunningHubGeneration(prompt, refs, runSettings=settings){
     const taskId = submit.taskId;
     if(!taskId) throw new Error(tr('smart.rhNoTaskId'));
     runSettings.rhTaskId = taskId;
+    await submitCanvasRun(runNode, taskId);
+    await processCanvasRun(runNode);
     const useWallet = runSettings.rhPayment === 'wallet';
-    for(let i = 0; i < 720; i++){
+    for(let index = 0; index < 720; index++){
+        throwIfCanvasRunCancelled(runNode);
         await sleep(2500);
-        const data = await fetch(`/api/runninghub/query?taskId=${encodeURIComponent(taskId)}&useWallet=${useWallet ? '1' : '0'}`).then(async r => {
-            const json = await r.clone().json().catch(async () => ({detail:await r.text().catch(() => '')}));
-            if(!r.ok || json.success === false) throw runningHubPayloadError('查询', json, tr('smart.rhFailed'), {taskId});
+        throwIfCanvasRunCancelled(runNode);
+        const data = await fetch(`/api/runninghub/query?taskId=${encodeURIComponent(taskId)}&useWallet=${useWallet ? '1' : '0'}&region=${encodeURIComponent(runningHubRegion())}`, {signal:executionResultAbortSignal(runNode)}).then(async response => {
+            const json = await response.clone().json().catch(async () => ({detail:await response.text().catch(() => '')}));
+            if(!response.ok || json.success === false) throw runningHubPayloadError('查询', json, tr('smart.rhFailed'), {taskId});
             return json.data || json;
         });
         if(data.status === 'SUCCESS'){
-            const urls = resultMediaUrls(data.image_items?.length ? data.image_items : (data.urls || []));
+            const urls = resultMediaUrls(data.image_items?.length ? data.image_items : (data.urls || data));
             if(!urls.length) throw new Error(tr('smart.rhOutputsEmpty'));
+            await finishCanvasRun(runNode, urls);
             return urls;
         }
         if(data.status === 'FAILED') throw runningHubPayloadError('执行', data, data.failReason || tr('smart.rhFailed'), {taskId});
     }
     throw new Error(tr('smart.rhTimeout'));
 }
-async function runApiVideoGeneration(prompt, refs, runSettings=settings){
-    if(!runSettings.videoModel) throw new Error(tr('smart.errNoVideoModel'));
+async function runLegacyRunningHubWorkflowGeneration(prompt, refs, runSettings){
+    const parsed = parseRunningHubEntryKey(runSettings?.rhConfigKey || '');
+    const workflowId = String(runSettings?.rhWorkflowId || (parsed?.kind === 'workflow' ? parsed.id : '') || '').trim();
+    const fields = sortRunningHubFields(rhUsableFields(runSettings?.rhFields || []));
+    if(!workflowId || !fields.length) throw new Error(tr('smart.rhNeedFields'));
+    const media = rhPrepareMediaBindings(rhMediaForRun(prompt, refs), runSettings, fields);
+    const nodeInfoList = await rhBuildNodeInfoList(media, runSettings, {});
+    const workflow = rhApplyNodeInfoListToWorkflow(runSettings.rhWorkflowJson || {}, nodeInfoList);
+    const body = {workflowId, nodeInfoList, useWallet:runSettings.rhPayment === 'wallet', region:runningHubRegion(), ...(workflow ? {workflow} : {})};
+    runSettings.rhWorkflowId = workflowId;
+    runSettings.rhMode = 'workflow';
+    return submitAndPollRunningHub('/api/runninghub/workflow-submit', body, runSettings);
+}
+async function runRunningHubGeneration(prompt, refs, runSettings=settings, node=null, clientOperationId=''){
+    const ref = selectedRunningHubRef(runSettings);
+    if(!ref) throw new Error(tr('smart.rhNeedConfig'));
+    const fields = rhActiveFields(runSettings);
+    if(!fields.length) throw new Error(tr('smart.rhNeedFields'));
+    const randomValues = {};
+    const media = rhPrepareMediaBindings(rhMediaForRun(prompt, refs), runSettings, fields, node);
+    const appFieldValues = {};
+    fields.forEach(field => {
+        const key = rhParamKey(field.nodeId, field.fieldName);
+        const value = rhParamValue(field, media, runSettings, fields, randomValues);
+        if(value !== undefined && value !== null && value !== '') appFieldValues[key] = value;
+    });
+    await preflightCanvasNodeRun({
+        node,
+        clientOperationId,
+        providerId:'runninghub',
+        nodeType:'ai_application',
+        aiAppId:ref.id,
+        appFieldValues
+    });
+    await queueCanvasRun(node);
+    const nodeInfoList = await rhBuildNodeInfoList(media, runSettings, randomValues);
+    const endpoint = '/api/runninghub/submit';
+    const body = {webappId:ref.id, nodeInfoList, useWallet:runSettings.rhPayment === 'wallet', region:runningHubRegion()};
+    runSettings.rhAppId = ref.id;
+    delete runSettings.rhTaskId;
+    delete runSettings.rhWorkflowId;
+    delete runSettings.rhInstanceType;
+    runSettings.rhMode = 'app';
+    try {
+        return await submitAndPollRunningHub(endpoint, body, runSettings, node);
+    } catch(error) {
+        const knownTaskId = String(error?.taskId || error?.smartDetails?.taskId || runSettings.rhTaskId || '').trim();
+        const stage = String(error?.smartDetails?.stage || '').trim();
+        if(knownTaskId && stage !== '执行') await recoverCanvasRun(node, error);
+        else await failCanvasRun(node, error);
+        error.canvasRunStatusHandled = true;
+        throw error;
+    }
+}
+async function runApiVideoGeneration(prompt, refs, runSettings=settings, runNode=null, clientOperationId=''){
+    if(!runSettings.videoProvider) throw new Error(tr('smart.errNoVideoModel'));
     try {
         const uploadedRefs = applyUploadedUrlsToSmartRefs(refs, runSettings);
-        const trustedMode = Boolean(runSettings.videoTrustedAsset);
-        const trustedSource = trustedMode ? (['library','cloud','manual'].includes(runSettings.videoTrustedSource) ? runSettings.videoTrustedSource : 'library') : 'none';
-        // 仅「素材库链接」来源才走 asset:// 认证地址 + 后端可信素材路由；上传云端/手动网址走普通直链。
-        const useAssetUris = trustedSource === 'library';
-        const targetPlatform = videoProviderPlatform(runSettings.videoProvider || 'comfly');
-        let mismatchedAsset = false;
-        const effUrl = ref => {
-            const uris = (ref && ref.asset_uris && typeof ref.asset_uris === 'object') ? ref.asset_uris : null;
-            if(useAssetUris && uris && Object.keys(uris).length){
-                // asset:// 与平台绑定：取当前视频平台对应的认证地址；该素材没注册到这个平台就回退本地 url
-                if(targetPlatform && uris[targetPlatform]) return uris[targetPlatform];
-                mismatchedAsset = true;
-            }
-            return ref?.url;
-        };
         const refImages = imageRefsOnly(uploadedRefs).map((ref, i) => {
-            const item = {url:effUrl(ref), name:ref.name || `图${i + 1}`};
-            if(runSettings.videoUseFrameRoles){
-                if(i === 0) item.role = 'first_frame';
-                else if(i === 1) item.role = 'last_frame';
-            }
-            return item;
+            return {
+                url:ref?.url,
+                name:ref.name || `图${i + 1}`,
+                kind:'image',
+                width:Number(ref.width || ref.w || ref.natural_w || 0),
+                height:Number(ref.height || ref.h || ref.natural_h || 0),
+                natural_w:Number(ref.natural_w || ref.width || ref.w || 0),
+                natural_h:Number(ref.natural_h || ref.height || ref.h || 0)
+            };
         });
-        const manualVideo = manualSmartVideoLink(runSettings)?.url || '';
-        const refVideos = manualVideo ? manualSmartMediaLinks(runSettings).map(item => item.url).filter(Boolean) : videoRefsOnly(uploadedRefs).map(ref => effUrl(ref)).filter(Boolean);
-        const refAudios = audioRefsOnly(uploadedRefs).map(ref => effUrl(ref)).filter(Boolean).slice(0, 3);
-        if(mismatchedAsset) toast('部分认证素材属于其它平台，已回退为普通素材。切换到对应平台的视频接口才能用 asset:// 认证地址。');
-        const payload = {
+        const refVideos = videoRefsOnly(uploadedRefs).map(ref => ref?.url).filter(Boolean);
+        const refAudios = audioRefsOnly(uploadedRefs).map(ref => ref?.url).filter(Boolean).slice(0, 3);
+        if(runSettings.videoUseFrameRoles && refImages.length === 2 && !refVideos.length && !refAudios.length){
+            refImages[0].role = 'first_frame';
+            refImages[1].role = 'last_frame';
+        }
+        const inputCounts = {text:prompt ? 1 : 0, image:refImages.length, video:refVideos.length, audio:refAudios.length};
+        const inputRefs = [...refImages, ...refVideos.map(url => ({url, kind:'video'})), ...refAudios.map(url => ({url, kind:'audio'}))];
+        const inputRoles = videoCapabilityInputRoles(inputRefs, runSettings, Boolean(prompt));
+        const parameterIntent = capabilityParameterIntent(runSettings.videoProvider, runSettings.videoModel, 'video_generation', runSettings);
+        const currentProfile = capabilityProfileFor(runSettings.videoProvider, runSettings.videoModel, 'video_generation');
+        parameterIntent.__execution_mode = videoExecutionModeFor(currentProfile, inputRefs, runSettings, Boolean(manualSmartVideoLink(runSettings)));
+        const selection = resolveCapabilityForRun(runSettings.videoProvider, 'video_generation', inputCounts, runSettings.videoFamilyId, runSettings.videoModel, '', inputRoles, parameterIntent);
+        const profile = selection.profile;
+        runSettings.videoFamilyId = selection.family.family_id;
+        runSettings.videoModel = profile.model_id;
+        const parameterValues = capabilityVideoParameterValues(profile, runSettings);
+        const executionMode = videoExecutionModeFor(profile, inputRefs, runSettings);
+        const payload = window.SmartModelCapabilities.buildVideoRequest(profile, {
             prompt,
             provider_id: runSettings.videoProvider || 'comfly',
             model: runSettings.videoModel || 'veo3-fast',
-            duration: Math.max(1, Math.min(60, Number(runSettings.videoDuration) || 5)),
-            aspect_ratio: runSettings.videoAspect || '16:9',
-            resolution: runSettings.videoResolution || '',
+            family_id:runSettings.videoFamilyId || '',
             images: refImages,
             videos: refVideos,
             audios: refAudios,
-            enhance_prompt: Boolean(runSettings.videoEnhancePrompt),
-            enable_upsample: Boolean(runSettings.videoEnableUpsample),
-            watermark: Boolean(runSettings.videoWatermark),
-            camerafixed: Boolean(runSettings.videoCameraFixed),
-            generate_audio: Boolean(runSettings.videoGenerateAudio),
-            multimodal: Boolean(runSettings.videoMultimodal),
-            trusted_asset: useAssetUris
-        };
+            input_roles: inputRoles,
+            multimodal:executionMode === 'multimodal2video',
+            trusted_asset:false
+        }, parameterValues);
+        const effectiveParameters = window.SmartModelCapabilities?.effectiveParameters(profile, parameterValues) || {};
+        payload.parameters = effectiveParameters;
+        await preflightCanvasNodeRun({
+            node:runNode || activeSettingsSubject(),
+            clientOperationId,
+            providerId:payload.provider_id,
+            modelId:payload.model,
+            familyId:payload.family_id,
+            nodeType:'video_generation',
+            inputs:{prompt:payload.prompt, first_frame:refImages.filter(item => item.role === 'first_frame').map(item => item.url), last_frame:refImages.filter(item => item.role === 'last_frame').map(item => item.url), reference:refImages.filter(item => !['first_frame','last_frame'].includes(item.role)).map(item => item.url), source_video:refVideos, reference_audio:refAudios},
+            inputCounts,
+            inputRoles,
+            parameters:effectiveParameters
+        });
+        const activeRunNode = runNode || activeSettingsSubject();
+        await queueCanvasRun(activeRunNode);
         const result = await fetch('/api/canvas-video', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
+            signal:executionResultAbortSignal(activeRunNode),
             body:JSON.stringify(payload)
         }).then(async r => { if(!r.ok) throw new Error(await smartResponseErrorMessage(r, tr('smart.errRunFailed'))); return r.json(); });
-        if(result && result.jimeng_pending) throw new JimengPendingSignal({submitId:result.submit_id, kind:result.kind || 'video', queueInfo:result.queue_info, message:result.message});
-        return resultMediaUrls(result);
+        if(result && result.jimeng_pending){
+            await submitCanvasRun(activeRunNode, result.submit_id || '');
+            await recoverCanvasRun(activeRunNode, result.message || '任务仍在排队，可继续查询');
+            throw new JimengPendingSignal({submitId:result.submit_id, kind:result.kind || 'video', queueInfo:result.queue_info, message:result.message});
+        }
+        const urls = resultMediaUrls(result);
+        await submitCanvasRun(activeRunNode, result?.task_id || '');
+        await processCanvasRun(activeRunNode);
+        await finishCanvasRun(activeRunNode, urls);
+        return urls;
     } finally {
         transientSmartCloudLinks = [];
     }
 }
-async function runModelscopeGeneration(prompt, refs, runSettings=settings){
+async function runApiAudioMediaGeneration(prompt, refs, runSettings=settings, runNode=null, clientOperationId='', mediaTask='audio'){
+    const isMusic = mediaTask === 'music';
+    const providerId = isMusic ? runSettings.musicProvider : runSettings.audioProvider;
+    const familyId = isMusic ? runSettings.musicFamilyId : runSettings.audioFamilyId;
+    const modelId = isMusic ? runSettings.musicModel : runSettings.audioModel;
+    const nodeType = isMusic ? 'music_generation' : 'audio_generation';
+    if(!providerId) throw new Error(isMusic ? tr('smart.errNoMusicModel') : tr('smart.errNoAudioModel'));
+    const referenceAudio = audioRefsOnly(refs).find(ref => ref?.url)?.url || '';
+    const inputCounts = {text:prompt ? 1 : 0, image:0, video:0, audio:referenceAudio ? 1 : 0};
+    const inputRoles = capabilityInputRoles([{url:referenceAudio, kind:'audio', role:'reference_audio'}].filter(item => item.url), Boolean(prompt));
+    const parameterIntent = capabilityParameterIntent(providerId, modelId, nodeType, runSettings);
+    const selection = resolveCapabilityForRun(providerId, nodeType, inputCounts, familyId, modelId, '', inputRoles, parameterIntent);
+    const profile = selection.profile;
+    if(isMusic){
+        runSettings.musicFamilyId = selection.family.family_id;
+        runSettings.musicModel = profile.model_id;
+    } else {
+        runSettings.audioFamilyId = selection.family.family_id;
+        runSettings.audioModel = profile.model_id;
+    }
+    const parameterValues = isMusic
+        ? capabilityParameterSubmissionValues(profile, runSettings)
+        : capabilityAudioParameterValues(profile, runSettings, referenceAudio);
+    const payload = window.SmartModelCapabilities.buildAudioRequest(profile, {
+        prompt,
+        provider_id:providerId,
+        model:isMusic ? runSettings.musicModel : runSettings.audioModel,
+        family_id:isMusic ? (runSettings.musicFamilyId || '') : (runSettings.audioFamilyId || ''),
+        reference_audio:referenceAudio
+        ,input_roles:inputRoles
+    }, parameterValues);
+    const effectiveParameters = window.SmartModelCapabilities?.effectiveParameters(profile, parameterValues) || {};
+    payload.parameters = effectiveParameters;
+    await preflightCanvasNodeRun({
+        node:runNode || activeSettingsSubject(),
+        clientOperationId,
+        providerId:payload.provider_id,
+        modelId:payload.model,
+        familyId:payload.family_id,
+        nodeType,
+        inputs:{prompt:payload.prompt, reference_audio:payload.reference_audio || ''},
+        inputCounts,
+        inputRoles,
+        parameters:effectiveParameters
+    });
+    const activeRunNode = runNode || activeSettingsSubject();
+    await queueCanvasRun(activeRunNode);
+    const result = await fetch(isMusic ? '/api/canvas-music' : '/api/canvas-audio', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        signal:executionResultAbortSignal(activeRunNode),
+        body:JSON.stringify(payload)
+    }).then(async response => {
+        if(!response.ok) throw new Error(await smartResponseErrorMessage(response, tr('smart.errRunFailed')));
+        return response.json();
+    });
+    const urls = resultMediaUrls(result);
+    await submitCanvasRun(activeRunNode, result?.task_id || '');
+    await processCanvasRun(activeRunNode);
+    await finishCanvasRun(activeRunNode, urls);
+    return urls;
+}
+async function runApiAudioGeneration(prompt, refs, runSettings=settings, runNode=null, clientOperationId=''){
+    return runApiAudioMediaGeneration(prompt, refs, runSettings, runNode, clientOperationId, 'audio');
+}
+async function runApiMusicGeneration(prompt, refs, runSettings=settings, runNode=null, clientOperationId=''){
+    return runApiAudioMediaGeneration(prompt, refs, runSettings, runNode, clientOperationId, 'music');
+}
+async function runModelscopeGeneration(prompt, refs, runSettings=settings, runNode=null, clientOperationId=''){
     refs = imageRefsOnly(refs);
-    const modelKey = runSettings.msgenModel || 'zimage';
-    const msModel = MS_GEN_MODELS[modelKey] || MS_GEN_MODELS.zimage;
-    if(msModel.supportsImage && !refs.length) throw new Error(tr('smart.errMsNeedRefs'));
-    const size = apiImageSize(runSettings.msRatio || 'square', runSettings.msResolution || '1k', runSettings.msCustomRatio || '', runSettings.msCustomSize || '');
-    const parsed = parseSizeValue(size);
-    const width = Number(parsed?.width) || 1024;
-    const height = Number(parsed?.height) || 1024;
-    const imageUrls = [];
-    if(msModel.supportsImage || msModel.acceptsImage){
-        for(const ref of refs.slice(0, SMART_REFERENCE_IMAGE_MAX)){
-            if(ref.url) imageUrls.push(await urlToBase64(ref.url).catch(() => ref.url));
-        }
+    const models = modelscopeImageModels();
+    const inputCounts = {text:prompt ? 1 : 0, image:refs.length, video:0, audio:0};
+    const inputRoles = capabilityInputRoles(refs, Boolean(prompt));
+    const profiles = capabilityModelsForProvider('modelscope', 'image_generation', inputCounts, models, inputRoles);
+    const compatibleModels = profiles.map(item => item.model_id);
+    const requestedModel = runSettings.msCustomModel || compatibleModels[0] || '';
+    if(!requestedModel){
+        if(!models.length) throw new Error(tr('smart.noMsModel') || 'ModelScope 没有已启用的图片模型。');
+        throw new Error(tr('smart.noVerifiedImageModel') || 'ModelScope 没有已确认支持当前输入组合的图片模型。');
     }
     const count = Math.max(1, Math.min(8, Number(runSettings.count || 1)));
-    const submit = async () => {
-        let body;
-        if(modelKey === 'zimage') body = {prompt, resolution:`${width}x${height}`};
-        else if(modelKey === 'qwen_edit') body = {prompt, image_urls:imageUrls, resolution:`${width}x${height}`};
-        else body = {prompt, model:modelKey === 'custom' ? (runSettings.msCustomModel || modelscopeImageModels()[0]) : msModel.modelId, image_urls:imageUrls, width, height, size:`${width}x${height}`};
-        const data = await fetch(msModel.endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}).then(async r => {
-            if(!r.ok) throw new Error(await r.text());
-            return r.json();
-        });
-        return data.url || data.images?.[0] || '';
+    const selection = resolveCapabilityForRun('modelscope', 'image_generation', inputCounts, '', requestedModel, '', inputRoles);
+    const profile = selection.profile;
+    const size = apiImageSize(runSettings.msRatio || 'square', runSettings.msResolution || '1k', runSettings.msCustomRatio || '', runSettings.msCustomSize || '');
+    const payload = {
+        prompt,
+        provider_id:'modelscope',
+        model:profile.model_id,
+        family_id:profile.family_id || '',
+        size,
+        resolution:runSettings.msResolution || '',
+        n:1,
+        reference_images:refs.slice(0, SMART_REFERENCE_IMAGE_MAX),
+        input_roles:inputRoles,
+        parameters:{}
     };
-    const results = await Promise.all(Array.from({length:count}, submit));
-    return results.filter(Boolean);
+    await preflightCanvasNodeRun({
+        node:runNode || activeSettingsSubject(),
+        clientOperationId,
+        providerId:'modelscope',
+        modelId:payload.model,
+        familyId:payload.family_id,
+        nodeType:'image_generation',
+        inputs:{prompt:payload.prompt, reference:payload.reference_images.map(item => item.url).filter(Boolean)},
+        inputCounts,
+        inputRoles,
+        parameters:{}
+    });
+    const activeRunNode = runNode || activeSettingsSubject();
+    await queueCanvasRun(activeRunNode);
+    const settled = await Promise.allSettled(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {
+        method:'POST', headers:{'Content-Type':'application/json'}, signal:executionResultAbortSignal(activeRunNode), body:JSON.stringify(payload)
+    }).then(async response => {
+        if(!response.ok) throw new Error(await response.text());
+        return response.json();
+    })));
+    const tasks = settled.filter(item => item.status === 'fulfilled').map(item => item.value);
+    const taskIds = tasks.map(task => task.task_id).filter(Boolean);
+    if(!taskIds.length) throw new Error(settled.find(item => item.status === 'rejected')?.reason?.message || tr('smart.errRunFailed'));
+    await submitCanvasRun(activeRunNode, taskIds.join(','));
+    return {taskIds, count, providerId:'modelscope', model:payload.model, runRef:cloneSmartSettings(activeRunNode?.runRef || null)};
 }
 async function urlToBase64(url){
     const res = await fetch(url);
@@ -16516,7 +22680,7 @@ async function runComfyGeneration(node, prompt, refs, pendingNode, meta){
     scheduleSave();
 }
 async function runComfyText(node, prompt, pendingNode, meta){
-    const data = await runQueuedSmartComfyGenerate({prompt, width:Number(settings.width || 1024), height:Number(settings.height || 1024), workflow_json:'Z-Image.json', type:'zimage', client_id:smartClientId});
+    const data = await runQueuedSmartComfyGenerate({prompt, width:Number(settings.width || 1024), height:Number(settings.height || 1024), workflow_json:'Z-Image.json', type:'zimage', client_id:smartClientId}, pendingNode);
     const out = data.outputs || data.images || [];
     if(!out.length) throw new Error(tr('smart.errComfyNoImages'));
     if(pendingNode){
@@ -16532,7 +22696,7 @@ async function runComfyText(node, prompt, pendingNode, meta){
 async function runComfyEnhance(node, refs, pendingNode, meta){
     if(!refs.length) throw new Error(tr('smart.errEnhanceNeedRefs'));
     const inputName = await comfyNameForRef(refs[0]);
-    const data = await runQueuedSmartComfyGenerate({workflow_json:'Z-Image-Enhance.json', type:'enhance', params:{"15":{image:inputName},"204":{value:Number(settings.enhanceStrength ?? 0.5)}}, client_id:smartClientId});
+    const data = await runQueuedSmartComfyGenerate({workflow_json:'Z-Image-Enhance.json', type:'enhance', params:{"15":{image:inputName},"204":{value:Number(settings.enhanceStrength ?? 0.5)}}, client_id:smartClientId}, pendingNode);
     const out = data.outputs || data.images || [];
     if(!out.length) throw new Error(tr('smart.errComfyNoImages'));
     if(pendingNode){
@@ -16548,7 +22712,7 @@ async function runComfyEdit(node, prompt, refs, pendingNode, meta){
     if(!refs.length) throw new Error(tr('smart.errEditNeedRefs'));
     const names = [];
     for(const ref of refs.slice(0, 3)) names.push(await comfyNameForRef(ref));
-    const data = await runQueuedSmartComfyGenerate({prompt, workflow_json:'Flux2-Klein.json', type:'klein', params:{"168":{text:prompt},"158":{noise_seed:Math.floor(Math.random()*1000000)},"278":{image:names[0] || ""},"270":{image:names[1] || ""},"292":{image:names[2] || ""},"313":{value:Boolean(names[1])},"314":{value:Boolean(names[2])}}, client_id:smartClientId});
+    const data = await runQueuedSmartComfyGenerate({prompt, workflow_json:'Flux2-Klein.json', type:'klein', params:{"168":{text:prompt},"158":{noise_seed:Math.floor(Math.random()*1000000)},"278":{image:names[0] || ""},"270":{image:names[1] || ""},"292":{image:names[2] || ""},"313":{value:Boolean(names[1])},"314":{value:Boolean(names[2])}}, client_id:smartClientId}, pendingNode);
     const out = data.outputs || data.images || [];
     if(!out.length) throw new Error(tr('smart.errComfyNoImages'));
     if(pendingNode){
@@ -16735,7 +22899,7 @@ async function runMinimaxRunningHub(node){
     smartMinimaxSetRunningHubParam(runSettings, fields, [/aspect[_\s-]?ratio|\bratio\b|画面比例|比例/], ['115::aspect_ratio'], aspect);
     smartMinimaxSetRunningHubParam(runSettings, fields, [/megapixels?|百万像素/], ['115::megapixels'], Number(seg?.megapixels || node.megapixels || 0.4));
     const refs = smartMinimaxRunRefs(node);
-    const urls = await runRunningHubGeneration(prompt, refs, runSettings);
+    const urls = await runLegacyRunningHubWorkflowGeneration(prompt, refs, runSettings);
     if(!urls.length) throw new Error(tr('smart.errNoOutVideos'));
     return {urls, kind:mediaKindForUrls(urls, 'video'), runSettings};
 }
@@ -16851,11 +23015,12 @@ function smartPendingTasks(node){
 class JimengPendingSignal extends Error {
     constructor(info){
         const data = info || {};
-        super(data.message || '即梦任务排队中，可继续等待或手动查询');
+        super(data.message || '即梦任务正在云端处理，可继续等待或手动查询');
         this.jimengPending = true;
+        this.taskId = data.taskId || data.task_id || '';
         this.submitId = data.submitId || data.submit_id || '';
         this.kind = data.kind || 'image';
-        this.queueInfo = data.queueInfo || data.queue_info || {};
+        this.queueInfo = SMART_NODE_CONTRACT.normalizeQueueInfo(data.queueInfo || data.queue_info || {});
     }
 }
 class ImageTaskRecoverSignal extends Error {
@@ -16874,22 +23039,26 @@ function extractUpstreamTaskId(text){
     return match ? match[1] : '';
 }
 const activeJimengPolls = new Set();
-const JIMENG_POLL_INTERVAL = 60000;
+const JIMENG_POLL_INTERVAL = 8000;
 const JIMENG_POLL_MAX = 1440;
 function jimengQueueText(queueInfo){
-    const qi = queueInfo || {};
-    const idx = qi.queue_idx;
-    const len = qi.queue_length;
-    if(idx != null && len != null) return `即梦云端排队中（第 ${idx}/${len} 位）`;
-    return '即梦云端生成中';
+    const progress = SMART_NODE_CONTRACT.trustedQueueProgress(queueInfo);
+    if(progress){
+        return capabilityUiText(
+            `即梦云端排队中（第 ${progress.position}/${progress.total} 位）`,
+            `Queued in Jimeng Cloud (${progress.position}/${progress.total})`
+        );
+    }
+    return capabilityUiText('即梦云端处理中', 'Processing in Jimeng Cloud');
 }
 function setNodeJimengPending(node, signal){
     if(!node || !signal || !signal.submitId) return;
     const prev = node.jimengPending && node.jimengPending.submitId === signal.submitId ? node.jimengPending : null;
     node.jimengPending = {
+        taskId:signal.taskId || (prev && prev.taskId) || '',
         submitId:signal.submitId,
         kind:signal.kind || (prev && prev.kind) || 'image',
-        queueInfo:signal.queueInfo || (prev && prev.queueInfo) || {},
+        queueInfo:SMART_NODE_CONTRACT.normalizeQueueInfo(signal.queueInfo || (prev && prev.queueInfo) || {}),
         message:signal.message || (prev && prev.message) || '',
         startedAt:(prev && prev.startedAt) || nowMs(),
         updatedAt:nowMs(),
@@ -16923,6 +23092,8 @@ function finalizeJimengPending(node, urls, kind='image'){
     if(!additions.length) return false;
     delete node.jimengPending;
     replaceOutputsToNodeWithHistory(node, additions, kind, null, {skipShift:true});
+    bindExecutionResultMetadata(node);
+    delete node.isRunPlaceholder;
     node.running = false;
     node.pending = 0;
     node.runFinishedAt = nowMs();
@@ -16940,16 +23111,19 @@ function applyJimengQueryResult(node, data){
         return finalizeJimengPending(node, data.urls || [], kind);
     }
     if(data.status === 'failed'){
+        const error = new Error(data.error || '即梦任务失败');
         delete node.jimengPending;
         node.running = false;
         node.pending = 0;
-        toast((data.error || '即梦任务失败').slice(0, 160));
+        delete node.pendingTasks;
+        failCanvasRun(node, error).catch(() => {});
+        toast(error.message.slice(0, 160));
         render();
         scheduleSave();
         return true;
     }
     if(node.jimengPending){
-        node.jimengPending.queueInfo = data.queue_info || node.jimengPending.queueInfo || {};
+        node.jimengPending.queueInfo = SMART_NODE_CONTRACT.normalizeQueueInfo(data.queue_info || {});
         node.jimengPending.message = data.message || node.jimengPending.message || '';
         node.jimengPending.updatedAt = nowMs();
     }
@@ -17044,7 +23218,7 @@ function startJimengPoll(node){
     (async () => {
         try {
             for(let i = 0; i < JIMENG_POLL_MAX; i++){
-                await new Promise(resolve => setTimeout(resolve, JIMENG_POLL_INTERVAL));
+                if(i > 0) await new Promise(resolve => setTimeout(resolve, JIMENG_POLL_INTERVAL));
                 const cur = nodes.find(n => n.id === nodeId);
                 if(!cur || !cur.jimengPending || cur.jimengPending.submitId !== submitId) return;
                 if(cur.jimengPending.querying) continue;
@@ -17070,16 +23244,24 @@ function resumeJimengPendingNodes(){
 }
 async function pollSmartCanvasTask(taskId){
     if(!taskId) throw new Error(tr('smart.errRunFailed'));
+    if(cancelledCanvasTaskIds.has(taskId)) throw new CanvasRunCancelledSignal();
     if(activeSmartTaskPolls.has(taskId)) return activeSmartTaskPolls.get(taskId);
     const promise = (async () => {
         for(let i = 0; i < 900; i++){
+            if(cancelledCanvasTaskIds.has(taskId)) throw new CanvasRunCancelledSignal();
             await new Promise(resolve => setTimeout(resolve, 2000));
+            if(cancelledCanvasTaskIds.has(taskId)) throw new CanvasRunCancelledSignal();
             const task = await fetch(`/api/canvas-image-tasks/${encodeURIComponent(taskId)}`).then(async r => {
                 if(!r.ok) throw new Error(await r.text());
                 return r.json();
             });
+            if(cancelledCanvasTaskIds.has(taskId) || task.status === 'cancelled') throw new CanvasRunCancelledSignal();
             if(task.status === 'succeeded') return task.result || {};
-            if(task.status === 'jimeng_pending') throw new JimengPendingSignal({submitId:task.submit_id, kind:task.kind, queueInfo:task.queue_info, message:task.message});
+            if(task.status === 'jimeng_pending') throw new JimengPendingSignal({taskId, submitId:task.submit_id, kind:task.kind, queueInfo:task.queue_info, message:task.message});
+            if(task.status === 'recoverable'){
+                const recoverTaskId = task.upstream_task_id || extractUpstreamTaskId(task.error || '');
+                throw new ImageTaskRecoverSignal({taskId, recoverTaskId, providerId:task.provider_id, kind:'image', message:task.error || '任务待恢复；系统没有自动重新提交'});
+            }
             if(task.status === 'failed'){
                 const recoverTaskId = task.upstream_task_id || extractUpstreamTaskId(task.error || '');
                 if(recoverTaskId) throw new ImageTaskRecoverSignal({taskId, recoverTaskId, providerId:task.provider_id, kind:'image', message:task.error || tr('smart.errRunFailed')});
@@ -17114,7 +23296,11 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
         return true;
     });
     node.images = [...existing, ...additions];
-    if(additions.length) node.outputKind = kind;
+    if(additions.length){
+        node.outputKind = kind;
+        bindExecutionResultMetadata(node);
+        delete node.isRunPlaceholder;
+    }
     if(!node.pending && smartPendingTasks(node).length === 0){
         delete node.pendingTasks;
         node.runFinishedAt = nowMs();
@@ -17132,6 +23318,7 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
 async function resumeSmartPendingNode(node, logContext={}){
     const tasks = smartPendingTasks(node);
     if(!node || !tasks.length) return;
+    await processCanvasRun(node);
     const logTaskFailure = (message, task) => {
         if(!logContext?.run || !message) return;
         const runMs = Math.max(0, nowMs() - Number(logContext.runLogStart || nowMs()));
@@ -17151,12 +23338,19 @@ async function resumeSmartPendingNode(node, logContext={}){
         try {
             const result = await pollSmartCanvasTask(task.taskId);
             finalizeSmartPendingTask(node, task.taskId, resultMediaUrls(result?.image_items?.length ? result.image_items : (result?.images?.length ? result.images : result)), task.kind || 'image');
+            await appendCanvasRunResults(node, resultMediaUrls(result?.image_items?.length ? result.image_items : (result?.images?.length ? result.images : result)));
             render();
             scheduleSave();
         } catch(e) {
+            if(e?.canvasRunCancelled || isCanvasRunCancelled(node)){
+                node.pendingTasks = smartPendingTasks(node).filter(item => item.taskId !== task.taskId);
+                node.pending = Math.max(0, Number(node.pending || 0) - 1);
+                return;
+            }
             if(e && e.jimengPending && e.submitId){
                 node.pendingTasks = smartPendingTasks(node).filter(item => item.taskId !== task.taskId);
                 setNodeJimengPending(node, e);
+                await recoverCanvasRun(node, e);
                 render();
                 scheduleSave();
                 return;
@@ -17170,7 +23364,20 @@ async function resumeSmartPendingNode(node, logContext={}){
                 node.running = false;
                 node.pending = Math.max(1, smartPendingTasks(node).length);
                 logTaskFailure(task.error, task);
+                await recoverCanvasRun(node, e);
                 toast('任务未丢失，可稍后手动查询结果');
+                render();
+                scheduleSave();
+                return;
+            }
+            if(e && e.imageTaskRecover){
+                task.failed = false;
+                task.querying = false;
+                task.recoveryBlocked = !e.recoverTaskId;
+                task.error = e.message || '任务待恢复；系统没有自动重新提交';
+                node.running = false;
+                node.pending = Math.max(1, smartPendingTasks(node).length);
+                await recoverCanvasRun(node, e);
                 render();
                 scheduleSave();
                 return;
@@ -17188,11 +23395,23 @@ async function resumeSmartPendingNode(node, logContext={}){
             failures.push(e);
             logTaskFailure(e.message || tr('smart.errRunFailed'), task);
             if(e && typeof e === 'object') e.smartGenerationLogged = true;
-            toast((e.message || tr('smart.errRunFailed')).slice(0, 160));
+            errorToast((e.message || tr('smart.errRunFailed')).slice(0, 160));
             render();
             scheduleSave();
         }
     }));
+    if(isCanvasRunCancelled(node)) return;
+    if(!smartPendingTasks(node).length && !node.jimengPending){
+        const submissionFailures = Array.isArray(node.runSubmissionFailures) ? node.runSubmissionFailures.filter(Boolean) : [];
+        const allFailures = [...submissionFailures, ...failures];
+        const succeeded = resultIdsForMediaItems(node.images || []).length || (node.images || []).filter(item => item?.url).length;
+        if(succeeded && allFailures.length) await finishCanvasRun(node, node.images || [], 'partially_succeeded');
+        else if(succeeded) await finishCanvasRun(node, node.images || []);
+        else if(allFailures.length){
+            await failCanvasRun(node, allFailures[0]);
+        }
+        delete node.runSubmissionFailures;
+    }
     if(failures.length && !(node.images || []).length){
         throw failures[0];
     }
@@ -17253,9 +23472,8 @@ function groupSelectedNodes(){
         created_at:Date.now()
     };
     nodes.push(group);
-    // 图片成员吸收进分组网格，提示词/循环作为成员节点；随后自动整理。
     selected.forEach(node => addNodeToSmartGroup(group, node));
-    arrangeSmartGroupMembers(group, {skipUndo:true});
+    fitSmartGroupBounds(group, smartGroupMembers(group));
     selectedIds = [];
     selectedId = group.id;
     selectedImage = {nodeId:'', index:-1};
@@ -17265,37 +23483,19 @@ function groupSelectedNodes(){
 function ungroupNode(groupId){
     const group = nodes.find(n => n.id === groupId);
     if(!group) return false;
-    // 释放智能分组：把收进卡片的图片重新拆成独立图片节点（平铺在分组原位置），提示词/循环成员原地保留，再删除分组容器。
+    // 智能分组只保存成员引用；解散时成员原地保留，只删除容器本身。
     if(isSmartGroupNode(group)){
         pushUndo();
-        const memberIds = smartGroupMembers(group).map(m => m.id);
-        const groupImages = (group.images || []).filter(img => img?.url);
-        let created = [];
-        if(groupImages.length){
-            const layout = imageLayout(group.images || [], nodeScale(group), group);
-            const pad = 16, gap = 8;
-            const cell = Math.max(28, Math.round(layout.thumb || 96));
-            const cols = Math.max(1, layout.cols || 1);
-            created = groupImages.map((img, index) => {
-                const col = index % cols;
-                const row = Math.floor(index / cols);
-                const size = thumbDisplaySize(img, cell);
-                const x = Math.round(Number(group.x || 0) + pad + col * (cell + gap) + Math.max(0, (cell - size.width) / 2));
-                const y = Math.round(Number(group.y || 0) + pad + row * (cell + gap) + Math.max(0, (cell - size.height) / 2));
-                const node = {id:uid('smart'), type:'smart-image', x, y, w:size.width, h:size.height, title:'Image', images:[stripImageGenerationMeta({...img})], scale:MEDIA_NODE_DEFAULT_SCALE, created_at:Date.now()};
-                inheritNodeMetaFromImage(node);
-                clearDetachedRunInputRefs(node);
-                return node;
-            });
-        }
+        const members = smartGroupMembers(group);
+        const memberIds = members.map(m => m.id);
+        members.forEach(restoreSmartGroupMemberOriginalLayout);
         nodes = nodes.filter(n => n.id !== groupId);
-        nodes.push(...created);
         if(canvas) canvas.connections = (canvas.connections || []).filter(c => c.from !== groupId && c.to !== groupId);
         nodes.forEach(node => {
             if(Array.isArray(node.inputNodeIds)) node.inputNodeIds = node.inputNodeIds.filter(id => id !== groupId);
             if(isSmartGroupNode(node) && Array.isArray(node.items)) node.items = node.items.filter(id => id !== groupId);
         });
-        selectedIds = [...created.map(n => n.id), ...memberIds].filter(id => nodes.some(n => n.id === id));
+        selectedIds = memberIds.filter(id => nodes.some(n => n.id === id));
         selectedId = selectedIds.length === 1 ? selectedIds[0] : '';
         selectedImage = {nodeId:'', index:-1};
         render();
@@ -17315,8 +23515,9 @@ function ungroupNode(groupId){
         const x = Math.round(Number(group.x || 0) + pad + col * (cell + gap) + Math.max(0, (cell - size.width) / 2));
         const y = Math.round(Number(group.y || 0) + pad + row * (cell + gap) + Math.max(0, (cell - size.height) / 2));
         const node = {
-            id:uid('smart'),
-            type:'smart-image',
+            id:uid('material'),
+            type:SMART_NODE_TYPES.material,
+            sourceKind:'input',
             x,
             y,
             w:size.width,
@@ -17372,25 +23573,84 @@ function mergeImageNodesIntoGroup(sourceId, targetId){
     selectedImage = {nodeId:'', index:-1};
     return true;
 }
+function rectsIntersect(a, b){
+    if(!a || !b) return false;
+    return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+function expandRect(rect, distance){
+    const gap = Math.max(0, Number(distance) || 0);
+    return {
+        x:rect.x - gap,
+        y:rect.y - gap,
+        width:rect.width + gap * 2,
+        height:rect.height + gap * 2
+    };
+}
+function rectContainsRect(outer, inner){
+    if(!outer || !inner) return false;
+    return inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.width <= outer.x + outer.width && inner.y + inner.height <= outer.y + outer.height;
+}
+function smartGroupContentRect(group){
+    const rect = nodeRect(group);
+    return {
+        x:rect.x + SMART_GROUP_ARRANGE_PADDING,
+        y:rect.y + SMART_GROUP_ARRANGE_HEADER,
+        width:Math.max(0, rect.width - SMART_GROUP_ARRANGE_PADDING * 2),
+        height:Math.max(0, rect.height - SMART_GROUP_ARRANGE_HEADER - SMART_GROUP_ARRANGE_PADDING)
+    };
+}
 function smartGroupTargetForDraggedNode(draggedNode){
-    // 允许把一个分组拖进另一个分组（拖来的分组的成员会作为输入并入目标分组）。自身/被拖分组及其成员已在 excluded 中排除。
+    // 节点进入分组正常内边距范围就进入可撤回的预归组状态；松手后才真正写入成员关系。
     if(!draggedNode) return null;
     const r = nodeRect(draggedNode);
     const excluded = new Set([draggedNode.id, ...(dragState?.groupIds || [])]);
-    const cx = r.x + r.width / 2;
-    const cy = r.y + r.height / 2;
     const groups = nodes
         .filter(node => isSmartGroupNode(node) && !excluded.has(node.id))
-        .map(group => ({group, rect:nodeRect(group)}))
-        .filter(item => cx >= item.rect.x && cx <= item.rect.x + item.rect.width && cy >= item.rect.y && cy <= item.rect.y + item.rect.height);
+        .map(group => ({group, rect:expandRect(nodeRect(group), SMART_GROUP_ARRANGE_PADDING)}))
+        .filter(item => rectsIntersect(r, item.rect));
     if(!groups.length) return null;
     groups.sort((a, b) => (nodes.indexOf(b.group) - nodes.indexOf(a.group)));
     return groups[0].group;
 }
+function clearSmartGroupDropPreview(){
+    if(!dragState?.previewGroupId) return;
+    const group = nodes.find(node => node.id === dragState.previewGroupId && isSmartGroupNode(node));
+    const el = world.querySelector(`.image-node[data-id="${CSS.escape(dragState.previewGroupId)}"]`);
+    if(group && el){
+        const rect = nodeRect(group);
+        el.style.left = `${rect.x}px`;
+        el.style.top = `${rect.y}px`;
+        el.style.width = `${rect.width}px`;
+        el.style.height = `${rect.height}px`;
+        el.classList.remove('smart-group-drop-preview');
+    }
+    dragState.previewGroupId = '';
+}
+function updateSmartGroupDropPreview(group, draggedNodes=[]){
+    const nextId = isSmartGroupNode(group) ? group.id : '';
+    if(dragState?.previewGroupId && dragState.previewGroupId !== nextId) clearSmartGroupDropPreview();
+    if(!dragState || !nextId) return;
+    const newMembers = (draggedNodes || []).filter(node => node && !(group.items || []).includes(node.id));
+    if(!newMembers.length){ clearSmartGroupDropPreview(); return; }
+    const groupRect = nodeRect(group);
+    const memberRects = newMembers.map(nodeRect);
+    const minX = Math.min(groupRect.x, ...memberRects.map(rect => rect.x - SMART_GROUP_ARRANGE_PADDING));
+    const minY = Math.min(groupRect.y, ...memberRects.map(rect => rect.y - SMART_GROUP_ARRANGE_HEADER - SMART_GROUP_ARRANGE_PADDING));
+    const maxX = Math.max(groupRect.x + groupRect.width, ...memberRects.map(rect => rect.x + rect.width + SMART_GROUP_ARRANGE_PADDING));
+    const maxY = Math.max(groupRect.y + groupRect.height, ...memberRects.map(rect => rect.y + rect.height + SMART_GROUP_ARRANGE_PADDING));
+    const el = world.querySelector(`.image-node[data-id="${CSS.escape(group.id)}"]`);
+    if(!el) return;
+    el.style.left = `${Math.round(minX)}px`;
+    el.style.top = `${Math.round(minY)}px`;
+    el.style.width = `${Math.round(maxX - minX)}px`;
+    el.style.height = `${Math.round(maxY - minY)}px`;
+    el.classList.add('smart-group-drop-preview');
+    dragState.previewGroupId = group.id;
+}
 function addDraggedNodeToSmartGroup(draggedNode, group){
     return addDraggedNodesToSmartGroup(draggedNode ? [draggedNode] : [], group);
 }
-// 把一个或多个被拖动的节点批量加入目标分组（支持多选拖入）。入组后只整理一次并选中目标分组。
+// 把一个或多个被拖动的节点批量加入目标分组（支持多选拖入）。这里只建立成员关系，不自动整理。
 function addDraggedNodesToSmartGroup(draggedNodes, group){
     if(!group || !isSmartGroupNode(group)) return false;
     const list = (draggedNodes || []).filter(n => n && n.id !== group.id);
@@ -17400,10 +23660,9 @@ function addDraggedNodesToSmartGroup(draggedNodes, group){
         if(addNodeToSmartGroup(group, n)) added = true;
     });
     if(!added) return false;
-    // 提示词/循环成员入组后自动整理成网格（图片已收进卡片网格，自动平铺）。
-    arrangeSmartGroupMembers(group, {skipUndo:true});
+    fitSmartGroupBounds(group, smartGroupMembers(group));
     selectedIds = [];
-    // 图片被吸收进分组（原节点已删除），统一选中目标分组；仅当单个提示词/循环节点拖入时保持选中它。
+    // 成员节点始终保留；单个节点拖入后继续选中该节点，多选或分组合并后选中目标分组。
     const survivingSingle = list.length === 1 && nodes.some(n => n.id === list[0].id) ? list[0].id : '';
     selectedId = survivingSingle || group.id;
     selectedImage = {nodeId:'', index:-1};
@@ -17412,25 +23671,30 @@ function addDraggedNodesToSmartGroup(draggedNodes, group){
 function closeCreateMenu(){
     createMenu?.classList.remove('open');
     createMenuGroupId = '';
+    if(createMenuConnection) discardPendingUndo();
+    createMenuConnection = null;
+    createMenuKeepOpenOnNextClick = false;
 }
 function openCreateMenu(event, options={}){
     if(!createMenu) return;
     createMenuPoint = screenToWorld(event);
     createMenuGroupId = options.groupId || '';
-    const w = 500;
-    const h = 222;
-    const left = Math.max(14, Math.min(window.innerWidth - w - 14, event.clientX + 8));
-    const top = Math.max(14, Math.min(window.innerHeight - h - 14, event.clientY + 8));
-    createMenu.style.left = `${left}px`;
-    createMenu.style.top = `${top}px`;
+    createMenuConnection = options.connection || null;
+    createMenuKeepOpenOnNextClick = Boolean(options.keepOpenOnNextClick);
+    createMenu.style.left = `${Math.max(14, event.clientX + 10)}px`;
+    createMenu.style.top = `${Math.max(14, event.clientY + 10)}px`;
     createMenu.classList.add('open');
     refreshIcons();
+    const rect = createMenu.getBoundingClientRect();
+    const left = Math.max(14, Math.min(window.innerWidth - rect.width - 14, event.clientX + 10));
+    const top = Math.max(14, Math.min(window.innerHeight - rect.height - 14, event.clientY + 10));
+    createMenu.style.left = `${left}px`;
+    createMenu.style.top = `${top}px`;
 }
 function addCreatedNodeToMenuGroup(node){
     const group = createMenuGroupId ? nodes.find(n => n.id === createMenuGroupId) : null;
     if(addNodeToSmartGroup(group, node)){
-        // 通过分组小菜单新建的节点入组后自动整理（节点创建已压过 undo，这里不再重复）。
-        arrangeSmartGroupMembers(group, {skipUndo:true});
+        fitSmartGroupBounds(group, smartGroupMembers(group));
         render();
         scheduleSave();
     }
@@ -17438,16 +23702,60 @@ function addCreatedNodeToMenuGroup(node){
 function createNodeFromMenu(type){
     const p = createMenuPoint || viewportCenter();
     const groupId = createMenuGroupId;
+    const pendingConnection = createMenuConnection;
+    createMenuConnection = null;
     closeCreateMenu();
-    if(type === 'group') return createSmartGroupNode(p.x - 170, p.y - 110);
+    const createOptions = pendingConnection ? {skipUndo:true} : {};
     let created = null;
-    if(type === 'prompt') created = createPromptNode(p.x - 158, p.y - 97);
-    else if(type === 'loop') created = createLoopNode(p.x - 135, p.y - 95);
-    else if(type === 'minimax') created = createMinimaxNode(p.x - 520, p.y - 320);
-    else created = createImageNodeAt(p);
+    if(type === 'prompt') created = createExecutionNode(p.x - 158, p.y - 97, SMART_NODE_TYPES.textGenerator, createOptions);
+    else if(type === 'loop') created = createLoopNode(p.x - 135, p.y - 95, createOptions);
+    else if(type === 'minimax') created = createMinimaxNode(p.x - 520, p.y - 320, createOptions);
+    else if(type === 'image-generator') created = createExecutionNode(p.x - 158, p.y - 97, SMART_NODE_TYPES.imageGenerator, createOptions);
+    else if(type === 'video-generator') created = createExecutionNode(p.x - 158, p.y - 97, SMART_NODE_TYPES.videoGenerator, createOptions);
+    else if(type === 'audio-generator') created = createExecutionNode(p.x - 158, p.y - 97, SMART_NODE_TYPES.audioGenerator, createOptions);
+    else if(type === 'music-generator') created = createExecutionNode(p.x - 158, p.y - 97, SMART_NODE_TYPES.musicGenerator, createOptions);
+    else if(type === 'ai-app') created = createExecutionNode(p.x - 158, p.y - 97, SMART_NODE_TYPES.aiApp, createOptions);
+    else if(type === 'comfy-workflow') created = createExecutionNode(p.x - 158, p.y - 97, SMART_NODE_TYPES.comfyWorkflow, createOptions);
+    else created = createTextMaterialNodeAt(p, '', createOptions);
     createMenuGroupId = groupId;
     addCreatedNodeToMenuGroup(created);
     createMenuGroupId = '';
+    if(pendingConnection && created){
+        const fromIds = pendingConnection.fromPort === 'out'
+            ? (pendingConnection.fromIds?.length ? pendingConnection.fromIds : [pendingConnection.fromId])
+            : [created.id];
+        const toId = pendingConnection.fromPort === 'out' ? created.id : pendingConnection.fromId;
+        const targetNode = nodes.find(node => node.id === toId);
+        if(fromIds.length > 1 && targetNode?.type === SMART_NODE_TYPES.aiApp){
+            startRunningHubConnectionQueue(
+                fromIds,
+                toId,
+                pendingConnection.sourceResultIds || {},
+                pendingConnection.sourceResultId || '',
+                null
+            );
+            return created;
+        }
+        let outcomes;
+        if(fromIds.length === 1){
+            const fromId = fromIds[0];
+            outcomes = [connectInputNodeWithTargetField(fromId, toId, {sourceResultId:pendingConnection.sourceResultId})];
+        } else {
+            outcomes = fromIds.map(fromId => connectInputNodeWithTargetField(fromId, toId, {
+                sourceResultId:pendingConnection.sourceResultIds?.[fromId] || pendingConnection.sourceResultId || ''
+            }));
+        }
+        const connected = outcomes.some(outcome => outcome === true);
+        const pending = outcomes.some(outcome => outcome === 'pending');
+        if(connected) commitPendingUndo();
+        else if(pending) return created;
+        else {
+            discardPendingUndo();
+            toast('该节点不支持当前连接');
+        }
+        render();
+        scheduleSave();
+    }
     return created;
 }
 shell.addEventListener('mousedown', e => {
@@ -17469,7 +23777,11 @@ shell.addEventListener('click', e => {
 }, true);
 shell.onmousedown = e => {
     if(zoomPreviewState && e.button === 0 && !e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
-    if(e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.create-menu,.smart-minimap')) return;
+    if(e.target.closest('.image-node,.smart-node-owned-overlay,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.create-menu,.smart-minimap')) return;
+    if(createMenuKeepOpenOnNextClick){
+        createMenuKeepOpenOnNextClick = false;
+        return;
+    }
     closeCreateMenu();
     if(e.button === 0 && e.shiftKey){
         e.preventDefault();
@@ -17531,6 +23843,10 @@ shell.onclick = e => {
     if(selectionJustFinished) return;
     if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
+    if(createMenuKeepOpenOnNextClick){
+        createMenuKeepOpenOnNextClick = false;
+        return;
+    }
     closeCreateMenu();
     clearSelection();
     render();
@@ -17549,6 +23865,76 @@ smartArrangeBtn?.addEventListener('click', e => {
     e.stopPropagation();
     arrangeSelectedSmartNodes();
 });
+function updatePortDragFromPointer(e){
+    if(!portDragState) return false;
+    const p = screenToWorld(e);
+    portDragState.currentWorld = p;
+    portDragState.moved = true;
+    const nodeHit = connectionNodeHitAtPoint(e.clientX, e.clientY, e.target);
+    const portEl = nodeHit.portEl;
+    const nodeEl = nodeHit.nodeEl;
+    let targetId = '', targetPort = '';
+    if(nodeEl && nodeEl.dataset.id && nodeEl.dataset.id !== portDragState.fromId){
+        targetId = nodeEl.dataset.id;
+        targetPort = portEl?.dataset.port || (portDragState.fromPort === 'out' ? 'in' : 'out');
+        const compatible = (portDragState.fromPort === 'out' && targetPort === 'in') || (portDragState.fromPort === 'in' && targetPort === 'out');
+        if(!compatible){ targetId = ''; targetPort = ''; }
+    }
+    portDragState.hoverTargetId = targetId;
+    portDragState.hoverPort = targetPort;
+    updatePortDragVisual();
+    return true;
+}
+function beginShiftConnectionFromPointer(event){
+    if(event.button !== 0 || !event.shiftKey) return false;
+    if(event.target?.closest?.('.node-port')) return false;
+    if(event.target?.closest?.('.input-thumb[data-input-ref-swappable="1"]')) return false;
+    const hit = connectionNodeHitAtPoint(event.clientX, event.clientY, event.target);
+    if(!hit.nodeId) return false;
+    const previous = shiftNodeClickCandidate;
+    const isDoubleClick = previous
+        && previous.nodeId === hit.nodeId
+        && Date.now() - previous.at <= 420
+        && Math.hypot(event.clientX - previous.x, event.clientY - previous.y) <= 10;
+    shiftNodeClickCandidate = null;
+    const started = beginNodeConnectionDrag(event, hit.nodeId);
+    if(started && portDragState){
+        portDragState.shiftNodeClick = true;
+        portDragState.shiftNodeDoubleClick = Boolean(isDoubleClick);
+    }
+    return started;
+}
+shell.addEventListener('mousedown', beginShiftConnectionFromPointer, true);
+function handlePortDragPointerMove(e){
+    if(!portDragState) return;
+    e.preventDefault();
+    updatePortDragFromPointer(e);
+}
+function finishPortDragPointer(e){
+    if(!portDragState) return false;
+    const drag = portDragState;
+    portDragState = null;
+    shell.classList.remove('port-dragging');
+    clearPortDragVisual();
+    if(drag.shiftNodeDoubleClick && !drag.moved){
+        shiftNodeClickCandidate = null;
+        discardPendingUndo();
+        closeCreateMenu();
+        suppressNodeClickUntil = Date.now() + 420;
+        focusSmartNodeInViewport(drag.fromId);
+        return true;
+    }
+    if(drag.shiftNodeClick && !drag.moved){
+        shiftNodeClickCandidate = {nodeId:drag.fromId, at:Date.now(), x:e.clientX, y:e.clientY};
+    } else if(drag.shiftNodeClick){
+        shiftNodeClickCandidate = null;
+        lastShiftConnectionDragAt = Date.now();
+    }
+    handlePortDrop(drag, e);
+    return true;
+}
+window.addEventListener('mousemove', handlePortDragPointerMove, true);
+window.addEventListener('mouseup', finishPortDragPointer, true);
 window.onmousemove = e => {
     lastMouseWorld = screenToWorld(e);
     if(smartMinimapDrag){
@@ -17564,27 +23950,7 @@ window.onmousemove = e => {
     }
     if(portDragState){
         e.preventDefault();
-        const p = screenToWorld(e);
-        portDragState.currentWorld = p;
-        portDragState.moved = true;
-        const hitEl = document.elementFromPoint(e.clientX, e.clientY);
-        const portEl = hitEl?.closest?.('.node-port');
-        const nodeEl = portEl?.closest?.('.image-node') || hitEl?.closest?.('.image-node');
-        let targetId = '', targetPort = '';
-        if(nodeEl && nodeEl.dataset.id && nodeEl.dataset.id !== portDragState.fromId){
-            targetId = nodeEl.dataset.id;
-            if(portEl){
-                targetPort = portEl.dataset.port;
-            } else {
-                const rect = nodeEl.getBoundingClientRect();
-                targetPort = (e.clientX - rect.left) < rect.width / 2 ? 'in' : 'out';
-            }
-            const compatible = (portDragState.fromPort === 'out' && targetPort === 'in') || (portDragState.fromPort === 'in' && targetPort === 'out');
-            if(!compatible){ targetId = ''; targetPort = ''; }
-        }
-        portDragState.hoverTargetId = targetId;
-        portDragState.hoverPort = targetPort;
-        updatePortDragVisual();
+        updatePortDragFromPointer(e);
         return;
     }
     if(promptResizeState){
@@ -17657,64 +24023,23 @@ window.onmousemove = e => {
         const dy = (e.clientY - resizeState.startY) / viewport.scale;
         const minW = node.type === 'smart-prompt' ? 260 : node.type === 'smart-loop' ? 252 : node.type === 'smart-group' ? SMART_GROUP_MIN_WIDTH : 48;
         const minH = node.type === 'smart-prompt' ? 170 : node.type === 'smart-loop' ? 132 : node.type === 'smart-group' ? SMART_GROUP_MIN_HEIGHT : 48;
-        if(node.type === 'smart-group' && smartGroupImageRefs(node).some(ref => ref.item?.url)){
-            // 图片分组：和普通节点一样直接改 w/h，缩略图网格按新尺寸实时重排。不要走下面的“成员缩放”那套，
-            // 否则拖动过程里会按成员包围盒/缩放比例收缩，松手才回到拖动宽度（用户反馈的“变宽时先缩小”）。
-            node.w = Math.max(minW, Math.round(resizeState.startW + dx));
-            node.h = Math.max(minH, Math.round(resizeState.startH + dy));
-            if(smartGroupCompactMembers(node).length) arrangeSmartGroupMembers(node, {skipUndo:true, syncDom:true});
-            updateNodeElementDuringResize(node);
-            return;
-        }
         if(node.type === 'smart-group'){
-            // 分组当“画布中的画布”：拖手柄按宽度方向算出统一缩放比例，组内所有成员（图片+提示词）按相对手势
-            // 起点的快照整体缩放+重排，然后把分组框自动收紧到成员的包围盒——盒子始终贴合内容，右侧不会留空白。
-            const startZoom = resizeState.startZoom || 1;
-            // 目标框宽 = 手柄拖出的框宽；缩放映射以“贴合内容的框宽”为基准，保证两个阶段都线性跟随手柄、衔接连续。
-            const targetW = resizeState.startW + dx;
-            const fitBase = resizeState.contentFitW || resizeState.startW || 1;
-            const desiredZoom = startZoom * (targetW / fitBase);
-            // 成员缩放上限 SMART_GROUP_MAX_MEMBER_ZOOM（默认 1=原始尺寸）：到上限就不再放大成员，改为让分组框继续扩大。
-            const effectiveZoom = Math.max(0.2, Math.min(SMART_GROUP_MAX_MEMBER_ZOOM, desiredZoom));
-            const memberRatio = effectiveZoom / startZoom;
-            const capped = desiredZoom > SMART_GROUP_MAX_MEMBER_ZOOM;
-            node._memberZoom = effectiveZoom;
-            const gx = Number(node.x) || 0, gy = Number(node.y) || 0;
-            const SMART_GROUP_PAD = 16;
-            let maxRight = gx, maxBottom = gy, hasMember = false;
-            (resizeState.members || []).forEach(snap => {
-                const member = nodes.find(n => n.id === snap.id);
-                if(!member) return;
-                hasMember = true;
-                member.x = gx + (snap.sx - gx) * memberRatio;
-                member.y = gy + (snap.sy - gy) * memberRatio;
-                member.w = Math.max(40, Math.round(snap.sw * memberRatio));
-                member.h = Math.max(40, Math.round(snap.sh * memberRatio));
-                if(snap.isImage) member.scale = 1;
-                maxRight = Math.max(maxRight, member.x + member.w);
-                maxBottom = Math.max(maxBottom, member.y + member.h);
-                const memberEl = world.querySelector(`.image-node[data-id="${CSS.escape(member.id)}"]`);
-                if(memberEl){
-                    memberEl.style.left = `${member.x}px`;
-                    memberEl.style.top = `${member.y}px`;
-                }
-                updateNodeElementDuringResize(member);
-            });
-            if(capped || !hasMember){
-                // 成员已到上限（或空分组）：分组框随手柄继续扩大，成员不再放大。
-                node.w = Math.max(minW, Math.round(resizeState.startW + dx));
-                node.h = Math.max(minH, Math.round(resizeState.startH + dy));
-            } else {
-                // 未到上限：分组框收紧到成员包围盒，贴合内容无空白。
-                node.w = Math.max(minW, Math.round(maxRight - gx + SMART_GROUP_PAD));
-                node.h = Math.max(minH, Math.round(maxBottom - gy + SMART_GROUP_PAD));
-            }
+            const corner = resizeState.corner || 'se';
+            const left = corner.includes('w');
+            const top = corner.includes('n');
+            const nextW = Math.max(minW, Math.round(resizeState.startW + (left ? -dx : dx)));
+            const nextH = Math.max(minH, Math.round(resizeState.startH + (top ? -dy : dy)));
+            node.x = left ? Math.round(resizeState.startNodeX + resizeState.startW - nextW) : resizeState.startNodeX;
+            node.y = top ? Math.round(resizeState.startNodeY + resizeState.startH - nextH) : resizeState.startNodeY;
+            node.w = nextW;
+            node.h = nextH;
             node.scale = 1;
             updateNodeElementDuringResize(node);
             return;
         }
         node.w = Math.max(minW, Math.round(resizeState.startW + dx));
         node.h = Math.max(minH, Math.round(resizeState.startH + dy));
+        if(isSmartImageNode(node) && (node.images || []).length === 1) node.mediaSizeMode = 'manual';
         node.scale = 1;
         updateNodeElementDuringResize(node);
         return;
@@ -17821,6 +24146,9 @@ window.onmousemove = e => {
     const target = isSmartGroupNode(rawTarget) ? null : rawTarget;
     setDropHighlight(target?.id || '');
     moveNodeElementsDuringDrag();
+    const draggedNodes = (dragState.group || [{id:dragState.id}]).map(item => nodes.find(n => n.id === item.id)).filter(Boolean);
+    const previewGroup = smartGroupTargetForDraggedNode(node);
+    updateSmartGroupDropPreview(previewGroup, draggedNodes);
     updateLoopInsertPreview();
     if(target) setDropHighlight(target.id);
 };
@@ -17836,11 +24164,7 @@ window.onmouseup = e => {
         return;
     }
     if(portDragState){
-        const drag = portDragState;
-        portDragState = null;
-        shell.classList.remove('port-dragging');
-        clearPortDragVisual();
-        handlePortDrop(drag, e);
+        finishPortDragPointer(e);
         return;
     }
     if(promptResizeState){ promptResizeState = null; scheduleSave(); }
@@ -17903,7 +24227,7 @@ window.onmouseup = e => {
     }
     if(dragState){
         const draggedNode = nodes.find(n => n.id === dragState.id);
-        let stateChanged = false;
+        let stateChanged = Boolean(dragState.altDuplicated);
         const hit = document.elementFromPoint(e.clientX, e.clientY);
         const droppedOnAssetPanel = assetLibraryOpen && hit && assetPanel?.contains(hit);
         if(droppedOnAssetPanel && draggedNode && (draggedNode.images || []).length){
@@ -17916,6 +24240,7 @@ window.onmouseup = e => {
             setAssetDragOver(false);
             discardPendingUndo();
             clearDropHighlight();
+            clearSmartGroupDropPreview();
             dragState = null;
             document.body.classList.remove('smart-node-drag');
             render();
@@ -17927,13 +24252,14 @@ window.onmouseup = e => {
             ? insertionConnectionForNode(draggedNode)
             : null;
         const draggedRect = draggedNode ? nodeRect(draggedNode) : null;
-        const groupTarget = draggedNode && (draggedNode.images || []).length && (dragState.group || []).length <= 1 && draggedRect
+        const groupTarget = draggedNode && (dragState.group || []).length <= 1 && draggedRect
             ? rectOverlapNode(draggedNode.id, draggedRect.x, draggedRect.y, draggedRect.width, draggedRect.height, dragState.groupIds)
             : null;
         // 拖入分组：单个节点、多选（批量拖入）或整个分组（其成员会并入目标分组）都允许并入主分组下的目标分组。
-        // 目标分组由主拖动节点的中心命中决定；smartGroupTargetForDraggedNode 已排除正在被拖动的节点/分组。
+        // 目标分组由节点边界相交决定；预览阶段不会写入成员关系。
         const draggedNodes = (dragState.group || []).map(item => nodes.find(n => n.id === item.id)).filter(Boolean);
         const smartGroupTarget = draggedNode ? smartGroupTargetForDraggedNode(draggedNode) : null;
+        clearSmartGroupDropPreview();
         if(
             insertHit &&
             insertLoopNodeIntoConnection(draggedNode, insertHit)
@@ -17966,7 +24292,7 @@ window.onmouseup = e => {
             restoreDraggedNodePosition();
             if(selectedId === draggedNode.id) selectedId = '';
             render();
-        } else if(draggedNode && (draggedNode.images || []).length && (dragState.group || []).length <= 1){
+        } else if(draggedNode && (dragState.group || []).length <= 1){
             const r = nodeRect(draggedNode);
             const target = rectOverlapNode(draggedNode.id, r.x, r.y, r.width, r.height, dragState.groupIds);
             if(target && isSmartGroupNode(target)){
@@ -17994,14 +24320,17 @@ window.onmouseup = e => {
         }
         if(dragState.thumbDetached) stateChanged = true;
         // 拖出（没落到任何分组上）：普通节点退出所在分组；子分组退出时把它并入过的成员从主分组里撤掉。
-        if(draggedNode && !smartGroupTarget && pruneSmartGroupMembershipsForNode(draggedNode)){
-            stateChanged = true;
-            render();
+        if(!smartGroupTarget){
+            draggedNodes.forEach(member => {
+                if(pruneSmartGroupMembershipsForNode(member)) stateChanged = true;
+            });
+            if(stateChanged) render();
         }
         if(stateChanged) commitPendingUndo();
         else discardPendingUndo();
         if(stateChanged || dragState.thumbDetached) suppressNodeClickUntil = Date.now() + 180;
         clearDropHighlight();
+        clearSmartGroupDropPreview();
         loopInsertPreview = null;
         dragState = null;
         scheduleSave();
@@ -18009,7 +24338,7 @@ window.onmouseup = e => {
     }
 };
 shell.addEventListener('wheel', e => {
-    if(e.target.closest('.composer,.smart-back,.image-edit-modal,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.workflow-transfer-panel,.log-modal,.shortcut-modal,.prompt-node-segments,.prompt-node-text,.prompt-node-llm,.smart-group-list,.minimax-library-list,.minimax-ref-track,[data-thumb-scroll]')) return;
+    if(e.target.closest('.composer,.smart-back,.image-edit-modal,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-price-toggle,.smart-workflow-toggle,.workflow-transfer-panel,.price-comparison-panel,.log-modal,.shortcut-modal,.prompt-node-segments,.prompt-node-text,.prompt-node-llm,.smart-group-list,.minimax-library-list,.minimax-ref-track,[data-thumb-scroll],.media-text-preview,.media-text-inline-editor')) return;
     e.preventDefault();
     const rect = shell.getBoundingClientRect();
     const sx = e.clientX - rect.left;
@@ -18049,7 +24378,7 @@ shell.ondrop = async e => {
             const asset = JSON.parse(assetRaw);
             if(asset?.url) {
                 pushUndo();
-                createImageNodeAt(p, [assetNodeImageFromItem(asset)], {skipUndo:true});
+                createImageNodeAt(p, [assetNodeImageFromItem(asset)], {skipUndo:true, sourceKind:asset.sourceKind === 'result' || asset.resultId ? 'result' : 'input'});
             }
             return;
         } catch {}
@@ -18073,6 +24402,12 @@ window.addEventListener('paste', e => {
     if(nodeClipboard?.nodes?.length && !isEditableTarget(e.target)){
         e.preventDefault();
         pasteNodes();
+        return;
+    }
+    const text = e.clipboardData?.getData('text/plain') || '';
+    if(text && !isEditableTarget(e.target)){
+        e.preventDefault();
+        createTextMaterialNodeAt(viewportCenter(), text, {name:'剪贴板文本.md'});
     }
 });
 window.addEventListener('keydown', e => {
@@ -18112,6 +24447,11 @@ window.addEventListener('keydown', e => {
             toggleAssetLibrary();
             return;
         }
+    }
+    if((e.ctrlKey || e.metaKey) && e.shiftKey && key === 'c' && !isEditableTarget(e.target)){
+        e.preventDefault();
+        copySelectedMediaToSystemClipboard();
+        return;
     }
     if((e.ctrlKey || e.metaKey) && key === 'c' && !isEditableTarget(e.target)){
         const selectionText = window.getSelection?.().toString() || '';
@@ -18161,18 +24501,54 @@ window.addEventListener('keyup', e => {
 });
 window.addEventListener('blur', () => {
     isRKeyDown = false;
+    const state = captureCanvasEditableState(document.activeElement);
+    if(state || canvasEditableWasActive){
+        canvasFocusWasSuspended = true;
+        if(state) canvasEditableResumeState = state;
+    }
 });
-engineSelect.onchange = () => {
-    settings.engine = engineSelect.value;
-    applyRecentSmartSettingsForCurrentMode();
-    syncApiKindToggleVisibility();
-    renderDynamicParams();
-    persistActiveSmartSettings();
-    scheduleSave();
-};
+document.addEventListener('focusin', event => {
+    const editable = canvasTextEditableForTarget(event.target);
+    canvasEditableWasActive = Boolean(editable);
+    if(editable) requestAnimationFrame(() => captureCanvasEditableState(editable));
+}, true);
+document.addEventListener('pointerdown', event => {
+    canvasEditableWasActive = Boolean(canvasTextEditableForTarget(event.target));
+}, true);
+document.addEventListener('input', event => {
+    if(canvasTextEditableForTarget(event.target)) captureCanvasEditableState(event.target);
+}, true);
+document.addEventListener('keyup', event => {
+    if(canvasTextEditableForTarget(event.target)) captureCanvasEditableState(event.target);
+}, true);
+document.addEventListener('mouseup', event => {
+    if(canvasTextEditableForTarget(event.target)) captureCanvasEditableState(event.target);
+}, true);
+document.addEventListener('selectionchange', () => {
+    if(canvasTextEditableForTarget(document.activeElement)) captureCanvasEditableState(document.activeElement);
+});
+document.addEventListener('scroll', event => {
+    if(event.target === document.activeElement && canvasTextEditableForTarget(event.target)) captureCanvasEditableState(event.target);
+}, true);
+document.addEventListener('visibilitychange', () => {
+    if(document.hidden){
+        const state = captureCanvasEditableState(document.activeElement);
+        if(state || canvasEditableWasActive){
+            canvasFocusWasSuspended = true;
+            if(state) canvasEditableResumeState = state;
+        }
+        return;
+    }
+    if(canvasFocusWasSuspended) scheduleCanvasEditableRestore(canvasEditableResumeState, 0);
+});
+new MutationObserver(() => {
+    if(canvasFocusWasSuspended && !document.hidden) scheduleCanvasEditableRestore(canvasEditableResumeState, 24);
+}).observe(document.body, {childList:true, subtree:true});
 function syncApiKindToggleVisibility(){
     if(!apiKindToggle) return;
-    apiKindToggle.style.display = isApiLikeEngine(settings.engine) ? 'inline-flex' : 'none';
+    const subject = activeSettingsSubject();
+    const fixedExecutionKind = isSmartExecutionNode(subject);
+    apiKindToggle.style.display = !fixedExecutionKind && isApiLikeEngine(settings.engine) ? 'inline-flex' : 'none';
     apiKindToggle.querySelectorAll('[data-kind]').forEach(btn => btn.classList.toggle('active', btn.dataset.kind === (settings.apiKind || 'image')));
 }
 if(apiKindToggle){
@@ -18203,7 +24579,7 @@ if(promptResize){
         };
     });
 }
-runBtn.onclick = runGeneration;
+runBtn.onclick = runSelectedNode;
 cascadeRunBtn.onclick = () => {
     const node = selectedNode();
     const loopId = resolveSmartCascadeLoop(node?.id)?.node?.id || '';
@@ -18228,6 +24604,35 @@ fileInput.onchange = () => {
 };
 if(assetToggle) assetToggle.onclick = () => toggleAssetLibrary();
 if(assetCloseBtn) assetCloseBtn.onclick = () => toggleAssetLibrary(false);
+smartPriceToggle?.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    if(smartPriceComparisonPanel?.classList.contains('open')) closeSmartPriceComparison();
+    else openSmartPriceComparison();
+});
+smartPriceComparisonClose?.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSmartPriceComparison();
+});
+smartPriceComparisonSearch?.addEventListener('input', renderPriceComparisonTable);
+smartPriceComparisonSearch?.addEventListener('search', renderPriceComparisonTable);
+smartPriceComparisonKind?.addEventListener('change', renderPriceComparisonTable);
+smartPriceComparisonPanel?.addEventListener('click', event => event.stopPropagation());
+smartPriceComparisonPanel?.addEventListener('wheel', event => {
+    event.stopPropagation();
+    if(event.target.closest('.price-comparison-body')) return;
+    if(!smartPriceComparisonBody || smartPriceComparisonBody.scrollHeight <= smartPriceComparisonBody.clientHeight) return;
+    event.preventDefault();
+    smartPriceComparisonBody.scrollTop += event.deltaY;
+}, {passive:false});
+smartPriceComparisonBody?.addEventListener('click', event => {
+    const button = event.target.closest('[data-price-lookup]');
+    if(!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    openPriceLookup(button.dataset.providerId || '', button.dataset.modelId || '');
+});
 if(smartWorkflowToggle) smartWorkflowToggle.onclick = event => {
     event.preventDefault();
     event.stopPropagation();
@@ -18316,6 +24721,23 @@ promptPresetPanel?.addEventListener('click', e => e.stopPropagation());
 promptTemplatePanel?.addEventListener('pointerdown', e => e.stopPropagation());
 promptTemplatePanel?.addEventListener('mousedown', e => e.stopPropagation());
 promptTemplatePanel?.addEventListener('wheel', e => e.stopPropagation(), {passive:false});
+promptTemplatePanel?.addEventListener('keydown', e => {
+    if(!e.target.closest?.('[data-template-group-edit-input]')) return;
+    if(e.key === 'Enter'){
+        e.preventDefault();
+        savePromptTemplateGroupDraft();
+    } else if(e.key === 'Escape'){
+        e.preventDefault();
+        cancelPromptTemplateGroupDraft();
+    }
+});
+promptTemplatePanel?.addEventListener('focusout', e => {
+    if(!e.target.closest?.('[data-template-group-edit-input]')) return;
+    setTimeout(() => {
+        if(promptTemplateGroupDraft && document.activeElement !== e.target) savePromptTemplateGroupDraft();
+    }, 0);
+});
+document.addEventListener('focusin', e => rememberPromptTemplateEditor(e.target), true);
 promptTemplatePanel?.addEventListener('click', e => {
     e.stopPropagation();
     const apply = e.target.closest('[data-template-apply]');
@@ -18346,6 +24768,7 @@ promptTemplatePanel?.addEventListener('click', e => {
         return;
     }
     if(e.target.closest('[data-template-group-edit]')){
+        promptTemplateGroupDraft = null;
         promptTemplateGroupEditMode = !promptTemplateGroupEditMode;
         renderPromptTemplatePanel({preserveScroll:false});
         return;
@@ -18447,17 +24870,18 @@ if(promptPresetDelete) promptPresetDelete.onclick = () => {
 document.querySelectorAll('[data-asset-tab]').forEach(btn => {
     btn.onclick = () => {
         assetTab = btn.dataset.assetTab;
-        if(assetTab === 'workflow' && assetLibraryIsLocal()){
-            activeAssetLibraryId = assetLibrary.active_library_id || assetLibraries()[0]?.id || '';
-        }
         renderAssetLibrary();
     };
 });
 if(assetLibrarySelect) assetLibrarySelect.onchange = () => {
-    activeAssetLibraryId = assetLibrarySelect.value || '';
-    activeAssetCategoryId = '';
-    activeWorkflowAssetCategoryId = '';
-    mentionAssetCategoryId = '';
+    if(assetTab === 'workflow'){
+        activeWorkflowAssetLibraryId = assetLibrarySelect.value || '';
+        activeWorkflowAssetCategoryId = '';
+    } else {
+        activeAssetLibraryId = assetLibrarySelect.value || '';
+        activeAssetCategoryId = '';
+        mentionAssetCategoryId = '';
+    }
     if(activeAssetLibraryId === LOCAL_ASSET_LIBRARY_ID) assetTab = 'image';
     renderAssetLibrary();
 };
@@ -18468,6 +24892,7 @@ if(assetCategorySelect) assetCategorySelect.onchange = () => {
 };
 if(assetAddCategoryBtn) assetAddCategoryBtn.onclick = async () => {
     const workflowMode = currentAssetTabIsWorkflow();
+    const libraryId = workflowMode ? activeWorkflowAssetLibraryId : activeAssetLibraryId;
     const fallbackName = workflowMode ? '工作流' : tr('smart.assetFolder');
     const name = await openAssetNameDialog({title:tr('smart.assetNewFolder'), value:fallbackName, placeholder:fallbackName});
     if(!name) return;
@@ -18485,7 +24910,7 @@ if(assetAddCategoryBtn) assetAddCategoryBtn.onclick = async () => {
         renderAssetLibrary();
         return;
     }
-    const data = await fetch('/api/asset-library/categories', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:activeAssetLibraryId, name, type:workflowMode ? 'workflow' : 'image'})}).then(r => r.json());
+    const data = await fetch('/api/asset-library/categories', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:libraryId, name, type:workflowMode ? 'workflow' : 'image'})}).then(r => r.json());
     setActiveAssetTabCategory(data.category?.id || '');
     setAssetLibraryFromResponse(data);
 };
@@ -18590,6 +25015,17 @@ composer.addEventListener('click', event => {
     if(!event.target.closest('.smart-control') && !event.target.closest('#runBtn') && !event.target.closest('#cascadeRunBtn')) closeAllSmartPopovers();
     event.stopPropagation();
 });
+function closeCreateMenuOnOutsidePointer(event){
+    if(!createMenu?.classList.contains('open')) return;
+    if(event.target?.closest?.('.create-menu')) return;
+    closeCreateMenu();
+}
+document.addEventListener('pointerdown', closeCreateMenuOnOutsidePointer, true);
+function closeMentionPickerOnOutsidePointer(event){
+    if(event.target?.closest?.('.mention-picker,#promptInput,[data-input-add-reference]')) return;
+    closeMentionPicker();
+}
+document.addEventListener('pointerdown', closeMentionPickerOnOutsidePointer, true);
 promptInput.addEventListener('input', maybeOpenMentionPicker);
 promptInput.addEventListener('input', () => {
     delete promptInput.dataset.preserveDraftOnce;
@@ -18602,58 +25038,90 @@ promptInput.addEventListener('mouseup', saveMentionRange);
 promptInput.addEventListener('focus', saveMentionRange);
 promptInput.addEventListener('keydown', event => {
     if(event.key === 'Escape') closeMentionPicker();
-});
-promptInput.addEventListener('mouseover', event => {
-    const token = event.target.closest?.('.mention-image-token');
-    if(!token) return;
-    // 音频没有可预览的图像，不能把音频 URL 塞进 <img>（会显示破损图标），直接不弹悬浮预览。
-    if(token.dataset.kind === 'audio'){ mentionPreview.style.display = 'none'; return; }
-    let media = mentionPreview.querySelector('img,video');
-    const isVideo = token.dataset.kind === 'video' || isVideoMediaItem({url:token.dataset.url, kind:token.dataset.kind});
-    if(isVideo && media?.tagName?.toLowerCase() !== 'video'){
-        media?.replaceWith(document.createElement('video'));
-        media = mentionPreview.querySelector('video');
-    } else if(!isVideo && media?.tagName?.toLowerCase() !== 'img'){
-        media?.replaceWith(document.createElement('img'));
-        media = mentionPreview.querySelector('img');
+    if(event.key === ' ' && /@$/.test(textBeforeCaret())){
+        event.preventDefault();
+        saveMentionRange();
+        showMentionPicker();
     }
-    if(isVideo){
-        media.muted = true;
+});
+function hideReferenceHoverPreview(){
+    if(!mentionPreview) return;
+    mentionPreview.style.display = 'none';
+    mentionPreview.querySelectorAll('audio,video').forEach(media => {
+        media.pause?.();
+        media.removeAttribute('src');
+        media.load?.();
+    });
+    mentionPreview.innerHTML = '';
+}
+function showReferenceHoverPreview(anchor, reference){
+    if(!mentionPreview || !anchor || !reference) return;
+    hideReferenceHoverPreview();
+    const kind = mediaKindForItem(reference);
+    const url = smartOriginalMediaUrl(reference.url || '');
+    const text = SMART_NODE_CONTRACT.textContentForMediaItem(reference);
+    if(kind !== 'text' && !url) return;
+    let media = null;
+    if(kind === 'text'){
+        const textPreview = document.createElement('div');
+        textPreview.className = 'mention-preview-text';
+        textPreview.textContent = text;
+        mentionPreview.appendChild(textPreview);
+    } else if(kind === 'audio'){
+        media = document.createElement('audio');
+        media.controls = true;
+        media.preload = 'metadata';
+        media.src = displayMediaUrl({url});
+    } else if(kind === 'video' || isVideoMediaItem({url, kind})){
+        media = document.createElement('video');
+        media.muted = false;
+        media.volume = 1;
+        media.controls = true;
         media.loop = true;
         media.playsInline = true;
         media.preload = 'metadata';
         media.disablePictureInPicture = true;
         media.setAttribute('disablepictureinpicture', '');
         media.setAttribute('controlslist', 'nodownload noplaybackrate noremoteplayback');
-        media.src = token.dataset.url || '';
-        media.play?.().catch(() => {});
+        media.src = displayMediaUrl({url});
     } else {
-        media.src = token.dataset.url || '';
+        media = document.createElement('img');
+        media.src = smartMediaPreviewUrl(reference, 768);
         media.alt = 'preview';
     }
-    const rect = token.getBoundingClientRect();
+    if(media){
+        mentionPreview.appendChild(media);
+    }
+    const rect = anchor.getBoundingClientRect();
     mentionPreview.style.left = `${Math.min(window.innerWidth - 236, rect.left)}px`;
     mentionPreview.style.top = `${Math.min(window.innerHeight - 236, rect.bottom + 8)}px`;
     mentionPreview.style.display = 'block';
+    if(media && (kind === 'audio' || media.tagName.toLowerCase() === 'video')) media.play?.().catch(() => {});
+}
+promptInput.addEventListener('mouseover', event => {
+    const token = event.target.closest?.('.mention-image-token');
+    if(!token || token.contains(event.relatedTarget)) return;
+    showReferenceHoverPreview(token, referenceFromMentionToken(token));
 });
 promptInput.addEventListener('mouseout', event => {
-    if(event.target.closest?.('.mention-image-token')){
-        mentionPreview.style.display = 'none';
-        const media = mentionPreview.querySelector('img,video');
-        media?.pause?.();
-        media?.removeAttribute('src');
-        media?.load?.();
-    }
+    const token = event.target.closest?.('.mention-image-token');
+    if(token && !token.contains(event.relatedTarget)) hideReferenceHoverPreview();
 });
 mentionPicker.addEventListener('mousedown', event => event.stopPropagation());
 document.addEventListener('click', event => {
+    if(!event.target.closest('.smart-rh-field-picker')){
+        const openedByCurrentDrop = runningHubFieldPicker && event === runningHubFieldPickerOpeningEvent;
+        if(!openedByCurrentDrop) closeRunningHubFieldPicker(true);
+    }
     if(!event.target.closest('.smart-control')) closeAllSmartPopovers();
     if(!event.target.closest('.mention-picker') && !event.target.closest('#promptInput') && !event.target.closest('[data-input-add-reference]')) closeMentionPicker();
     if(!event.target.closest('.prompt-preset-panel') && !event.target.closest('.prompt-preset-edit') && !event.target.closest('.prompt-preset-save')) closePromptPresetPanel();
     if(!event.target.closest('.prompt-template-panel') && !event.target.closest('.prompt-preset-edit') && !event.target.closest('#composerTemplateBtn')) closePromptTemplatePanel();
+    const topPanelHit = event.target.closest('.smart-workflow-toggle,.smart-shortcut-toggle,.smart-price-toggle,.smart-log-toggle,.asset-toggle,.workflow-transfer-panel,.price-comparison-panel,.shortcut-modal,.log-modal,.asset-panel');
+    if(!topPanelHit) closeSmartTopPanels();
 });
 document.addEventListener('keydown', event => {
-    if(event.key === 'Escape') { closeSmartLogLightbox(); closeAllSmartPopovers(); closeCreateMenu(); closeSmartCanvasLog(); closeSmartCanvasShortcuts(); closePromptPresetPanel(); closePromptTemplatePanel(); }
+    if(event.key === 'Escape') { closeRunningHubFieldPicker(true); closeSmartLogLightbox(); closeSmartAudioPreview(); closeAllSmartPopovers(); closeCreateMenu(); closeSmartTopPanels(); closePromptPresetPanel(); closePromptTemplatePanel(); }
 });
 function cropDragModeFromPointer(event){
     const explicit = event.target.closest?.('[data-crop-handle]')?.dataset?.cropHandle;
@@ -18910,6 +25378,8 @@ document.getElementById('imageEditStage').addEventListener('wheel', event => {
 window.addEventListener('resize', () => {
     if(cropState) syncImageEditOverflow();
     if(panoramaState.enabled) resizePanoramaViewer();
+    const active = activeComposerNode();
+    if(active && composer?.classList?.contains('open')) positionComposerForNode(active);
 });
 window.addEventListener('studio-theme-change', event => applyTheme(event.detail?.theme || 'light'));
 try {
@@ -18922,8 +25392,15 @@ try {
         if(event.data?.type === 'canvas_updated') handleCanvasUpdatedMessage(event.data);
     };
 } catch(e) {}
-window.addEventListener('focus', () => {
-    if(Date.now() - lastConfigRefreshAt > 1200) refreshSmartConfigFromSettings();
+window.addEventListener('focus', async () => {
+    if(Date.now() - lastConfigRefreshAt > 1200) await refreshSmartConfigFromSettings();
+    if(canvasFocusWasSuspended) scheduleCanvasEditableRestore(canvasEditableResumeState, 0);
+});
+window.addEventListener('storage', event => {
+    if(event.key !== 'prompt_library_updated_at') return;
+    loadPromptTemplates().then(() => {
+        if(promptTemplatePanel?.classList.contains('open')) renderPromptTemplatePanel({preserveScroll:true});
+    }).catch(() => {});
 });
 window.addEventListener('message', event => {
     if(event.origin && event.origin !== location.origin) return;

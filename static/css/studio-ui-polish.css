@@ -1,0 +1,232 @@
+:root {
+    --studio-accent:#315fe8;
+    --studio-accent-soft:rgba(49,95,232,.09);
+    --studio-radius-control:10px;
+    --studio-radius-panel:14px;
+    --studio-shadow-soft:0 10px 26px rgba(15,23,42,.07);
+}
+
+.theme-dark,
+body.studio-theme-dark,
+html.studio-theme-dark body {
+    --studio-accent:#9db5ff;
+    --studio-accent-soft:rgba(157,181,255,.12);
+    --studio-shadow-soft:0 12px 30px rgba(0,0,0,.25);
+}
+
+html,
+body {
+    -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+}
+
+body,
+button,
+input,
+select,
+textarea {
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Segoe UI",sans-serif;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+    transition:background-color .16s ease,border-color .16s ease,color .16s ease,box-shadow .16s ease,transform .16s ease;
+}
+
+button:active:not(:disabled),
+a:active {
+    transform:translateY(1px) scale(.985);
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+    outline:2px solid var(--studio-accent);
+    outline-offset:2px;
+}
+
+::selection {
+    color:#fff;
+    background:var(--studio-accent);
+}
+
+* {
+    scrollbar-width:thin !important;
+    scrollbar-color:rgba(100,116,139,.48) transparent !important;
+}
+
+*::-webkit-scrollbar {
+    width:7px !important;
+    height:7px !important;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+    background:transparent !important;
+}
+
+*::-webkit-scrollbar-thumb {
+    min-height:28px;
+    border:2px solid transparent !important;
+    border-radius:999px !important;
+    background:rgba(100,116,139,.48) !important;
+    background-clip:padding-box !important;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background:rgba(71,85,105,.72) !important;
+    background-clip:padding-box !important;
+}
+
+.smart-back,
+.smart-log-toggle,
+.smart-shortcut-toggle,
+.smart-price-toggle,
+.smart-workflow-toggle {
+    border-radius:var(--studio-radius-control) !important;
+    box-shadow:var(--studio-shadow-soft) !important;
+}
+
+.smart-back:hover,
+.smart-log-toggle:hover,
+.smart-shortcut-toggle:hover,
+.smart-price-toggle:hover,
+.smart-workflow-toggle:hover {
+    border-color:var(--studio-accent) !important;
+    color:var(--text) !important;
+}
+
+.smart-log-toggle.active,
+.smart-shortcut-toggle.active,
+.smart-price-toggle.active,
+.smart-workflow-toggle.active {
+    background:var(--strong) !important;
+    border-color:var(--strong) !important;
+    color:var(--strong-text) !important;
+}
+
+.image-node.smart-execution-node,
+.composer-card,
+.price-comparison-panel {
+    border-radius:var(--studio-radius-panel) !important;
+    box-shadow:var(--studio-shadow-soft) !important;
+}
+
+.smart-execution-card,
+.smart-execution-icon,
+.execution-count-pill,
+.capability-param-pill,
+.capability-settings-pill {
+    border-radius:var(--studio-radius-control) !important;
+}
+
+.composer:not(.ai-app-composer) .dynamic-params .smart-control > .smart-pill:hover,
+.dynamic-params .capability-param-pill:hover,
+.execution-count-pill:hover {
+    border-color:var(--studio-accent) !important;
+    box-shadow:0 0 0 3px var(--studio-accent-soft);
+}
+
+.page-head .title,
+.asset-title,
+.ws-side-title,
+.ws-board-name,
+.smart-title {
+    font-family:"Space Grotesk",-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+}
+
+.api-settings-page .content-head,
+.content-head,
+.block,
+.sidebar,
+.recommend-card,
+.custom-provider-guide,
+.storage-settings-modal {
+    border-radius:var(--studio-radius-panel) !important;
+    box-shadow:var(--studio-shadow-soft) !important;
+}
+
+.content-head,
+.block {
+    border-color:color-mix(in srgb, var(--line) 88%, transparent) !important;
+}
+
+.page {
+    padding:32px 28px 72px !important;
+}
+
+.page-head {
+    padding:0 2px 22px !important;
+}
+
+.page-head .title {
+    font-size:24px !important;
+    letter-spacing:-.02em;
+}
+
+.page-head .sub {
+    max-width:620px !important;
+    font-size:12px !important;
+}
+
+.layout {
+    grid-template-columns:232px minmax(0,1fr) !important;
+    gap:24px !important;
+}
+
+.sidebar {
+    top:24px !important;
+    max-height:calc(100vh - 48px) !important;
+    padding:12px !important;
+    gap:10px !important;
+}
+
+.content-head {
+    min-height:64px;
+    padding:16px 18px !important;
+}
+
+.block {
+    gap:12px !important;
+    padding:18px !important;
+}
+
+.provider-card {
+    min-height:44px !important;
+    padding:7px 9px !important;
+}
+
+.action-btn,
+.ghost-btn,
+.add-btn,
+.api-link-btn,
+.cli-quick-btn,
+.ws-icon-btn,
+.ws-side-add {
+    border-radius:var(--studio-radius-control) !important;
+}
+
+.action-btn.primary-btn:hover,
+.api-link-btn:hover,
+.ws-icon-btn:hover,
+.ws-side-add:hover {
+    border-color:var(--studio-accent) !important;
+    box-shadow:0 0 0 3px var(--studio-accent-soft) !important;
+}
+
+@media (prefers-reduced-motion:reduce) {
+    *,
+    *::before,
+    *::after {
+        scroll-behavior:auto !important;
+        transition-duration:.01ms !important;
+        animation-duration:.01ms !important;
+        animation-iteration-count:1 !important;
+    }
+}

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "provider_id": "codex-cli",
+  "provider_name": "GPT CLI",
+  "protocol": "codex",
+  "status": "maintained",
+  "updated_at": "2026-08-12",
+  "sources": [
+    {"path": "main.py", "kind": "runtime_verified", "checked_at": "2026-08-12"},
+    {"path": "CLI/macos/openai/install_openai_codex_cli.command", "kind": "project_installer", "checked_at": "2026-08-12"},
+    {"path": "CLI/windows/openai/install_openai_codex_cli.ps1", "kind": "project_installer", "checked_at": "2026-08-12"}
+  ],
+  "models": [
+    {
+      "model_id": "gpt-5.5",
+      "family_id": "gpt-5.5",
+      "family_name": "GPT 5.5",
+      "variant_id": "chat_or_agent_text",
+      "node_type": "text_generation",
+      "operation": "chat_or_agent_text",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "runtime_verified",
+      "inputs": {
+        "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"},
+        "system_prompt": {"media_type": "text", "min": 0, "max": 1, "role": "system_prompt"},
+        "reference_image": {"media_type": "image", "min": 0, "max": 10, "role": "reference", "context_only": true}
+      },
+      "parameters": {
+        "model": {
+          "level": "required",
+          "type": "model",
+          "ui_hidden": true,
+          "description": "由上方模型选择自动传给 Codex CLI 的底层协议字段，界面不重复显示。",
+          "description_en": "Internal Codex CLI field populated by the Model selector; it is not shown again in settings."
+        }
+      },
+      "request_mapping": {"prompt": "stdin", "system_prompt": "prompt_prefix", "reference_image": "--image", "model": "--model"},
+      "output": {"media_type": "text", "min": 1, "max": 1, "async": false},
+      "platform": {"transport": "local_cli", "command": "codex"}
+    }
+  ],
+  "unsupported": ["image_generation", "video_generation", "audio_generation", "ai_application"],
+  "rules": {
+    "image_input_is_context_only": true,
+    "media_generation_is_disabled": true
+  }
+}

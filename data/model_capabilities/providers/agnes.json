@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "provider_id": "agnes",
+  "provider_name": "Agnes AI",
+  "status": "maintained",
+  "updated_at": "2026-08-14",
+  "sources": [
+    {
+      "url": "https://apihub.agnes-ai.com/v1",
+      "kind": "runtime_verified",
+      "checked_at": "2026-08-14"
+    },
+    {
+      "path": "main.py",
+      "kind": "runtime_verified",
+      "checked_at": "2026-08-14"
+    }
+  ],
+  "models": []
+}

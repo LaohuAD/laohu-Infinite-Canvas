@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "provider_id": "jimeng-cli",
+  "provider_name": "即梦 CLI",
+  "protocol": "jimeng",
+  "status": "maintained",
+  "updated_at": "2026-08-12",
+  "sources": [
+    {"path": "main.py", "kind": "runtime_verified", "checked_at": "2026-08-12"},
+    {"path": "CLI/macos/jimeng/install_jimeng_cli.command", "kind": "project_installer", "checked_at": "2026-08-12"},
+    {"path": "CLI/windows/jimeng/jimeng_cli_install.ps1", "kind": "project_installer", "checked_at": "2026-08-12"}
+  ],
+  "models": [
+    {
+      "model_id": "5.0Pro",
+      "family_id": "jimeng-image-5.0-pro",
+      "family_name": "即梦图片 5.0 Pro",
+      "variant_id": "text_or_image_to_image",
+      "node_type": "image_generation",
+      "operation": "text_to_image_or_image_to_image",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "runtime_verified",
+      "inputs": {
+        "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"},
+        "reference": {"media_type": "image", "min": 0, "max": 10, "role": "reference"}
+      },
+      "parameters": {
+        "aspect_ratio": {"level": "optional", "type": "enum", "source_field": "ratio"},
+        "resolution": {"level": "optional", "type": "enum", "options": ["1k", "2k", "4k"], "default": "1k", "source_field": "resolution"},
+        "count": {"level": "optional", "type": "integer", "min": 1, "max": 4}
+      },
+      "request_mapping": {"prompt": "prompt", "reference": "images", "aspect_ratio": "ratio", "resolution": "resolution", "count": "count"},
+      "output": {"media_type": "image", "min": 1, "max": 4, "async": true},
+      "platform": {"transport": "local_cli", "commands": ["text2image", "image2image"]}
+    },
+    {
+      "model_id": "seedance2.0",
+      "family_id": "jimeng-seedance-2.0",
+      "family_name": "Seedance 2.0",
+      "variant_id": "seedance2.0",
+      "variant_name": "seedance2.0",
+      "node_type": "video_generation",
+      "operation": "text_to_video_or_image_to_video",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "runtime_verified",
+      "inputs": {
+        "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"},
+        "first_frame": {"media_type": "image", "min": 0, "max": 1, "role": "first_frame"},
+        "last_frame": {"media_type": "image", "min": 0, "max": 1, "role": "last_frame"},
+        "reference": {"media_type": "image", "min": 0, "max": 10, "role": "reference"},
+        "source_video": {"media_type": "video", "min": 0, "max": 3, "role": "source_video"},
+        "reference_audio": {"media_type": "audio", "min": 0, "max": 3, "role": "reference_audio"}
+      },
+      "parameters": {
+        "duration": {"level": "optional", "type": "number"},
+        "aspect_ratio": {"level": "optional", "type": "enum", "source_field": "ratio"},
+        "generate_audio": {"level": "optional", "type": "boolean"}
+      },
+      "request_mapping": {"prompt": "prompt", "first_frame": "first_frame", "last_frame": "last_frame", "reference": "images", "duration": "duration", "aspect_ratio": "ratio", "generate_audio": "generate_audio"},
+      "output": {"media_type": "video", "min": 1, "max": 1, "async": true},
+      "platform": {"transport": "local_cli", "commands": ["text2video", "image2video", "frames2video", "multimodal2video"]}
+    }
+  ],
+  "unsupported": ["text_generation", "audio_generation", "ai_application"]
+}

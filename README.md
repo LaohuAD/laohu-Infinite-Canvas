@@ -1,73 +1,206 @@
-# Infinite-Canvas
-Supports comfyui/API calls/modelscope calls
+# 老胡无限画布
 
-配套的chrome采集插件已经上线：https://chromewebstore.google.com/detail/infinite-canvas-%E5%9B%BE%E5%83%8F%E8%A7%86%E9%A2%91%E6%96%87%E5%AD%97%E6%8A%93%E5%8F%96%E5%B7%A5/ajfhnbklbmpfaaookhfakohabnpmlcic?authuser=0&hl=en
+一个面向 AI 创作者的本地可视化工作台。你可以在画布里组织文本、图片、视频和音频素材，连接不同类型的执行节点，选择平台、模型与参数，再把生成结果继续接入下一步创作。
 
-详细教程：[https://youtu.be/1y9ShTvgC_w](https://youtu.be/r_y_9ALr7fg)
+当前版本：`v2026.08.17`
 
-由于最近很多API网址关停，我找到一个稳定的网址：
+[快速开始](#快速开始) · [主要能力](#主要能力) · [支持的平台](#支持的平台) · [本地数据](#本地数据怎么保存) · [三个项目](#老胡的三个-ai-创作项目)
 
-https://apib.ai/register?aff=1uyAbb （包含所有生图模型/视频模型/LLM模型）
+## 作者介绍：老胡
 
-https://www.fhl.mom/register?aff=86L574B4T2N9  （包含codex和GPT image 2模型）
+我是老胡，全网同名：**老胡用AI赚钱**。
 
-功能请求/功能更新/视频教程/联系我，都可以在B站评论或私信：https://space.bilibili.com/78652351
+我主要做 AI 音乐、AI 视觉和 AI 内容创作相关的实战分享。相比单纯推荐工具，我更关注一件事：怎么把 AI 从“会生成”推进到“能做出作品、能发布、能复盘、能形成个人创作系统”。
 
+目前主要在 Bilibili 发布教学视频，其他平台以作品展示为主，零星穿插教学内容。
 
-----
+公开账号：
 
-【新增了version文件，我每次更新都会更新version的版本号，如果你下载version文件，打开项目后，导航栏的GitHub按键就会提示新版本，如果不想查看更新提示，就删除version文件】
+- Bilibili：[老胡用AI赚钱](https://space.bilibili.com/13497214)
+- 小红书：[老胡用AI赚钱](https://xhslink.com/m/AZo7UbSx1ef)
+- 抖音：[老胡用AI赚钱](https://v.douyin.com/usGF0Kz_Yic/)
+- 微信公众号文章：[半年我跑通了一门副业，保姆级教程教你](https://mp.weixin.qq.com/s/9MFowDN04_J59lidkG0HPQ)
 
-【A version file has been added. I update the version number with each update. If you download the version file, the GitHub button in the navigation bar will indicate the new version after opening the project. If you don't want to see update notifications, delete the version file.】
+我维护这个项目，不是为了再做一个只能演示的节点编辑器，而是想把素材管理、模型选择、参数映射、任务运行和结果复用放进同一个可持续工作的画布里。
 
-----
+## 老胡的三个 AI 创作项目
 
-支持的功能：
-1. 支持几乎所有OpenAI协议的API/异步协议/Gemini协议/方舟协议
-2. RunningHub的工作流/AI应用/收费模型调用
-3. 火山引擎调用（人脸认证还在修复bug）
-4. Modelscope免费LLM模型和图像模型调用
-5. 即梦CLI调用，可直接调用即梦高级会员的积分，支持文生图/图生图/文生视频/图生视频
-6. 支持调用本地局域网的ComfyUI
-7. 扩展图片/360全景图预览截图/视频帧抽取/循环节点等诸多功能
-8. tools文件夹中，增加了chrome批量采集到素材库的插件，PS直连画布调用所有功能的插件
+这三个项目解决的是同一条创作链上的不同问题，可以独立使用，也可以互相配合：
 
---------
+| 项目 | 主要解决什么 | 适合在什么时候使用 |
+|---|---|---|
+| [老胡无限画布](https://github.com/LaohuAD/laohu-Infinite-Canvas) | 在可视化画布里连接素材、模型、参数和生成结果 | 需要调用不同平台模型、组织素材和运行生成任务时 |
+| [老胡 AI 视觉](https://github.com/LaohuAD/laohu-ai-visual) | 把灵感推进成故事、剧本、视觉资产、分镜、视频提示词、封面和复盘 | 需要建立一部视觉作品的完整生产方法时 |
+| [老胡音乐 V4](https://github.com/LaohuAD/laohu-music) | 把歌曲灵感推进到选题、写词、谱曲、歌名、封面和发布归档 | 需要完成一首歌，并让创作经验继续沉淀时 |
 
-已经申请著作权，禁止商业用途
+一种常见组合是：先在 AI 视觉项目里完成故事、剧本、资产和镜头设计，再到无限画布调用图片或视频模型；作品需要原创歌曲时，使用老胡音乐 V4 完成选题、歌词和声音方案。三个项目不是彼此的必装依赖，真正共享的是同一套原则：先把作品问题想清楚，再选择模型和工具。
 
-Commercial use is prohibited.
+## 适合谁
 
+- 需要在一个画布里混合管理文本、图片、视频和音频素材的人。
+- 经常比较多个 AI 平台、模型、价格和参数，不想重复切换网页的人。
+- 希望把一次生成继续接入下一次生成，而不是每次手工下载、上传和整理的人。
+- 需要本地保存 API 配置、画布、素材和结果，并能迁移或备份的人。
+- 想把 AI 生成接入真实作品流程，而不是只做单次模型演示的人。
 
-* 可以自己使用和公司使用，禁止用于任何形式的修改封装成商业产品，商用须取得授权。
+## 主要能力
 
-* 根据代码二次开发的软件必须保持开源并注明来源作者
+### 1. 智能画布
 
-* This software is for personal and company use only, but is prohibited from being modified or packaged into commercial products in any way. Commercial use requires authorization.
+新版智能画布以“素材节点 + 执行节点”为核心：
 
-* Software developed based on this code must remain open source and the original author must be credited.
+- 素材节点承载文本、图片、视频和音频，也承载生成完成后的结果。
+- 执行节点分为文本生成、图片生成、视频生成、音频生成、音乐生成和 AI 应用。
+- 节点之间通过连接关系传递素材；同类多输入需要落入不同官方字段时，会保留明确的槽位映射。
+- 每次运行创建独立结果占位节点，执行节点可以继续提交并行任务。
+- 模型、运行模式和参数由能力档案与真实接口证据共同决定，不按模型名称猜测。
 
---------
+### 2. 素材与结果管理
 
+- 上传素材保留原始名称和真实比例。
+- 相同内容通过 SHA-256 去重并复用稳定 ID，重复上传不会反复复制。
+- 生成结果独立保存，删除画布不会连带删除结果。
+- 文本、图片、视频和音频可以在素材库与画布之间继续复用。
+- 浏览器采集插件、Photoshop 连接器和本地素材导入工具放在 `tools/`。
 
-<img width="2079" height="665" alt="image" src="https://github.com/user-attachments/assets/8469923b-f7a2-403c-9c37-e6e789211f28" />
+### 3. 模型参数与运行前检查
 
-<img width="1865" height="1503" alt="image" src="https://github.com/user-attachments/assets/f4030201-67c6-4845-b08b-b6fdf304afaa" />
+- 平台、模型、运行模式和模型参数使用统一的执行面板结构。
+- 当前模型只显示接口明确支持的参数与输入组合。
+- 可选参数支持“使用默认”，处于默认状态时不向平台发送该字段。
+- 运行前校验文本、素材类型、数量、尺寸、时长和必填字段，减少把错误请求发到付费接口。
+- 价格对比用于定位模型和跳转官方查询页，最终资费以平台实时页面为准。
 
+### 4. 本地工具链
 
-<img width="1696" height="1350" alt="b68e144c5b04a322bfd035da4d89aba3" src="https://github.com/user-attachments/assets/0a6090fb-a8dd-4c3d-adee-b1f9233a2d91" />
+- 支持本地或局域网 ComfyUI。
+- 支持图片扩展、裁剪、预览、视频帧提取和音频抽取等素材处理。
+- 支持项目数据状态检查、备份、迁移和恢复。
+- macOS 与 Windows 都提供启动和安装入口。
 
-   
-<img width="1525" height="1473" alt="image" src="https://github.com/user-attachments/assets/6f61fcf9-746c-425b-9e36-cfc8d252da7c" />
+## 支持的平台
 
-   <img width="1261" height="864" alt="image" src="https://github.com/user-attachments/assets/57f3e230-3134-488f-8179-d97e7d15383a" />
-<img width="1530" height="858" alt="image" src="https://github.com/user-attachments/assets/9990e42d-22d5-4a10-a1e1-ad35a634edd2" />
+当前正式适配范围包括：
 
-<img width="1735" height="1400" alt="image" src="https://github.com/user-attachments/assets/d8328ff8-bbe0-4f1c-9ffa-7b56e8a1a51d" />
-<img width="2258" height="969" alt="image" src="https://github.com/user-attachments/assets/4a752d99-885d-4ba9-8b86-91b495786b5c" />
+| 平台 | 当前定位 |
+|---|---|
+| RunningHub | AI 应用与已同步 Schema 的 ComfyUI 应用调用 |
+| AI MONEY | 文本、图片、视频等已建立适配和能力档案的模型 |
+| ModelScope | 已配置的文本与图片模型 |
+| 即梦 CLI | 图片与视频生成，使用本机已登录的即梦 CLI |
+| GPT CLI | 只接入文本能力；图片只能作为文本任务参考输入 |
+| 火山引擎 | 已适配的图片、视频及相关平台能力 |
 
+项目还保留对 OpenAI 兼容协议、异步任务协议和部分平台协议的适配能力。某个平台“能配置”不等于其中每个模型都已完成全链路适配；画布只开放当前用户已启用、能力档案有证据且请求适配器可用的模型。
 
-<img width="1531" height="1374" alt="image" src="https://github.com/user-attachments/assets/0af79e38-0955-4740-9e65-5c9bb057f58c" />
+## 快速开始
 
-<img width="2196" height="1040" alt="image" src="https://github.com/user-attachments/assets/6d823668-cde2-4836-8332-1858efe5f520" />
-<img width="2214" height="771" alt="image" src="https://github.com/user-attachments/assets/52e10958-753f-45ba-a50e-3bbec27be436" />
+### 1. 获取项目
+
+```bash
+git clone https://github.com/LaohuAD/laohu-Infinite-Canvas.git
+cd laohu-Infinite-Canvas
+```
+
+### 2. macOS
+
+首次使用运行：
+
+```bash
+./mac-安装依赖.sh
+```
+
+之后双击 `mac-启动服务.command`，或运行：
+
+```bash
+./mac-启动服务.sh
+```
+
+### 3. Windows
+
+首次使用双击 `安装依赖.bat`，之后双击 `run.bat`。
+
+### 4. 打开页面
+
+服务启动后访问：
+
+```text
+http://127.0.0.1:3000/
+```
+
+API Key 通过页面中的“API 设置”保存。不要把本机的 `API/.env`、`data/api_providers.json` 或包含密钥的备份上传到 GitHub。
+
+## 本地数据怎么保存
+
+项目把程序代码和用户数据分开管理：
+
+| 目录 | 保存内容 | 公开仓库策略 |
+|---|---|---|
+| `data/` | 设置、索引、画布 JSON、会话等结构化数据 | 用户运行数据不上传；模型能力档案例外 |
+| `assets/input/asset/` | 用户长期保留的素材 | 不上传 |
+| `assets/input/temporary/` | 临时输入素材 | 不上传 |
+| `assets/output/` | 图片、视频、音频和文本生成结果 | 不上传 |
+| `workflows/` | 用户的 ComfyUI 与画布工作流 | 不上传 |
+| `API/` | API Key 等密钥 | 不上传真实 `.env` |
+| `cache/` | 可重新生成的缓存 | 不上传，可安全清理 |
+| `backups/` | 本地备份包 | 不上传 |
+
+上传素材时，系统根据文件内容计算 SHA-256。相同内容只保存一份；用户改名或把临时素材晋升为长期资产时，稳定 ID 和画布引用保持不变。
+
+## 模型能力档案
+
+模型能力与用户 API 设置分层维护：
+
+| 目录或文件 | 作用 |
+|---|---|
+| `docs/model-capabilities/` | 能力档案维护规范和平台适配说明 |
+| `data/model_capabilities/capability-vocabulary.json` | 媒体类型、输入角色、参数语义和证据等级 |
+| `data/model_capabilities/providers/` | 各平台与模型的能力、字段映射和证据 |
+| `data/model_capabilities/registry.json` | 程序读取的能力索引 |
+| `data/api_providers.json` | 当前用户实际启用的平台与模型，仅保存在本地 |
+
+新增模型时，先核对官方 Schema、官方文档和项目真实请求适配器，再更新能力档案。没有接口证据的能力只标记为待确认，不会自动生成可运行控件。
+
+## 数据管理命令
+
+macOS：
+
+```bash
+.venv/bin/python tools/data_manager.py status
+.venv/bin/python tools/data_manager.py backup
+.venv/bin/python tools/data_manager.py migrate
+.venv/bin/python tools/data_manager.py restore "backups/备份文件.zip"
+```
+
+Windows：
+
+```bat
+python\python.exe tools\data_manager.py status
+python\python.exe tools\data_manager.py backup
+python\python.exe tools\data_manager.py migrate
+python\python.exe tools\data_manager.py restore "backups\备份文件.zip"
+```
+
+普通备份默认不包含密钥；只有明确使用 `backup --include-secrets` 才会把 `API/.env` 放进备份，包含密钥的备份必须按敏感文件保护。
+
+## 更新与项目主页
+
+页面左侧的“项目主页”打开：
+
+https://github.com/LaohuAD/laohu-Infinite-Canvas
+
+项目通过根目录 `VERSION` 检测版本。界面显示 `v2026.08.17`；点击版本号可以检查 GitHub 与备用更新源。更新前会创建恢复点，更新只覆盖程序文件，不应覆盖本地 API Key、画布、素材和生成结果。
+
+## 授权与来源
+
+本仓库基于原 Infinite-Canvas 项目持续重构，原始作者与历史贡献保留在 Git 提交记录中。当前重构、智能画布架构、模型能力档案和维护文档由老胡继续维护。
+
+本项目禁止未经授权修改封装为商业产品；基于代码二次开发的软件必须保持开源并注明来源作者。详细条款见 [LICENSE](LICENSE)。
+
+## 界面预览
+
+<img width="2079" height="665" alt="无限画布界面" src="https://github.com/user-attachments/assets/8469923b-f7a2-403c-9c37-e6e789211f28" />
+
+<img width="1865" height="1503" alt="无限画布节点与素材" src="https://github.com/user-attachments/assets/f4030201-67c6-4845-b08b-b6fdf304afaa" />
+
+<img width="2196" height="1040" alt="无限画布模型与参数" src="https://github.com/user-attachments/assets/6d823668-cde2-4836-8332-1858efe5f520" />

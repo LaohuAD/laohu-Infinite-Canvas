@@ -851,11 +851,12 @@ async function moveCanvasToProject(id, projectId){
 
 /* ===== Card meta persist (POST /meta) ===== */
 async function persistMeta(id, patch){
+    const current = canvases.find(item => item.id === id);
     try {
         const res = await fetch(`/api/canvases/${encodeURIComponent(id)}/meta`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(patch)
+            body: JSON.stringify({...patch, base_revision:Number(current?.revision || 0)})
         });
         if(!res.ok) throw new Error('meta save failed');
         const data = await res.json();

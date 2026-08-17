@@ -18,6 +18,7 @@
         "smart.tplCatProduct": { zh: "产品", en: "Product" },
         "smart.tplCatLighting": { zh: "光影", en: "Lighting" },
         "smart.tplCatMine": { zh: "我的", en: "Mine" },
+        "smart.tplCatUncategorized": { zh: "未分类", en: "Uncategorized" },
         "smart.tplBuiltin": { zh: "内置", en: "Built-in" },
         "smart.tplMine": { zh: "我的", en: "Mine" },
         "smart.tplBuiltinTemplate": { zh: "内置模板", en: "Built-in template" },
@@ -39,8 +40,10 @@
         "smart.tplContent": { zh: "模板内容", en: "Template content" },
         "smart.tplPositive": { zh: "正向提示词", en: "Positive prompt" },
         "smart.tplNegative": { zh: "负向提示词", en: "Negative prompt" },
+        "smart.tplScene": { zh: "用途说明", en: "Usage notes" },
         "smart.tplParams": { zh: "参数建议", en: "Parameter suggestions" },
         "smart.tplApplyPositive": { zh: "正向", en: "Positive" },
+        "smart.tplApplyNegative": { zh: "负向", en: "Negative" },
         "smart.tplApplyFull": { zh: "完整应用", en: "Apply full" },
         "smart.tplPickOrCreate": { zh: "选择或新建一个模板", en: "Select or create a template" },
         "smart.tplRequired": { zh: "模板名称和内容不能为空", en: "Template name and content are required" },
@@ -50,6 +53,11 @@
         "smart.tplDeleteGroupConfirm": { zh: "删除分组？该分组里的我的模板会移动到“我的”。", en: "Delete this group? My templates in it will move to Mine." },
         "smart.promptResize": { zh: "拖拽调整文本框高度", en: "Drag to resize text box" },
         "smart.run": { zh: "运行", en: "Run" },
+        "smart.runFailedBadge": { zh: "运行失败", en: "Run failed" },
+        "smart.cancelRun": { zh: "停止运行", en: "Stop run" },
+        "smart.cancellingRun": { zh: "正在取消", en: "Cancelling" },
+        "smart.runCancelled": { zh: "已取消运行", en: "Run cancelled" },
+        "smart.runCancelledNotice": { zh: "已停止当前运行；平台不支持撤单时，上游任务可能继续", en: "This run was stopped. The upstream task may continue when the provider does not support cancellation." },
         "smart.modePreview": { zh: "预览", en: "Preview" },
         "smart.previewImage": { zh: "预览图片", en: "Preview" },
         "smart.previewHint": { zh: "滚轮缩放，拖动查看，右下角可拉动对比原图", en: "Scroll to zoom, drag to pan. Use the bottom-right control to compare with source." },
@@ -95,6 +103,10 @@
         "smart.deleteImage": { zh: "删除", en: "Delete" },
         "smart.platform": { zh: "平台", en: "Provider" },
         "smart.model": { zh: "模型", en: "Model" },
+        "smart.mode": { zh: "运行模式", en: "Mode" },
+        "smart.selectMode": { zh: "请选择运行模式", en: "Select a mode" },
+        "smart.selectModeHint": { zh: "该模型包含多个可用运行模式，请选择后再运行。", en: "This model has multiple available modes. Select one before running." },
+        "smart.variantInputMismatch": { zh: "当前运行模式不支持新的输入组合，请重新选择运行模式。", en: "The selected mode does not support the new input combination. Select another mode." },
         "smart.size": { zh: "尺寸", en: "Size" },
         "smart.ratio": { zh: "比例", en: "Ratio" },
         "smart.resolution": { zh: "分辨率", en: "Resolution" },
@@ -108,21 +120,32 @@
         "smart.imageRatio": { zh: "图片比例", en: "Source ratio" },
         "smart.custom": { zh: "自定义", en: "Custom" },
         "smart.apiPlatform": { zh: "API 平台", en: "API provider" },
+        "smart.platformInputMismatch": { zh: "当前输入组合下不可用，请重新选择平台或移除不兼容输入。", en: "Unavailable for the current inputs. Choose another provider or remove incompatible inputs." },
         "smart.imageModel": { zh: "生图模型", en: "Image model" },
         "smart.noApiPlatform": { zh: "暂无 API 平台", en: "No API provider" },
         "smart.noImageModel": { zh: "暂无生图模型", en: "No image model" },
+        "smart.model": { zh: "模型", en: "Model" },
+        "smart.textInputNone": { zh: "暂无外部输入", en: "No external input" },
+        "smart.noVerifiedTextModel": { zh: "没有已确认支持当前输入组合的文本模型，请移除不兼容输入或补充模型能力档案。", en: "No verified text model supports these inputs. Remove incompatible inputs or complete the model capability profile." },
+        "smart.noVerifiedImageModel": { zh: "没有已确认支持当前输入组合的图片模型，请移除不兼容输入或补充模型能力档案。", en: "No verified image model supports these inputs. Remove incompatible inputs or complete the model capability profile." },
+        "smart.familyInputMismatch": { zh: "当前模型家族不支持新的输入组合，请重新选择模型。", en: "The selected model family does not support the new input combination. Choose another model." },
+        "smart.enableSystemPrompt": { zh: "启用系统提示词", en: "Enable system prompt" },
+        "smart.systemPromptPlaceholder": { zh: "定义角色、流程、格式或专业能力", en: "Define role, process, format, or domain expertise" },
+        "smart.systemTemplateSkill": { zh: "选择系统模板或 Skill", en: "Select a system template or Skill" },
+        "smart.templateSkill": { zh: "模板 / Skill", en: "Template / Skill" },
         "smart.noMsModel": { zh: "暂无 Modelscope 模型", en: "No Modelscope model" },
         "smart.msFunction": { zh: "Modelscope 生成功能", en: "Modelscope function" },
         "smart.msCustomModel": { zh: "自定义 Modelscope 模型", en: "Custom Modelscope model" },
         "smart.customModel": { zh: "自定义模型", en: "Custom model" },
         "smart.videoPlatform": { zh: "视频平台", en: "Video provider" },
         "smart.videoModel": { zh: "视频模型", en: "Video model" },
+        "canvas.openLogs": { zh: "打开日志", en: "Open logs" },
         "smart.noVideoPlatform": { zh: "暂无视频平台", en: "No video provider" },
         "smart.noVideoModel": { zh: "暂无视频模型", en: "No video model" },
         "smart.rhConfig": { zh: "RunningHub 配置", en: "RunningHub Config" },
         "smart.rhNoConfig": { zh: "暂无 RunningHub 配置", en: "No RunningHub config" },
         "smart.rhKey": { zh: "Key", en: "Key" },
-        "smart.rhFreeKey": { zh: "RunningHub币", en: "RunningHub Coins" },
+        "smart.rhFreeKey": { zh: "RH币", en: "RH Coin" },
         "smart.rhWalletKey": { zh: "账户余额", en: "Wallet" },
         "smart.rhMachine": { zh: "显存", en: "VRAM" },
         "smart.rhParams": { zh: "RunningHub 参数", en: "RunningHub Params" },
@@ -277,9 +300,25 @@
         "smart.shortcutAltShiftCopy": { zh: "复制节点并保留输入连线", en: "Duplicate nodes and keep input connections" },
         "smart.shortcutAssets": { zh: "打开/关闭资源库", en: "Open/close the asset library" },
         "smart.shortcutOverview": { zh: "缩小画布视图", en: "Zoom out to canvas overview" },
+        "smart.shortcutDoubleClick": { zh: "双击", en: "Double-click" },
+        "smart.shortcutFocusNode": { zh: "聚焦并放大任意画布节点", en: "Center and enlarge any canvas node" },
         "smart.shortcutCreateMenu": { zh: "打开快捷菜单", en: "Open the quick create menu" },
         "smart.shortcutPan": { zh: "拖动画布", en: "Drag to pan the canvas" },
         "smart.shortcutZoom": { zh: "缩放画布或预览图片", en: "Zoom canvas or preview image" },
         "smart.shortcutDelete": { zh: "删除选中节点", en: "Delete selected nodes" }
+        ,"smart.paramInstrumental": { zh: "纯音乐", en: "Instrumental" }
+        ,"smart.paramLyrics": { zh: "歌词", en: "Lyrics" }
+        ,"smart.paramLyricsOptimizer": { zh: "优化歌词", en: "Optimize Lyrics" }
+        ,"smart.paramBitrate": { zh: "比特率", en: "Bitrate" }
+        ,"smart.paramVoice": { zh: "音色", en: "Voice" }
+        ,"smart.paramLanguage": { zh: "语言", en: "Language" }
+        ,"smart.paramInstructions": { zh: "演绎要求", en: "Performance Instructions" }
+        ,"smart.paramOptimizeInstructions": { zh: "优化演绎要求", en: "Optimize Instructions" }
+        ,"smart.paramLanguageBoost": { zh: "语言增强", en: "Language Boost" }
+        ,"smart.paramChannel": { zh: "声道", en: "Channels" }
+        ,"smart.paramCustomVoiceId": { zh: "自定义音色 ID", en: "Custom Voice ID" }
+        ,"smart.paramCloneTargetModel": { zh: "目标语音模型", en: "Target Speech Model" }
+        ,"smart.paramNoiseReduction": { zh: "参考音频降噪", en: "Reference Noise Reduction" }
+        ,"smart.paramVolumeNormalization": { zh: "参考音量标准化", en: "Reference Volume Normalization" }
     });
 })();

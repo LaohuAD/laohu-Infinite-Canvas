@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "provider_id": "volcengine",
+  "provider_name": "火山引擎",
+  "status": "maintained",
+  "updated_at": "2026-08-12",
+  "sources": [
+    {"path": "data/api_providers.json", "kind": "user_configuration", "checked_at": "2026-08-12"},
+    {"path": "main.py", "kind": "runtime_verified", "checked_at": "2026-08-12"}
+  ],
+  "models": [],
+  "pending_rule": "当前没有已添加的聊天、图片、视频或音频模型；用户添加具体接入点后，必须依据该接入点官方 Schema 和真实请求建立档案，不凭空补充模型。"
+}

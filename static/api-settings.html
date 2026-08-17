@@ -16,12 +16,13 @@
             } catch(e) {}
         })();
     </script>
-    <script src="/static/vendor/js/tailwindcss-cdn.js?v=2026.08.01.1785292594"></script>
-    <script src="/static/vendor/js/lucide.js?v=2026.08.01.1785292594"></script>
-    <script src="/static/js/theme.js?v=2026.08.01.1785292593"></script>
-    <script src="/static/js/i18n.js?v=2026.08.01.1785292592"></script>
-    <link rel="stylesheet" href="/static/css/theme.css?v=2026.08.01.1785292588">
-    <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.08.01.1785292587">
+    <script src="/static/vendor/js/tailwindcss-cdn.js?v=2026.08.17.1786430759"></script>
+    <script src="/static/vendor/js/lucide.js?v=2026.08.17.1786430759"></script>
+    <script src="/static/js/theme.js?v=2026.08.17.1786430759"></script>
+    <script src="/static/js/i18n.js?v=2026.08.17.1786952927"></script>
+    <link rel="stylesheet" href="/static/css/theme.css?v=2026.08.17.1786430759">
+    <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.08.17.1786780996">
+    <link rel="stylesheet" href="/static/css/studio-ui-polish.css?v=2026.08.17.1786747623">
 </head>
 <body>
     <div class="page">
@@ -65,6 +66,20 @@
 
                     <section id="providerOnboardingCard" class="provider-onboarding-card" hidden></section>
 
+                    <section id="customProviderGuide" class="custom-provider-guide" hidden>
+                        <div class="custom-provider-guide-icon" aria-hidden="true"><i data-lucide="blocks" class="w-5 h-5"></i></div>
+                        <div class="custom-provider-guide-copy">
+                            <div class="custom-provider-guide-title" data-i18n="api.customProviderGuideTitle">接入到智能画布</div>
+                            <div class="custom-provider-guide-desc" data-i18n="api.customProviderGuideDesc">先把第三方官方 API 文档、本项目接入规范和 Manifest Schema 一起交给本地 Agent。先完成本地适配和 dry-run，再在这里填写自己的 Key、拉取目录，最后按文本、图片、视频、音频选择要启用的模型。文件路径：docs/第三方API平台接入规范.md、data/model_capabilities/provider-manifest.schema.json。</div>
+                            <div class="custom-provider-guide-note" data-i18n="api.customProviderModelNote">操作顺序：本地 Agent 适配并通过 dry-run → 用户填写 Key 并拉取模型 → 用户点击“选择模型”保存启用清单。拉取模型不会自动开放能力；删除模型只是停用当前用户的画布候选和真实请求，不删除平台适配、能力档案或历史画布。其他用户需要自行适配并填写自己的 Key。不要把 API Key 交给 Agent。</div>
+                        </div>
+                        <div class="custom-provider-guide-actions">
+                            <a class="action-btn" href="/api/provider-integration-guide" target="_blank" rel="noopener noreferrer"><i data-lucide="book-open" class="w-3.5 h-3.5"></i><span data-i18n="api.viewIntegrationGuide">查看规范</span></a>
+                            <a class="action-btn" href="/api/provider-manifest-schema" target="_blank" rel="noopener noreferrer"><i data-lucide="braces" class="w-3.5 h-3.5"></i><span data-i18n="api.viewManifestSchema">查看 Schema</span></a>
+                            <button id="copyProviderPromptBtn" class="action-btn primary-btn" type="button" onclick="copyProviderAgentPrompt()"><i data-lucide="copy" class="w-3.5 h-3.5"></i><span data-i18n="api.copyAgentPrompt">复制 Agent 指令</span></button>
+                        </div>
+                    </section>
+
                     <section class="block">
                         <div class="block-head">
                             <div>
@@ -82,19 +97,37 @@
                             <label class="field full api-base-url-field">
                                 <span class="label" data-i18n="api.baseUrl">请求地址</span>
                                 <div class="field-frame"><input id="baseInput" type="text" placeholder="https://api.example.com/v1"></div>
+                                <div class="runninghub-region-picker">
+                                    <span class="label" data-i18n="api.rhRegionLabel">RunningHub 当前生效站点</span>
+                                    <div class="runninghub-region-control">
+                                        <select id="rhRegionInput" aria-label="RunningHub 站点">
+                                            <option value="cn" data-i18n="api.rhRegionCn">国内站 .cn</option>
+                                            <option value="global" data-i18n="api.rhRegionGlobal">国际站 .ai</option>
+                                        </select>
+                                        <span class="hint" data-i18n="api.rhRegionHint">可分别配置两站；只有当前选中的站点会映射到画布并参与调用。</span>
+                                    </div>
+                                </div>
                                 <div class="ms-hint">
                                     <span class="ms-line"><span data-i18n="api.msChinaEndpoint">国内默认请求地址：</span><span class="inline-code">https://api-inference.modelscope.cn/v1</span></span>
                                     <span class="ms-line"><span data-i18n="api.msGlobalEndpoint">国外使用请求地址：</span><span class="inline-code">https://api-inference.modelscope.ai/v1</span></span>
                                 </div>
                                 <div class="runninghub-hint">
-                                    <span class="ms-line">国外地址：<span class="inline-code">https://www.runninghub.ai</span></span>
+                                    <span class="ms-line"><span data-i18n="api.rhChinaEndpoint">国内地址：</span><span class="inline-code">https://www.runninghub.cn</span></span>
+                                    <span class="ms-line"><span data-i18n="api.rhGlobalEndpoint">国际地址：</span><span class="inline-code">https://www.runninghub.ai</span></span>
                                 </div>
                                 <div class="apimart-hint">
                                     <span class="ms-line">国内请求地址：<span class="inline-code">https://apib.ai</span></span>
                                 </div>
                                 <div class="volcengine-hint">
-                                    <span class="ms-line">方舟默认请求地址：<span class="inline-code">https://ark.cn-beijing.volces.com/api/v3</span></span>
-                                    <span class="ms-line">Seedance 视频生成使用方舟 API Key，验证会请求 <span class="inline-code">/api/v3/models</span>。</span>
+                                    <span class="ms-line"><span data-i18n="api.volcengineBaseUrlHint">方舟 Base URL（需要 API Key 鉴权，不能用浏览器直接验证）：</span><span class="inline-code">https://ark.cn-beijing.volces.com/api/v3</span></span>
+                                    <span class="ms-line"><span data-i18n="api.volcengineModelsUrlHint">拉取模型时实际请求：</span><span class="inline-code">https://ark.cn-beijing.volces.com/api/v3/models</span></span>
+                                </div>
+                                <div class="ai-money-hint">
+                                    <span class="ms-line" data-i18n="api.aiMoneyUsage">AI MONEY 使用 Bearer API Key，图片和视频任务会自动上传素材并轮询结果。</span>
+                                    <span class="ai-money-links">
+                                        <a href="https://api.laohuaimoney.com/sign-up?aff=460d" target="_blank" rel="noopener noreferrer"><i data-lucide="user-plus" class="w-3 h-3"></i><span data-i18n="api.aiMoneyRegister">注册并获取 Key</span></a>
+                                        <a href="https://api.laohuaimoney.com/docs/" target="_blank" rel="noopener noreferrer"><i data-lucide="book-open" class="w-3 h-3"></i><span data-i18n="api.aiMoneyDocs">查看接入文档</span></a>
+                                    </span>
                                 </div>
                             </label>
                             <label class="field full api-key-field">
@@ -118,8 +151,8 @@
                                             </div>
                                             <div class="rh-key-links">
                                                 <span data-i18n="api.get">获取</span>
-                                                <a href="https://www.runninghub.cn/enterprise-api/consumerApi?inviteCode=rh-v1331" target="_blank" rel="noopener"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.cnKey">国内 Key</span></a>
-                                                <a href="https://www.runninghub.ai/enterprise-api/consumerApi?inviteCode=rh-v1331" target="_blank" rel="noopener"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.globalKey">国外 Key</span></a>
+                                                <a href="https://www.runninghub.cn/enterprise-api/consumerApi?inviteCode=rh-v1001" target="_blank" rel="noopener"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.cnKey">国内 Key</span></a>
+                                                <a href="https://www.runninghub.ai/enterprise-api/consumerApi?inviteCode=rh-v1001" target="_blank" rel="noopener"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.globalKey">国外 Key</span></a>
                                             </div>
                                         </div>
                                         <div class="key-input-line">
@@ -139,8 +172,8 @@
                                             </div>
                                             <div class="rh-key-links">
                                                 <span data-i18n="api.get">获取</span>
-                                                <a href="https://www.runninghub.cn/enterprise-api/sharedApi?inviteCode=rh-v1331" target="_blank" rel="noopener"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.cnKey">国内 Key</span></a>
-                                                <a href="https://www.runninghub.ai/enterprise-api/sharedApi?inviteCode=rh-v1331" target="_blank" rel="noopener"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.globalKey">国外 Key</span></a>
+                                                <a href="https://www.runninghub.cn/enterprise-api/sharedApi?inviteCode=rh-v1001" target="_blank" rel="noopener"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.cnKey">国内 Key</span></a>
+                                                <a href="https://www.runninghub.ai/enterprise-api/sharedApi?inviteCode=rh-v1001" target="_blank" rel="noopener"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.globalKey">国外 Key</span></a>
                                             </div>
                                         </div>
                                         <div class="key-input-line">
@@ -160,6 +193,9 @@
                                                 <div class="rh-key-title" data-i18n="api.volcengineArkKey">方舟 API Key · 生成视频</div>
                                                 <div class="rh-key-desc" data-i18n="api.volcengineArkKeyDesc">用于 Seedance 2.0 生成接口，Authorization: Bearer。</div>
                                             </div>
+                                            <div class="rh-key-links">
+                                                <a href="https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey" target="_blank" rel="noopener noreferrer"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.volcengineGetArkKey">获取方舟 API Key</span></a>
+                                            </div>
                                         </div>
                                         <span id="volcArkKeyHint" class="hint"></span>
                                     </div>
@@ -168,6 +204,9 @@
                                             <div>
                                                 <div class="rh-key-title" data-i18n="api.volcengineAssetKeys">素材库 AK/SK · 上传素材</div>
                                                 <div class="rh-key-desc" data-i18n="api.volcengineAssetKeysDesc">用于 CreateAssetGroup / CreateAsset / GetAsset 的 Access Key 鉴权。</div>
+                                            </div>
+                                            <div class="rh-key-links">
+                                                <a href="https://console.volcengine.com/iam/keymanage/" target="_blank" rel="noopener noreferrer"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.volcengineGetAkSk">获取 AK/SK</span></a>
                                             </div>
                                         </div>
                                         <div class="key-input-line">
@@ -205,6 +244,16 @@
                                     <span class="ms-line"><span data-i18n="api.msTokenCn">获取 Token · 国内：</span><a href="https://www.modelscope.cn/my/access/token" target="_blank">https://www.modelscope.cn/my/access/token</a></span>
                                     <span class="ms-line"><span data-i18n="api.msTokenGlobal">获取 Token · 国外：</span><a href="https://www.modelscope.ai/my/access/token" target="_blank">https://www.modelscope.ai/my/access/token</a></span>
                                 </div>
+                                <div class="ms-binding-guide">
+                                    <div class="ms-binding-copy">
+                                        <div class="ms-binding-title"><i data-lucide="link-2" class="w-3.5 h-3.5"></i><span data-i18n="api.msBindingTitle">Token 之外，还需要绑定阿里云账号</span></div>
+                                        <div class="ms-binding-desc" data-i18n="api.msBindingDesc">Token 只用于证明 ModelScope 身份；部分推理模型还要求当前 ModelScope 账号完成阿里云关联。出现“Please bind your Alibaba Cloud account before use”时，请先完成绑定。</div>
+                                    </div>
+                                    <div class="ms-binding-actions">
+                                        <a href="https://www.modelscope.cn/binding" target="_blank" rel="noopener noreferrer"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.msBindingCn">绑定账号 · 国内</span></a>
+                                        <a href="https://www.modelscope.ai/binding" target="_blank" rel="noopener noreferrer"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.msBindingGlobal">绑定账号 · 国外</span></a>
+                                    </div>
+                                </div>
                                 <div class="runninghub-hint">
                                 </div>
                             </label>
@@ -217,10 +266,10 @@
                                     <div id="jimengCliStatus" class="jimeng-status-pill">未检测</div>
                                 </div>
                                 <div class="jimeng-actions">
-                                    <button class="action-btn primary-btn" type="button" onclick="startJimengLogin()"><i data-lucide="qr-code" class="w-3.5 h-3.5"></i><span>扫码登录</span></button>
-                                    <button class="action-btn" type="button" onclick="refreshJimengCredit()"><i data-lucide="wallet-cards" class="w-3.5 h-3.5"></i><span>查询积分</span></button>
-                                    <button class="action-btn" type="button" onclick="openJimengHelp()"><i data-lucide="terminal" class="w-3.5 h-3.5"></i><span>帮助</span></button>
-                                    <button class="action-btn danger-btn" type="button" onclick="logoutJimeng()"><i data-lucide="log-out" class="w-3.5 h-3.5"></i><span>退出登录</span></button>
+                                    <button class="action-btn primary-btn" type="button" onclick="startJimengLogin()"><i data-lucide="qr-code" class="w-3.5 h-3.5"></i><span data-i18n="api.jimengStartLogin">扫码登录</span></button>
+                                    <button class="action-btn" type="button" onclick="refreshJimengCredit()"><i data-lucide="wallet-cards" class="w-3.5 h-3.5"></i><span data-i18n="api.jimengCredit">查询积分</span></button>
+                                    <button class="action-btn" type="button" onclick="openJimengHelp()"><i data-lucide="terminal" class="w-3.5 h-3.5"></i><span data-i18n="api.jimengHelp">帮助</span></button>
+                                    <button class="action-btn danger-btn" type="button" onclick="logoutJimeng()"><i data-lucide="log-out" class="w-3.5 h-3.5"></i><span data-i18n="api.jimengLogout">退出登录</span></button>
                                 </div>
                                 <div id="jimengCredit" class="jimeng-credit"></div>
                                 <div id="jimengLoginBox" class="jimeng-output" hidden></div>
@@ -291,13 +340,13 @@
                     <section id="runninghubConfigBlock" class="block runninghub-config-block" hidden>
                         <div class="block-head">
                             <div>
-                                <div class="block-title">应用与工作流</div>
-                                <div class="block-desc">粘贴运行路径后，点击右侧创建卡片。</div>
+                                <div class="block-title">AI 应用</div>
+                                <div class="block-desc">只需输入 AI 应用 ID；标题、封面和参数会从 RunningHub 官方自动同步。</div>
                             </div>
                         </div>
                         <div class="rh-paste-row">
-                            <input id="rhPasteInput" class="rh-paste-input" type="text" placeholder="/run/ai-app/... 或 /run/workflow/...">
-                            <button class="action-btn" type="button" onclick="createRhEntryFromPaste()"><i data-lucide="plus" class="w-3.5 h-3.5"></i><span>创建</span></button>
+                            <input id="rhPasteInput" class="rh-paste-input" type="text" placeholder="AI 应用 ID 或 /run/ai-app/...">
+                            <button class="action-btn" type="button" onclick="createRhEntryFromPaste()"><i data-lucide="plus" class="w-3.5 h-3.5"></i><span>添加并同步</span></button>
                         </div>
                         <div class="rh-card-columns">
                             <div class="rh-card-group">
@@ -307,20 +356,13 @@
                                 </div>
                                 <div id="rhAppsList" class="rh-card-list"></div>
                             </div>
-                            <div class="rh-card-group">
-                                <div class="rh-group-head">
-                                    <div class="rh-group-title">工作流</div>
-                                    <div id="rhWorkflowsCount" class="rh-group-count">0</div>
-                                </div>
-                                <div id="rhWorkflowsList" class="rh-card-list"></div>
-                            </div>
                         </div>
                     </section>
 
                     <div id="modelsHead" class="block models-toolbar">
                         <div>
                             <div class="block-title" data-i18n="api.modelsTitle">模型列表</div>
-                            <div class="block-desc" data-i18n="api.modelsDesc">从上游 API 自动拉取所有可用模型并按类型分类（image / chat / video）</div>
+                            <div class="block-desc" data-i18n="api.modelsDesc">先从上游拉取模型目录，再按文本、图片、视频、音频分类选择要启用的模型。只有已启用且已适配的模型会进入画布。</div>
                         </div>
                         <div class="models-toolbar-actions">
                             <button id="fetchModelsBtn" class="action-btn primary-btn" type="button" onclick="fetchModels()">
@@ -366,6 +408,17 @@
                                 <button class="ghost-btn" type="button" onclick="addModel('video')"><i data-lucide="plus" class="w-3.5 h-3.5"></i><span data-i18n="api.model">模型</span></button>
                             </div>
                             <div id="videoModelList" class="model-list"></div>
+                        </section>
+
+                        <section class="block">
+                            <div class="block-head">
+                                <div>
+                                    <div class="block-title" data-i18n="api.audioModels">音频模型</div>
+                                    <div class="block-desc" data-i18n="api.audioHint">智能画布音频生成节点使用</div>
+                                </div>
+                                <button class="ghost-btn" type="button" onclick="addModel('audio')"><i data-lucide="plus" class="w-3.5 h-3.5"></i><span data-i18n="api.model">模型</span></button>
+                            </div>
+                            <div id="audioModelList" class="model-list"></div>
                         </section>
 
                         <section id="msLoraBlock" class="block ms-lora-block">
@@ -428,6 +481,7 @@
                     <button class="picker-cat-tab" data-cat="image" onclick="selectPickerCat('image')">生图 <span class="cat-count">0</span></button>
                     <button class="picker-cat-tab" data-cat="chat" onclick="selectPickerCat('chat')">LLM <span class="cat-count">0</span></button>
                     <button class="picker-cat-tab" data-cat="video" onclick="selectPickerCat('video')">视频 <span class="cat-count">0</span></button>
+                    <button class="picker-cat-tab" data-cat="audio" onclick="selectPickerCat('audio')">音频 <span class="cat-count">0</span></button>
                 </div>
             </div>
             <div id="pickerList" class="picker-body"></div>
@@ -436,6 +490,7 @@
                 <span id="sumImage" class="picker-sum-chip picker-sum-chip-empty">生图 0</span>
                 <span id="sumChat" class="picker-sum-chip picker-sum-chip-empty">聊天 0</span>
                 <span id="sumVideo" class="picker-sum-chip picker-sum-chip-empty">视频 0</span>
+                <span id="sumAudio" class="picker-sum-chip picker-sum-chip-empty">音频 0</span>
                 <span id="sumUnsel" style="margin-left:auto;color:var(--faint)">未选 0</span>
             </div>
             <div class="picker-foot">
@@ -529,8 +584,8 @@
         <div class="rh-workflow-editor-modal">
             <div class="rh-workflow-editor-head">
                 <div class="rh-workflow-editor-title-wrap">
-                    <div id="rhWorkflowEditorTitle" class="rh-workflow-editor-title">RunningHub 工作流</div>
-                    <div id="rhWorkflowEditorSub" class="rh-workflow-editor-sub">选择要暴露到画布的输入参数</div>
+                    <div id="rhWorkflowEditorTitle" class="rh-workflow-editor-title">RunningHub AI 应用</div>
+                    <div id="rhWorkflowEditorSub" class="rh-workflow-editor-sub">配置要暴露到画布的应用参数</div>
                 </div>
                 <div class="rh-workflow-editor-actions">
                     <button class="action-btn" type="button" onclick="fetchRhWorkflowEditor(true)"><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i><span>重新拉取</span></button>
@@ -566,6 +621,7 @@
         </div>
     </div>
 
-    <script src="/static/js/api-settings.js?v=2026.08.01.1785465375"></script>
+    <script src="/static/js/smart-node-contract.js?v=2026.08.17.1786947583"></script>
+    <script src="/static/js/api-settings.js?v=2026.08.17.1786780996"></script>
 </body>
 </html>

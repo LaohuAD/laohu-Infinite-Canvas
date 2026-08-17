@@ -29,28 +29,11 @@ LOG_PATH="$LOG_DIR/openai-codex-cli-install-$(date +%Y%m%d-%H%M%S).log"
     fi
 
     echo ""
-    if command -v npm >/dev/null 2>&1; then
-        echo "Installing/updating GPT Image 2 helper: npm install -g gpt-image-2-skill"
-        if npm install -g gpt-image-2-skill; then
-            :
-        else
-            echo "gpt-image-2-skill install failed. Codex CLI can still run, but Image 2 helper will be unavailable."
-        fi
-    else
-        echo "npm is not available. Skipping gpt-image-2-skill install."
-    fi
-
-    echo ""
     if command -v codex >/dev/null 2>&1; then
         echo "Codex CLI found: $(command -v codex)"
         codex --version || true
-        if command -v gpt-image-2-skill >/dev/null 2>&1; then
-            echo "GPT Image 2 helper found: $(command -v gpt-image-2-skill)"
-        else
-            echo "GPT Image 2 helper is not available in this Terminal PATH yet."
-        fi
         echo ""
-        echo "Done. Run 'codex' in Terminal to sign in and start using OpenAI Codex CLI."
+        echo "安装完成。请在终端运行 'codex' 登录；本项目仅接入 OpenAI Codex CLI 的文本能力。"
     else
         echo "Codex CLI was installed, but 'codex' is not available in this Terminal PATH yet."
         echo "Open a new Terminal, then run: codex"
