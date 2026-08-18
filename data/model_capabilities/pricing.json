@@ -82,19 +82,6 @@
   "rules": [
     {
       "provider_id": "ai-money",
-      "model_id_pattern": "^laohuaimoney-image-g-v2-lowprice$",
-      "record": {
-        "status": "confirmed",
-        "unit": "image",
-        "label_zh": "¥0.0529–不到 ¥0.20 / 次",
-        "label_en": "¥0.0529–under ¥0.20 / run",
-        "details_zh": "1K ¥0.0529/次，2K ¥0.1246/次，4K 不到 ¥0.20/次。",
-        "details_en": "1K: ¥0.0529/run, 2K: ¥0.1246/run, 4K: under ¥0.20/run.",
-        "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
-      }
-    },
-    {
-      "provider_id": "ai-money",
       "model_id_pattern": "^seedance-2\\.0-(?:global-)?standard-multi$",
       "record": {
         "status": "formula",

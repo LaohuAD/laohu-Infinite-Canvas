@@ -25437,8 +25437,3 @@ window.onload = async () => {
     syncApiKindToggleVisibility();
     render();
 };
-    const profileDescription = capabilityUiText(
-        profile?.description_zh || profile?.description || '',
-        profile?.description_en || profile?.description || ''
-    );
-    if(profileDescription) return profileDescription;
