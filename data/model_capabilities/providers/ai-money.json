@@ -21,6 +21,8 @@
       "model_id": "laohuaimoney-image-g-v2-lowprice",
       "family_id": "ai-money-image-g-v2-lowprice",
       "family_name": "AI MONEY Image G V2 · 低价版",
+      "description_zh": "支持 1K、2K、4K 分辨率的低价稳定版图像生成模型，生成能力接近 GPT Image 2。1K ¥0.0529/次，2K ¥0.1246/次，4K 不到 ¥0.20/次。",
+      "description_en": "A low-cost, stable image generation model supporting 1K, 2K, and 4K resolutions, with capabilities close to GPT Image 2. 1K: ¥0.0529/run, 2K: ¥0.1246/run, 4K: under ¥0.20/run.",
       "variant_id": "text_or_image_to_image",
       "node_type": "image_generation",
       "operation": "text_to_image",
