@@ -4,7 +4,7 @@
     /* ---------------------------------------------------------------------
      * HistoryBulkManager
      * 历史图片批量管理：进入管理模式后可多选 / 全选 / 批量删除。
-     * 5 个生成页面（在线生图 / 文生图 / 细节增强 / 图片编辑 / 角度控制）
+     * 历史结果页面可以复用同一套选择交互；默认兼容旧时间戳历史，结果模式使用统一结果 ID。
      * 共用同一套契约：
      *   - 卡片含 [data-history-ts] 属性 与 id="history-{ts}"
      *   - 卡片 onclick 在 body.history-bulk-selecting 时提前 return
@@ -93,6 +93,7 @@
         injectStyles();
 
         let selecting = false;
+        const resultMode = opts.mode === 'results';
 
         /* -------- 工具条 -------- */
         const bar = document.createElement('div');
@@ -192,17 +193,35 @@
             deleteBtn.disabled = true;
             deleteLabel.textContent = tr('bulk.deleting');
 
-            const results = await Promise.allSettled(sel.map(card => {
-                const ts = card.dataset.historyTs;
-                return fetch('/api/history/delete', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ timestamp: ts })
-                }).then(r => r.json()).then(res => {
-                    if(res && res.success){ card.remove(); return true; }
-                    throw new Error('delete failed');
-                });
-            }));
+            let results;
+            if(resultMode){
+                const ids = sel.map(card => card.dataset.resultId || card.dataset.historyTs).filter(Boolean);
+                results = await Promise.allSettled([
+                    fetch('/api/results/delete', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ids })
+                    }).then(async response => {
+                        if(!response.ok) throw new Error('delete failed');
+                        const payload = await response.json();
+                        if(Number(payload?.removed || 0) < ids.length) throw new Error('delete failed');
+                        sel.forEach(card => card.remove());
+                        return true;
+                    })
+                ]);
+            } else {
+                results = await Promise.allSettled(sel.map(card => {
+                    const ts = card.dataset.historyTs;
+                    return fetch('/api/history/delete', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ timestamp: ts })
+                    }).then(r => r.json()).then(res => {
+                        if(res && res.success){ card.remove(); return true; }
+                        throw new Error('delete failed');
+                    });
+                }));
+            }
 
             const failed = results.filter(r => r.status === 'rejected').length;
             if(failed > 0) alert(failed + ' / ' + sel.length + ' ✗');

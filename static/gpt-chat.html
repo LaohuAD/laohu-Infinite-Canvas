@@ -19,7 +19,7 @@
     <script src="/static/vendor/js/tailwindcss-cdn.js?v=2026.08.17.1786430759"></script>
     <script src="/static/vendor/js/lucide.js?v=2026.08.17.1786430759"></script>
     <script src="/static/js/theme.js?v=2026.08.17.1786430759"></script>
-    <script src="/static/js/i18n.js?v=2026.08.17.1786952927"></script>
+    <script src="/static/js/i18n.js?v=2026.08.17.1787068901"></script>
     <link rel="stylesheet" href="/static/css/theme.css?v=2026.08.17.1786430759">
     <style>
         @import url('/static/vendor/css/fonts.css?v=2026.08.17.1786430759');
@@ -606,7 +606,15 @@
 
     <script>
         lucide.createIcons();
-        function tr(key){ return window.StudioI18n ? StudioI18n.t(key) : key; }
+        function tr(key){
+            const value = window.StudioI18n ? StudioI18n.t(key) : key;
+            if(value !== key) return value;
+            const fallback = {
+                'chat.noConfiguredModel': {zh:'API 设置中没有当前模式可用的平台或模型，请先配置并启用对应模型。', en:'No enabled provider or model is available for the current mode. Configure one in API Settings first.'}
+            };
+            const lang = window.StudioI18n?.lang?.() === 'en' ? 'en' : 'zh';
+            return fallback[key]?.[lang] || key;
+        }
         function defaultTitle(){ return tr('chat.newConversation'); }
         function setChatTitle(title){
             document.getElementById('chatTitle').textContent = title || defaultTitle();
@@ -660,10 +668,9 @@
         let conversations = [];
         let currentConversation = null;
         let mode = 'agent';
-        let provider = savedChatSettings.provider || 'comfly';
-        let msModel = savedChatSettings.msModel || '';
+        let provider = savedChatSettings.provider || '';
         let activeChatModel = savedChatSettings.activeChatModel || '';
-        let activeImageProvider = savedChatSettings.activeImageProvider || 'comfly';
+        let activeImageProvider = savedChatSettings.activeImageProvider || '';
         let activeImageModel = savedChatSettings.activeImageModel || '';
         let systemPrompt = String(savedChatSettings.systemPrompt || '').trim();
         let apiProviders = [];
@@ -676,7 +683,6 @@
         let modelPickerHome = null;
         let resolutionPickerHome = null;
         let refs = [];
-        let config = { chat_model: 'gpt-5.5', image_model: 'gpt-image-2', ms_chat_models: [] };
 
         const SIZE_OPTIONS = {
             square: [['1024x1024','1k'], ['1536x1536','2k'], ['2048x2048','4k']],
@@ -716,7 +722,6 @@
                 localStorage.setItem(CHAT_SETTINGS_KEY, JSON.stringify({
                     mode,
                     provider,
-                    msModel,
                     activeChatModel,
                     activeImageProvider,
                     activeImageModel,
@@ -776,12 +781,11 @@
         }
         function chatProviders(){
             const list = (apiProviders || []).filter(p => p.enabled !== false && (p.chat_models || []).length);
-            if(config.ms_chat_models?.length && !list.some(p => p.id === 'modelscope')) list.push({id:'modelscope', name:'ModelScope', chat_models:config.ms_chat_models, image_models:[]});
-            return list.length ? list : [{id:'comfly', name:'API', chat_models:[config.chat_model || 'gpt-4o-mini'], image_models:[config.image_model || 'gpt-image-2']}];
+            return list;
         }
         function imageProviders(){
             const list = (apiProviders || []).filter(p => p.enabled !== false && (p.image_models || []).length);
-            return list.length ? list : [{id:'comfly', name:'API', image_models:[config.image_model || 'gpt-image-2'], chat_models:[config.chat_model || 'gpt-4o-mini']}];
+            return list;
         }
         function providerById(id, kind='chat'){
             const list = kind === 'image' ? imageProviders() : chatProviders();
@@ -795,10 +799,10 @@
         }
         function modelListForCurrent(kind=activePickerKind()){
             const item = providerById(currentProviderId(kind), kind);
-            return uniqueModels(kind === 'image' ? item.image_models : item.chat_models);
+            return uniqueModels(kind === 'image' ? item?.image_models : item?.chat_models);
         }
         function currentModel(kind=activePickerKind()){
-            return kind === 'image' ? activeImageModel : (provider === 'modelscope' ? (msModel || activeChatModel) : activeChatModel);
+            return kind === 'image' ? activeImageModel : activeChatModel;
         }
         function providerNameById(id, kind=activePickerKind()){
             const item = providerById(id, kind);
@@ -807,61 +811,58 @@
         function shortModelName(value){
             return String(value || '').split('/').pop().split(':')[0] || 'Model';
         }
+        function modelDisplayName(providerItem, modelId){
+            const id = String(modelId || '').trim();
+            return String(providerItem?.model_names?.[id] || id).trim() || id;
+        }
         function renderProviderControls(){
             const kind = activePickerKind();
             const providers = kind === 'image' ? imageProviders() : chatProviders();
             const pid = currentProviderId(kind);
             if(!providers.some(p => p.id === pid)) {
-                if(kind === 'image') activeImageProvider = providers[0]?.id || 'comfly';
-                else provider = providers[0]?.id || 'comfly';
+                if(kind === 'image') activeImageProvider = providers[0]?.id || '';
+                else provider = providers[0]?.id || '';
             }
             const models = modelListForCurrent(kind);
-            if(kind === 'image' && !models.includes(activeImageModel)) activeImageModel = models[0] || config.image_model;
-            if(kind !== 'image' && !models.includes(activeChatModel)) activeChatModel = chatProviderModels[provider] && models.includes(chatProviderModels[provider]) ? chatProviderModels[provider] : (models[0] || config.chat_model);
-            if(kind !== 'image' && provider === 'modelscope') msModel = activeChatModel;
+            if(kind === 'image' && !models.includes(activeImageModel)) activeImageModel = models[0] || '';
+            if(kind !== 'image' && !models.includes(activeChatModel)) activeChatModel = chatProviderModels[provider] && models.includes(chatProviderModels[provider]) ? chatProviderModels[provider] : (models[0] || '');
             renderModelPicker();
         }
 
         function validateSavedProviderState(){
             const chatProviderList = chatProviders();
-            provider = chatProviderList.some(p => p.id === provider) ? provider : (chatProviderList[0]?.id || 'comfly');
+            provider = chatProviderList.some(p => p.id === provider) ? provider : (chatProviderList[0]?.id || '');
             const chatModels = uniqueModels(providerById(provider, 'chat')?.chat_models || []);
             const rememberedChatModel = chatProviderModels[provider];
             activeChatModel = chatModels.includes(activeChatModel)
                 ? activeChatModel
-                : (chatModels.includes(rememberedChatModel) ? rememberedChatModel : (chatModels[0] || config.chat_model));
+                : (chatModels.includes(rememberedChatModel) ? rememberedChatModel : (chatModels[0] || ''));
             chatProviderModels[provider] = activeChatModel;
-            if(provider === 'modelscope') msModel = activeChatModel;
-            if(config.ms_chat_models?.length && msModel && !config.ms_chat_models.includes(msModel)) msModel = config.ms_chat_models[0];
-            if(config.ms_chat_models?.length && provider === 'modelscope') activeChatModel = msModel || config.ms_chat_models[0];
 
             const imageProviderList = imageProviders();
-            activeImageProvider = imageProviderList.some(p => p.id === activeImageProvider) ? activeImageProvider : (imageProviderList[0]?.id || 'comfly');
+            activeImageProvider = imageProviderList.some(p => p.id === activeImageProvider) ? activeImageProvider : (imageProviderList[0]?.id || '');
             const imageModels = uniqueModels(providerById(activeImageProvider, 'image')?.image_models || []);
-            activeImageModel = imageModels.includes(activeImageModel) ? activeImageModel : (imageModels[0] || config.image_model);
+            activeImageModel = imageModels.includes(activeImageModel) ? activeImageModel : (imageModels[0] || '');
             if(mode !== 'agent' && mode !== 'chat' && mode !== 'image') mode = 'chat';
             if(mode === 'chat') modelPickerScope = 'chat';
             if(mode === 'image') modelPickerScope = 'image';
         }
 
-        async function loadConfig(){
+        async function loadProviders(){
             try {
-                const data = await fetch('/api/config').then(r=>r.json());
-                config = { ...config, ...data };
-                apiProviders = Array.isArray(config.api_providers) ? config.api_providers : [];
-                config.chat_model = (config.chat_models || []).find(m => m === 'gpt-5.5') || config.chat_model || 'gpt-5.5';
-                config.image_model = config.image_model || ((config.image_models || [])[0]) || 'gpt-image-2';
+                const data = await fetch('/api/providers', {cache:'no-store'}).then(r=>r.json());
+                apiProviders = Array.isArray(data.providers) ? data.providers : [];
                 validateSavedProviderState();
                 setMode(mode, false);
                 updateModelLabel();
                 saveChatSettings();
-            } catch(e) {}
+            } catch(e) { apiProviders = []; provider = ''; activeChatModel = ''; activeImageProvider = ''; activeImageModel = ''; }
         }
         try {
             const apiChannel = new BroadcastChannel('studio-api');
             apiChannel.onmessage = async (e) => {
                 if(e.data?.type === 'providers-changed'){
-                    await loadConfig();
+                    await loadProviders();
                     renderProviderControls();
                     updateModelLabel();
                 }
@@ -875,7 +876,6 @@
             if(kind === 'image') activeImageModel = models[0] || activeImageModel;
             else {
                 activeChatModel = chatProviderModels[provider] && models.includes(chatProviderModels[provider]) ? chatProviderModels[provider] : (models[0] || activeChatModel);
-                if(provider === 'modelscope') msModel = activeChatModel;
             }
             renderProviderControls();
             updateModelLabel();
@@ -886,7 +886,6 @@
             else {
                 activeChatModel = model;
                 chatProviderModels[provider] = model;
-                if(provider === 'modelscope') msModel = model;
             }
             renderProviderControls();
             updateModelLabel();
@@ -1023,9 +1022,9 @@
             const currentMdl = currentModel(kind);
             providerLabel.textContent = providerNameById(currentPid, kind);
             if(mode === 'agent') {
-                modelLabel.textContent = `${shortModelName(activeChatModel)} + ${shortModelName(activeImageModel)}`;
+                modelLabel.textContent = `${modelDisplayName(providerById(provider, 'chat'), activeChatModel)} + ${modelDisplayName(providerById(activeImageProvider, 'image'), activeImageModel)}`;
             } else {
-                modelLabel.textContent = shortModelName(currentMdl);
+                modelLabel.textContent = modelDisplayName(providerById(currentPid, kind), currentMdl);
             }
             title.textContent = mode === 'agent' ? 'Agent 模型' : (kind === 'image' ? '生图模型' : '对话模型');
             scope.innerHTML = mode === 'agent'
@@ -1038,7 +1037,7 @@
                 : `<div class="model-picker-empty">暂无平台</div>`;
             const models = modelListForCurrent(kind);
             modelList.innerHTML = models.length
-                ? models.map(m => `<button class="model-picker-option ${m === currentMdl ? 'active' : ''}" onclick="setActiveModel('${escapeHtml(m)}','${kind}');toggleModelPicker(false)"><span>${escapeHtml(shortModelName(m))}</span>${m === currentMdl ? '<i data-lucide="check"></i>' : ''}</button>`).join('')
+                ? models.map(m => `<button class="model-picker-option ${m === currentMdl ? 'active' : ''}" onclick="setActiveModel('${escapeHtml(m)}','${kind}');toggleModelPicker(false)"><span>${escapeHtml(modelDisplayName(providerById(currentPid, kind), m))}</span>${m === currentMdl ? '<i data-lucide="check"></i>' : ''}</button>`).join('')
                 : `<div class="model-picker-empty">暂无模型</div>`;
             lucide.createIcons();
         }
@@ -1149,19 +1148,13 @@
         function updateModelLabel(){
             let label = '';
             if (mode === 'image') {
-                label = activeImageModel || config.image_model || 'Image';
+                label = modelDisplayName(providerById(activeImageProvider, 'image'), activeImageModel) || 'Image';
             } else if (mode === 'agent') {
-                const chatLabel = provider === 'modelscope'
-                    ? (msModel || (config.ms_chat_models?.[0]) || 'ModelScope').split('/').pop().split(':')[0]
-                    : (activeChatModel || config.chat_model || 'Chat');
-                const imageLabel = (activeImageModel || config.image_model || 'Image').split('/').pop().split(':')[0];
+                const chatLabel = modelDisplayName(providerById(provider, 'chat'), activeChatModel) || 'Chat';
+                const imageLabel = modelDisplayName(providerById(activeImageProvider, 'image'), activeImageModel) || 'Image';
                 label = `Agent · ${chatLabel} + ${imageLabel}`;
-            } else if (provider === 'modelscope') {
-                label = msModel || (config.ms_chat_models?.[0]) || 'ModelScope';
-                // Shorten the display label
-                label = label.split('/').pop().split(':')[0];
             } else {
-                label = activeChatModel || config.chat_model || 'Chat';
+                label = modelDisplayName(providerById(provider, 'chat'), activeChatModel) || 'Chat';
             }
             const labelEl = document.getElementById('modelLabel');
             if(labelEl) labelEl.textContent = label;
@@ -1512,6 +1505,12 @@
             const input = document.getElementById('messageInput');
             const message = input.value.trim();
             if(!message) return;
+            const chatReady = Boolean(provider && activeChatModel);
+            const imageReady = Boolean(activeImageProvider && activeImageModel);
+            if((mode === 'chat' && !chatReady) || (mode === 'image' && !imageReady) || (mode === 'agent' && (!chatReady || !imageReady))){
+                renderMessages([...(currentConversation?.messages || []), {role:'assistant', content:tr('chat.noConfiguredModel')}]);
+                return;
+            }
             const btn = document.getElementById('sendBtn');
             btn.disabled = true;
             const requestedSize = chatSizeFromPrompt(message);
@@ -1547,8 +1546,8 @@
                             size: requestedSize,
                             aspect_ratio: requestAspectRatio,
                             resolution: requestResolution,
-                            model: provider === 'modelscope' ? (msModel || activeChatModel) : (activeChatModel || config.chat_model),
-                            ms_model: provider === 'modelscope' ? (msModel || activeChatModel) : '',
+                            model: activeChatModel,
+                            ms_model: '',
                             reference_images: pendingRefs,
                             provider,
                         })
@@ -1570,9 +1569,9 @@
                             size: requestedSize,
                             aspect_ratio: requestAspectRatio,
                             resolution: requestResolution,
-                            model: provider === 'modelscope' ? (msModel || activeChatModel) : (activeChatModel || config.chat_model),
-                            ms_model: provider === 'modelscope' ? (msModel || activeChatModel) : '',
-                            image_model: activeImageModel || config.image_model,
+                            model: activeChatModel,
+                            ms_model: '',
+                            image_model: activeImageModel,
                             reference_images: pendingRefs,
                             provider,
                             image_provider: activeImageProvider,
@@ -1595,8 +1594,8 @@
                             size: requestedSize,
                             aspect_ratio: requestAspectRatio,
                             resolution: requestResolution,
-                            model: activeChatModel || config.chat_model,
-                            image_model: activeImageModel || config.image_model,
+                            model: activeChatModel,
+                            image_model: activeImageModel,
                             reference_images: pendingRefs,
                             provider: activeImageProvider,
                         })
@@ -1617,8 +1616,8 @@
 
         async function streamChatMessage(message, pendingRefs, assistantBubble){
             const currentProvider = provider;
-            const currentMsModel = provider === 'modelscope' ? (msModel || activeChatModel || (config.ms_chat_models?.[0] || '')) : '';
-            const currentChatModel = activeChatModel || config.chat_model;
+            const currentMsModel = '';
+            const currentChatModel = activeChatModel;
 
             const res = await fetch('/api/chat/stream', {
                 method:'POST',
@@ -1628,8 +1627,8 @@
                     message,
                     system_prompt: currentSystemPrompt(),
                     mode:'chat',
-                    model: currentProvider === 'modelscope' ? currentMsModel : currentChatModel,
-                    ms_model: currentProvider === 'modelscope' ? currentMsModel : '',
+                    model: currentChatModel,
+                    ms_model: '',
                     provider: currentProvider,
                     reference_images: pendingRefs
                 })
@@ -1681,7 +1680,7 @@
             syncSystemPromptUI();
             setChatRatio(chatRatio);
             setChatResolution(chatResolution);
-            await loadConfig();
+            await loadProviders();
             await loadConversations();
             updateComposerOverflow();
         };

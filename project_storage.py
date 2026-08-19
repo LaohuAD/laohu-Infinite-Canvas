@@ -682,6 +682,25 @@ class ProjectStorage:
             items.append(item)
         return sorted(items, key=lambda item: int(item.get("created_at") or 0), reverse=True)
 
+    def prune_missing_results(self, kind: str = "") -> int:
+        with self._lock:
+            index = self._load_index(self.result_index_path)
+            kept = []
+            removed = 0
+            for item in index["items"]:
+                if kind and item.get("kind") != kind:
+                    kept.append(item)
+                    continue
+                path = self._asset_path(item.get("path") or "")
+                if path.is_file():
+                    kept.append(item)
+                else:
+                    removed += 1
+            if removed:
+                index["items"] = kept
+                self._save_index(self.result_index_path, index)
+            return removed
+
     def set_result_source_canvas(self, result_id: str, canvas: dict[str, Any]) -> dict[str, Any]:
         canvas_id = str((canvas or {}).get("id") or "").strip()
         if not canvas_id:
@@ -699,7 +718,7 @@ class ProjectStorage:
             item["source_canvas"] = {
                 "id": canvas_id,
                 "title": str((canvas or {}).get("title") or current.get("title") or "未命名画布")[:120],
-                "kind": str((canvas or {}).get("kind") or current.get("kind") or "classic"),
+                "kind": str((canvas or {}).get("kind") or current.get("kind") or "smart"),
             }
             item["updated_at"] = now_ms()
             self._save_index(self.result_index_path, index)
@@ -717,6 +736,39 @@ class ProjectStorage:
             for key, value in changes.items():
                 if key in allowed:
                     item[key] = value
+            item["updated_at"] = now_ms()
+            self._save_index(self.result_index_path, index)
+            value = dict(item)
+            value["url"] = self.result_url(result_id)
+            return value
+
+    def rename_result(self, result_id: str, display_name: str) -> dict[str, Any]:
+        name = safe_name(display_name, "生成结果")
+        with self._lock:
+            index = self._load_index(self.result_index_path)
+            item = next((entry for entry in index["items"] if entry.get("id") == result_id), None)
+            if not item:
+                raise StorageError("生成结果不存在")
+            old_path = self._asset_path(item.get("path") or "")
+            extension = old_path.suffix or Path(item.get("original_name") or "").suffix
+            known_extensions = {extension.lower()} | {
+                suffix for values in MEDIA_EXTENSIONS.values() for suffix in values
+            }
+            if Path(name).suffix.lower() in known_extensions:
+                name = Path(name).stem or "生成结果"
+            display_filename = f"{name}{extension}" if extension else name
+            digest = item.get("sha256") or (sha256_file(old_path) if old_path.is_file() else "")
+            target = self._readable_target(
+                self.results_dir / (item.get("kind") or "file"),
+                display_filename,
+                digest,
+            )
+            if old_path.is_file() and old_path != target:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(old_path), str(target))
+            item["display_name"] = display_filename
+            item["path"] = self._asset_relative(target)
+            item["size"] = target.stat().st_size if target.is_file() else item.get("size", 0)
             item["updated_at"] = now_ms()
             self._save_index(self.result_index_path, index)
             value = dict(item)

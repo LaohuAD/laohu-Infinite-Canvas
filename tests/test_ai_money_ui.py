@@ -23,7 +23,7 @@ class AiMoneyUiTests(unittest.TestCase):
         loader = (ROOT / "static/js/i18n.js").read_text(encoding="utf-8")
         app_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         asset_version = f"{app_version}.{int(os.path.getmtime(ROOT / 'static/js/i18n.js'))}"
-        loader_version = "2026.08.17.release.1"
+        loader_version = "2026.08.18.release.1"
 
         self.assertIn(f'/static/js/i18n.js?v={asset_version}', html)
         self.assertIn(f"const VERSION = '{loader_version}';", loader)

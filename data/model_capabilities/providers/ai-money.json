@@ -3,17 +3,17 @@
   "provider_id": "ai-money",
   "provider_name": "AI MONEY",
   "status": "maintained",
-  "updated_at": "2026-08-12",
+  "updated_at": "2026-08-18",
   "sources": [
     {
       "url": "https://api.laohuaimoney.com/docs/llms.txt",
       "kind": "official_documented",
-      "checked_at": "2026-08-12"
+      "checked_at": "2026-08-18"
     },
     {
       "path": "main.py",
       "kind": "runtime_verified",
-      "checked_at": "2026-08-12"
+      "checked_at": "2026-08-18"
     }
   ],
   "models": [

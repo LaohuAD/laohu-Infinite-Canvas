@@ -4,8 +4,9 @@
   "provider_name": "即梦 CLI",
   "protocol": "jimeng",
   "status": "maintained",
-  "updated_at": "2026-08-12",
+  "updated_at": "2026-08-18",
   "sources": [
+    {"path": "dreamina text2image --help / dreamina image2image --help", "kind": "runtime_verified", "checked_at": "2026-08-18"},
     {"path": "main.py", "kind": "runtime_verified", "checked_at": "2026-08-12"},
     {"path": "CLI/macos/jimeng/install_jimeng_cli.command", "kind": "project_installer", "checked_at": "2026-08-12"},
     {"path": "CLI/windows/jimeng/jimeng_cli_install.ps1", "kind": "project_installer", "checked_at": "2026-08-12"}

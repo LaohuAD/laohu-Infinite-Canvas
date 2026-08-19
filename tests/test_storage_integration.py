@@ -112,6 +112,21 @@ class StorageIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["items"][0]["kind"], "video")
         self.assertEqual(response["items"][0]["url"], url)
 
+    async def test_generation_result_rename_keeps_stable_public_url(self):
+        source = self.root / "generated.png"
+        source.write_bytes(b"generated-image")
+        result = self.storage.store_result_file(source, "原名称.png", move=True)
+
+        response = await main.rename_generation_result(
+            result["id"],
+            {"name": "新名称"},
+            make_request("127.0.0.1:3000"),
+        )
+
+        self.assertEqual(response["item"]["id"], result["id"])
+        self.assertEqual(response["item"]["name"], "新名称.png")
+        self.assertEqual(response["item"]["url"], self.storage.result_url(result["id"]))
+
     async def test_material_route_reads_file_from_index(self):
         item = self.storage.store_material_bytes(b"image", "人物.png")
 

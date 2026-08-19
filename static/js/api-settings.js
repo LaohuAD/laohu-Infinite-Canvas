@@ -49,7 +49,14 @@ const rhAppsList = document.getElementById('rhAppsList');
 const rhWorkflowsList = document.getElementById('rhWorkflowsList');
 const rhAppsCount = document.getElementById('rhAppsCount');
 const rhWorkflowsCount = document.getElementById('rhWorkflowsCount');
+const rhPasteAddBtn = document.querySelector('.rh-paste-row .action-btn');
 const settingsContent = document.getElementById('settingsContent');
+const providerSettingsView = document.getElementById('providerSettingsView');
+const comfyuiSettingsBlock = document.getElementById('comfyuiSettingsBlock');
+const comfyuiSubnav = document.getElementById('comfyuiSubnav');
+const localComfyuiNav = document.getElementById('localComfyuiNav');
+const runningHubComfyuiNav = document.getElementById('runningHubComfyuiNav');
+const comfyuiLocalSection = document.getElementById('comfyuiLocalSection');
 const recommendContent = document.getElementById('recommendContent');
 const recommendPanel = document.getElementById('recommendPanel');
 const providerOnboardingCard = document.getElementById('providerOnboardingCard');
@@ -101,6 +108,59 @@ const RUNNINGHUB_REGIONS = {
         walletUrl:'https://www.runninghub.ai/enterprise-api/sharedApi?inviteCode=rh-v1001'
     }
 };
+let rhAppSyncState = null;
+let comfyuiSettingsMode = false;
+let comfyuiSettingsSection = 'local';
+function syncComfyUiNavigation(){
+    const local = comfyuiSettingsMode && comfyuiSettingsSection === 'local';
+    const runninghub = comfyuiSettingsMode && comfyuiSettingsSection === 'runninghub';
+    comfyuiSubnav?.classList.toggle('active', comfyuiSettingsMode);
+    localComfyuiNav?.classList.toggle('active', local);
+    runningHubComfyuiNav?.classList.toggle('active', runninghub);
+    localComfyuiNav?.setAttribute('aria-current', local ? 'page' : 'false');
+    runningHubComfyuiNav?.setAttribute('aria-current', runninghub ? 'page' : 'false');
+    if(comfyuiLocalSection) comfyuiLocalSection.hidden = !local;
+    if(runninghubConfigBlock) runninghubConfigBlock.hidden = !runninghub;
+}
+function setComfyUiSection(section='local'){
+    comfyuiSettingsSection = section === 'runninghub' ? 'runninghub' : 'local';
+    if(comfyuiSettingsSection === 'runninghub'){
+        const runningHub = providers.find(item => item.id === 'runninghub');
+        if(runningHub) selectedId = 'runninghub';
+    }
+    syncComfyUiNavigation();
+    renderEditor();
+    refreshIcons();
+}
+function openComfyUiSettings(section='local'){
+    comfyuiSettingsMode = true;
+    providerSettingsView?.classList.add('comfyui-embedded-mode');
+    if(comfyuiSettingsBlock) comfyuiSettingsBlock.hidden = false;
+    document.querySelector('.api-page-delete-btn')?.setAttribute('hidden', 'hidden');
+    document.querySelector('.api-page-save-btn')?.setAttribute('hidden', 'hidden');
+    renderProviderList();
+    setComfyUiSection(section);
+}
+function closeComfyUiSettings(){
+    comfyuiSettingsMode = false;
+    providerSettingsView?.classList.remove('comfyui-embedded-mode');
+    if(comfyuiSettingsBlock) comfyuiSettingsBlock.hidden = true;
+    document.querySelector('.api-page-delete-btn')?.removeAttribute('hidden');
+    document.querySelector('.api-page-save-btn')?.removeAttribute('hidden');
+    syncComfyUiNavigation();
+    renderEditor();
+}
+function setRhAppSyncState(nextState){
+    rhAppSyncState = nextState;
+    if(rhPasteInput) rhPasteInput.disabled = Boolean(nextState);
+    if(rhPasteAddBtn) rhPasteAddBtn.disabled = Boolean(nextState);
+    renderRunningHubCards();
+}
+function updateRhAppSyncPhase(phase){
+    if(!rhAppSyncState) return;
+    rhAppSyncState = {...rhAppSyncState, phase};
+    renderRunningHubCards();
+}
 function runningHubRegionFromItem(item){
     const raw = String(item?.rh_region || '').trim().toLowerCase();
     if(RUNNINGHUB_REGIONS[raw]) return raw;
@@ -178,6 +238,8 @@ function persistActiveRunningHubRegion(item){
     active.rh_apps = normalizeRhEntries(item.rh_apps || [], 'app');
     active.rh_workflows = normalizeRhEntries(item.rh_workflows || [], 'workflow');
     regions[region] = active;
+    item.rh_apps = active.rh_apps;
+    item.rh_workflows = active.rh_workflows;
     return active;
 }
 const LINGJING_DEFAULT_BASE_URL = 'https://apistudio.vip';
@@ -355,7 +417,14 @@ function tr(key){
         'api.jimengVerified':'即梦 CLI 登录验证成功',
         'api.jimengExpired':'本次认证已过期，请重新登录',
         'api.jimengFailed':'即梦登录验证失败，请重新登录',
-        'api.jimengRetry':'重新登录'
+        'api.jimengRetry':'重新登录',
+        'api.comfyuiSettingsTitle':'ComfyUI 设置',
+        'api.comfyuiSettingsMeta':'本地工作流与 RunningHub 应用',
+        'api.comfyuiSubnavTitle':'ComfyUI 设置',
+        'api.localComfyuiNav':'本地 ComfyUI',
+        'api.runningHubComfyuiNav':'RunningHub ComfyUI',
+        'api.comfyuiSettingsDesc':'在这里统一管理 RunningHub AI 应用和本地 ComfyUI 工作流。RunningHub 的 API Key 仍在对应平台中保存。',
+        'api.comfyuiSettingsBack':'返回平台设置'
     };
     return fallback[key] || key;
 }
@@ -608,6 +677,12 @@ function normalizeRhEntries(values, kind){
             thumbnail:String(raw?.thumbnail || '').trim(),
             enabled:raw?.enabled !== false
         };
+        ['title_zh','title_en','name_zh','name_en'].forEach(key => {
+            if(raw?.[key] !== undefined && raw?.[key] !== null) entry[key] = String(raw[key]).trim();
+        });
+        ['titles','names','localizedNames','webappNames'].forEach(key => {
+            if(raw?.[key] && typeof raw[key] === 'object' && !Array.isArray(raw[key])) entry[key] = {...raw[key]};
+        });
         if(raw?.hidden === true) entry.hidden = true;
         if(Array.isArray(raw?.fields)) entry.fields = raw.fields.map(normalizeRhWorkflowField);
         if(raw?.workflowJson && typeof raw.workflowJson === 'object') entry.workflowJson = raw.workflowJson;
@@ -625,12 +700,26 @@ function normalizeRhEntries(values, kind){
         return entry;
     }).filter(Boolean);
 }
+function runningHubLocalizedTitle(entry, region=currentRunningHubRegion(provider())){
+    const isEnglish = region !== 'cn' && window.StudioI18n?.lang?.() === 'en';
+    const localized = [entry?.titles, entry?.names, entry?.localizedNames, entry?.webappNames]
+        .find(value => value && typeof value === 'object' && !Array.isArray(value)) || {};
+    const values = isEnglish
+        ? [entry?.title_en, entry?.name_en, localized.en, localized.en_US, localized['en-US'], localized.english]
+        : [entry?.title_zh, entry?.name_zh, localized.zh, localized.zh_CN, localized['zh-CN'], localized.chinese];
+    const selected = values.find(value => String(value || '').trim());
+    return String(selected || entry?.title || entry?.name || '').trim();
+}
 function parseRunningHubRunRef(value){
     const text = String(value || '').trim();
-    const match = text.match(/\/run\/(ai-app|workflow)\/([0-9A-Za-z_-]+)/i);
+    const match = text.match(/\/(?:run\/)?(ai-app|workflow)\/([0-9A-Za-z_-]+)/i);
     if(match) return { type:match[1].toLowerCase() === 'ai-app' ? 'app' : 'workflow', id:match[2] };
-    const numeric = text.match(/^[0-9]{8,}$/);
-    if(numeric) return { type:'app', id:text };
+    try {
+        const url = new URL(text);
+        const id = url.searchParams.get('webappId') || url.searchParams.get('appId') || url.searchParams.get('webapp_id');
+        if(id && /^[0-9A-Za-z_-]{4,}$/.test(id)) return { type:'app', id };
+    } catch(_error) {}
+    if(/^[0-9A-Za-z_-]{4,}$/.test(text)) return { type:'app', id:text };
     return null;
 }
 function workflowNodeTitle(node){
@@ -658,10 +747,10 @@ function rhWorkflowFieldKind(field){
         if(type === 'FLOAT' || type === 'INT' || type === 'INTEGER') return 'NUMBER';
         return type;
     }
-    const key = `${field?.fieldName || ''} ${field?.fieldValue || ''}`.toLowerCase();
-    if(/image|img|mask|png|jpg|jpeg|webp/.test(key)) return 'IMAGE';
-    if(/video|mp4|webm|mov/.test(key)) return 'VIDEO';
-    if(/audio|wav|mp3|voice|sound/.test(key)) return 'AUDIO';
+    const key = `${field?.fieldName || ''} ${field?.label || field?.title || field?.description || ''} ${field?.fieldValue || ''}`.toLowerCase();
+    if(/image|img|mask|png|jpg|jpeg|webp|图片|图像|照片|参考图|首帧|尾帧/.test(key)) return 'IMAGE';
+    if(/video|mp4|webm|mov|视频|影片/.test(key)) return 'VIDEO';
+    if(/audio|wav|mp3|voice|sound|音频|声音|语音|音乐/.test(key)) return 'AUDIO';
     if(/true|false/.test(key)) return 'BOOLEAN';
     if(/^-?\d+(\.\d+)?$/.test(String(field?.fieldValue || '').trim())) return 'NUMBER';
     return 'TEXT';
@@ -701,7 +790,7 @@ function normalizeRhWorkflowField(field){
     const options = Array.isArray(field?.options)
         ? field.options.map(option => String(option ?? '').trim()).filter(Boolean)
         : String(field?.options || '').split(/\r?\n|,/).map(option => option.trim()).filter(Boolean);
-    const knownOptions = options.length ? options : rhKnownOptionsForField(field);
+    const knownOptions = options.length ? options : field?.officialSchema === true ? [] : rhKnownOptionsForField(field);
     const fieldType = String(field?.fieldType || rhWorkflowFieldKind(field));
     const normalizedType = fieldType.toUpperCase();
     const savedSource = field?.sourceFromUpstream;
@@ -714,6 +803,7 @@ function normalizeRhWorkflowField(field){
         fieldName:String(field?.fieldName || ''),
         fieldValue:field?.fieldValue == null ? '' : String(field.fieldValue),
         fieldType:knownOptions.length && !['IMAGE','VIDEO','AUDIO','SLIDER'].includes(normalizedType) ? 'SELECT' : fieldType,
+        inputRole:String(field?.inputRole ?? field?.input_role ?? field?.semanticRole ?? field?.semantic_role ?? field?.role ?? ''),
         label:String(field?.label || field?.fieldName || ''),
         enabled:field?.enabled === true,
         sourceFromUpstream:savedSource === undefined ? false : savedSource !== false,
@@ -727,7 +817,8 @@ function normalizeRhWorkflowField(field){
         max:field?.max ?? '',
         step:field?.step ?? '',
         imageOrder:Number(field?.imageOrder || field?.image_order || 0) || 0,
-        required:field?.required === true
+        required:field?.required === true,
+        officialSchema:field?.officialSchema === true
     };
 }
 function normalizeFetchedRhWorkflowField(field){
@@ -1136,6 +1227,7 @@ function ensureRunningHubLists(item){
     activateRunningHubRegion(item, runningHubRegionFromItem(item));
     item.rh_apps = normalizeRhEntries(item.rh_apps || [], 'app');
     item.rh_workflows = normalizeRhEntries(item.rh_workflows || [], 'workflow');
+    persistActiveRunningHubRegion(item);
 }
 function updateProtocolFromInput(){
     const item = provider();
@@ -1167,18 +1259,43 @@ function isVolcengineProvider(item){
 }
 function handleRhPasteInput(value){
     const parsed = parseRunningHubRunRef(value);
-    if(parsed?.type === 'app') setStatus('已识别 RunningHub AI 应用，点击右侧创建卡片');
+    if(parsed?.type === 'app') setStatus('已识别 AI 应用 ID，点击右侧添加并同步');
     else if(parsed) setStatus('这里只支持 AI 应用，不支持工作流');
 }
 async function createRhEntryFromPaste(){
-    const item = provider();
+    let item = provider();
     if(!item || item.id !== 'runninghub') return;
     const parsed = parseRunningHubRunRef(rhPasteInput?.value || '');
-    if(!parsed || parsed.type !== 'app'){ setStatus('请输入 AI 应用 ID 或 /run/ai-app/...'); return; }
+    if(!parsed || parsed.type !== 'app'){ setStatus('请输入 AI 应用 ID'); return; }
+    if(rhAppSyncState){
+        setStatus(tr('api.rhAppSyncBusy'));
+        return false;
+    }
+    syncEditor();
+    const activeRegion = currentRunningHubRegion(item);
+    const pendingKey = rhFreeKeyInput?.value.trim() || rhWalletKeyInput?.value.trim();
+    const activeConfig = runningHubRegionPublicState(item, activeRegion);
+    ensureRunningHubLists(item);
+    const currentEntry = item.rh_apps.find(entry => String(entry?.id || entry?.appId || '') === parsed.id && entry?.hidden !== true);
+    setRhAppSyncState({
+        id:parsed.id,
+        region:activeRegion,
+        isNew:!currentEntry,
+        phase:pendingKey && !activeConfig.has_key && !activeConfig.has_wallet_key ? tr('api.rhAppPhaseSaveKey') : tr('api.rhAppPhasePrepare')
+    });
+    if(pendingKey && !activeConfig.has_key && !activeConfig.has_wallet_key){
+        setStatus('正在保存当前站点的 RunningHub Key...');
+        if(!await saveProviders()){
+            setRhAppSyncState(null);
+            setStatus(tr('api.rhAppKeySaveFailed'));
+            return false;
+        }
+        item = provider();
+    }
     ensureRunningHubLists(item);
     const listKey = 'rh_apps';
-    const previousEntries = item[listKey].map(entry => ({...entry}));
-    const existingIndex = item[listKey].findIndex(entry => entry.id === parsed.id);
+    const previousEntries = JSON.parse(JSON.stringify(item[listKey] || []));
+    const existingIndex = item[listKey].findIndex(entry => String(entry?.id || entry?.appId || '').trim() === parsed.id);
     const exists = existingIndex >= 0 && item[listKey][existingIndex]?.hidden !== true;
     if(existingIndex >= 0 && item[listKey][existingIndex]?.hidden === true){
         item[listKey][existingIndex] = {
@@ -1196,22 +1313,32 @@ async function createRhEntryFromPaste(){
             enabled:true
         });
     }
-    setStatus(exists ? '正在重新同步 RunningHub AI 应用...' : '正在验证并同步 RunningHub AI 应用...');
+    // 同步函数会从当前站点的持久化分区重新构建列表；先提交新条目，避免它被重建过程丢失。
+    persistActiveRunningHubRegion(item);
+    updateRhAppSyncPhase(tr('api.rhAppPhaseRead'));
+    setStatus(exists ? '正在重新同步 AI 应用...' : '正在验证并同步 AI 应用...');
     try {
         const current = provider();
         const targetIndex = current?.id === 'runninghub'
             ? current.rh_apps.findIndex(entry => String(entry?.id || entry?.appId || '') === parsed.id)
             : -1;
-        if(targetIndex >= 0){
-            const synced = await syncRhAppFromOfficial(targetIndex);
-            if(!synced) throw new Error('官方信息已读取，但保存配置失败');
-        }
+        if(targetIndex < 0) throw new Error('应用没有写入当前站点，请切换到对应站点后重试');
+        const synced = await syncRhAppFromOfficial(targetIndex);
+        if(!synced) throw new Error('官方信息已读取，但保存配置失败');
         if(rhPasteInput) rhPasteInput.value = '';
+        setRhAppSyncState(null);
+        setStatus(tr('api.rhAppSaved'));
     } catch(error) {
-        item[listKey] = previousEntries;
-        renderRunningHubCards();
-        setStatus(`AI 应用验证失败：${error.message || '无法读取官方配置'}`);
-        throw error;
+        item[listKey] = JSON.parse(JSON.stringify(previousEntries));
+        const regions = ensureRunningHubRegions(item);
+        const rollbackRegion = currentRunningHubRegion(item);
+        regions[rollbackRegion].rh_apps = JSON.parse(JSON.stringify(previousEntries));
+        persistActiveRunningHubRegion(item);
+        const rollbackSaved = await saveProviders();
+        setRhAppSyncState(null);
+        const rollbackHint = rollbackSaved ? '' : tr('api.rhAppRollbackFailed');
+        setStatus(trf('api.rhAppValidationFailed', {error:error.message || '无法读取官方配置', rollback:rollbackHint}));
+        return false;
     }
 }
 async function syncRhAppFromOfficial(index){
@@ -1224,12 +1351,22 @@ async function syncRhAppFromOfficial(index){
     setStatus('正在从 RunningHub 同步 AI 应用信息...');
     const region = currentRunningHubRegion(item);
     const res = await fetch(`/api/runninghub/app-info?webappId=${encodeURIComponent(appId)}&region=${encodeURIComponent(region)}`);
-    const data = await res.json();
-    if(!res.ok || data.success === false) throw new Error(data.detail || '拉取 AI 应用信息失败');
+    const data = await readApiResponse(res, '拉取 AI 应用信息失败');
+    if(data.success === false) throw new Error(apiResponseDetail(data, '拉取 AI 应用信息失败'));
     const raw = data.data || {};
+    const officialTitle = String(raw.webappName || raw.title || raw.name || '').trim();
+    if(!officialTitle || !Array.isArray(raw.nodeInfoList)){
+        throw new Error('RunningHub 返回的应用资料不完整，请确认应用 ID 与当前站点一致');
+    }
     entry.id = appId;
     entry.appId = appId;
-    entry.title = String(raw.webappName || raw.title || `AI 应用 ${appId.slice(-6)}`);
+    entry.title = officialTitle;
+    entry.title_zh = String(raw.webappNameZh || raw.titleZh || raw.nameZh || '').trim();
+    entry.title_en = String(raw.webappNameEn || raw.titleEn || raw.nameEn || '').trim();
+    entry.titles = raw.titles && typeof raw.titles === 'object' ? {...raw.titles} : {};
+    entry.names = raw.names && typeof raw.names === 'object' ? {...raw.names} : {};
+    entry.localizedNames = raw.localizedNames && typeof raw.localizedNames === 'object' ? {...raw.localizedNames} : {};
+    entry.webappNames = raw.webappNames && typeof raw.webappNames === 'object' ? {...raw.webappNames} : {};
     entry.note = String(raw.descriptionText || raw.description || raw.descriptionCn || '');
     entry.thumbnail = String(raw.covers?.[0]?.thumbnailUri || raw.covers?.[0]?.url || '');
     entry.tags = Array.isArray(raw.tags) ? raw.tags : [];
@@ -1238,10 +1375,19 @@ async function syncRhAppFromOfficial(index){
     entry.schemaSyncedAt = Date.now();
     entry.enabled = true;
     entry.hidden = false;
-    renderRunningHubCards();
+    if(rhAppSyncState?.id === appId) updateRhAppSyncPhase(tr('api.rhAppPhaseSave'));
     const saved = await saveProviders();
-    setStatus(saved ? '已同步 RunningHub 官方应用信息' : '已同步应用信息，但自动保存失败');
-    return saved;
+    if(!saved) return false;
+    const savedProvider = providers.find(candidate => candidate?.id === 'runninghub');
+    const savedRegion = savedProvider?.rh_regions?.[region];
+    const persisted = [
+        ...(savedProvider?.rh_apps || []),
+        ...(savedRegion?.rh_apps || [])
+    ].some(candidate => String(candidate?.id || candidate?.appId || '') === appId && candidate?.hidden !== true);
+    if(!persisted) throw new Error('服务器未返回已保存的 AI 应用 ID，请检查当前站点和配置保存状态');
+    renderRunningHubCards();
+    setStatus(tr('api.rhAppSaved'));
+    return true;
 }
 function updateRhEntry(kind, index, prop, value){
     const item = provider();
@@ -1482,7 +1628,7 @@ function parseRhOfficialFieldData(value){
         payload = value.slice(1);
     }
     const metadata = payload.find(item => item && typeof item === 'object' && !Array.isArray(item)
-        && ['min','max','step','default','defaultValue','required','acceptsUpload','options','image_upload','video_upload','audio_upload'].some(key => Object.prototype.hasOwnProperty.call(item, key)));
+        && ['min','max','step','default','defaultValue','required','acceptsUpload','options','image_upload','video_upload','audio_upload','inputRole','input_role','semanticRole','semantic_role','role'].some(key => Object.prototype.hasOwnProperty.call(item, key)));
     if(metadata){
         result.min = metadata.min ?? '';
         result.max = metadata.max ?? '';
@@ -1493,6 +1639,7 @@ function parseRhOfficialFieldData(value){
             || metadata.image_upload === true
             || metadata.video_upload === true
             || metadata.audio_upload === true;
+        result.role = String(metadata.inputRole ?? metadata.input_role ?? metadata.semanticRole ?? metadata.semantic_role ?? metadata.role ?? '').trim();
         if(metadata.image_upload === true) result.type = 'IMAGE';
         else if(metadata.video_upload === true) result.type = 'VIDEO';
         else if(metadata.audio_upload === true) result.type = 'AUDIO';
@@ -1530,7 +1677,7 @@ function normalizeFetchedRhAppField(field, index=0){
     if(value === undefined) value = official.defaultValue;
     if(value === undefined || value === null) value = '';
     if(typeof value === 'object') value = JSON.stringify(value);
-    if(!official.options.length) official.options = extractRhEditorFieldOptions(field);
+    if(!official.options.length) official.options = extractRhEditorFieldOptions(field, false);
     const officialType = official.type || field?.fieldType || field?.type || field?.valueType || (official.options.length ? 'SELECT' : '');
     if(['IMAGE','VIDEO','AUDIO'].includes(String(officialType).toUpperCase())) official.acceptsUpload = true;
     return normalizeRhWorkflowField({
@@ -1539,6 +1686,7 @@ function normalizeFetchedRhAppField(field, index=0){
         fieldName:name,
         fieldValue:value,
         fieldType:officialType,
+        inputRole:field?.inputRole ?? field?.input_role ?? field?.semanticRole ?? field?.semantic_role ?? field?.role ?? official.role ?? '',
         label:field?.label || field?.title || field?.description || field?.name || name,
         enabled:true,
         group:field?.group || field?.category || field?.title || 'AI 应用参数',
@@ -1549,10 +1697,11 @@ function normalizeFetchedRhAppField(field, index=0){
         required:field?.required === true || official.required,
         min:official.min !== '' ? official.min : field?.min ?? '',
         max:official.max !== '' ? official.max : field?.max ?? '',
-        step:official.step !== '' ? official.step : field?.step ?? ''
+        step:official.step !== '' ? official.step : field?.step ?? '',
+        officialSchema:true
     });
 }
-function extractRhEditorFieldOptions(field){
+function extractRhEditorFieldOptions(field, allowKnown=true){
     const candidates = [field?.options, field?.optionList, field?.values, field?.enum, field?.choices, field?.items, field?.list, field?.selectOptions];
     for(const candidate of candidates){
         if(!Array.isArray(candidate) || !candidate.length) continue;
@@ -1561,7 +1710,7 @@ function extractRhEditorFieldOptions(field){
             return item;
         }).filter(item => item !== undefined && item !== null).map(String);
     }
-    const known = rhKnownOptionsForField(field);
+    const known = allowKnown ? rhKnownOptionsForField(field) : [];
     if(known.length) return known;
     return [];
 }
@@ -2449,9 +2598,12 @@ function renderRunningHubCards(){
         return;
     }
     ensureRunningHubLists(item);
-    const apps = item.rh_apps.map((entry, index) => ({...entry, _rhIndex:index})).filter(entry => entry?.hidden !== true);
+    const apps = item.rh_apps
+        .map((entry, index) => ({...entry, _rhIndex:index}))
+        .filter(entry => entry?.hidden !== true)
+        .filter(entry => !(rhAppSyncState && String(entry?.id || entry?.appId || '') === rhAppSyncState.id));
     if(rhAppsCount) rhAppsCount.textContent = apps.length;
-    renderRhEntryList(rhAppsList, apps, 'app');
+    renderRhEntryList(rhAppsList, apps, 'app', rhAppSyncState);
     refreshIcons();
 }
 function rhEntryThumbnailCandidates(kind, entry){
@@ -2492,22 +2644,38 @@ function fallbackRhEntryThumbnail(img, icon){
         refreshIcons();
     }
 }
-function renderRhEntryList(target, list, kind){
+function renderRhSyncCard(state){
+    if(!state?.id) return '';
+    const siteName = tr(state.region === 'cn' ? 'api.rhRegionCn' : 'api.rhRegionGlobal');
+    return [
+        '<div class="rh-config-card rh-sync-card" data-rh-sync-card aria-live="polite" aria-busy="true">',
+        '<div class="rh-thumb rh-sync-thumb"><i data-lucide="loader-circle" class="rh-sync-spinner w-5 h-5"></i></div>',
+        '<div class="rh-card-main">',
+        '<div class="rh-card-title-field"><span>' + escapeHtml(tr('api.rhAppSyncTitle')) + '</span><strong>' + escapeHtml(state.phase || tr('api.rhAppSyncing')) + '</strong></div>',
+        '<div class="rh-id-line"><i data-lucide="hash" class="w-3 h-3"></i><span>' + escapeHtml(state.id) + '</span></div>',
+        '<div class="rh-card-note">' + escapeHtml(trf('api.rhAppSyncDescription', {region:siteName})) + '</div>',
+        '</div>',
+        '<div class="rh-sync-status" title="' + escapeAttr(tr('api.rhAppSyncStatus')) + '"><span></span></div>',
+        '</div>'
+    ].join('');
+}
+function renderRhEntryList(target, list, kind, syncState=null){
     if(!target) return;
-    if(!list.length){
-        target.innerHTML = `<div class="rh-empty">${kind === 'app' ? '粘贴 /run/ai-app/... 后点击创建 AI 应用卡片' : '粘贴 /run/workflow/... 后点击创建工作流卡片'}</div>`;
+    if(!list.length && !(kind === 'app' && syncState)){
+        target.innerHTML = `<div class="rh-empty">${kind === 'app' ? '输入 AI 应用 ID 后点击添加并同步' : '粘贴 /run/workflow/... 后点击创建工作流卡片'}</div>`;
         return;
     }
-    target.innerHTML = list.map((entry, index) => `
+    const pendingCard = kind === 'app' ? renderRhSyncCard(syncState) : '';
+    target.innerHTML = pendingCard + list.map((entry, index) => `
         <div class="rh-config-card">
             ${kind === 'app'
                 ? `<div class="rh-thumb" title="RunningHub 官方封面">${renderRhEntryThumbnail(kind, entry)}</div>`
                 : `<button class="rh-thumb" type="button" onclick="pickRhThumbnail('${kind}', ${entry._rhIndex ?? index})" title="上传缩略图">${renderRhEntryThumbnail(kind, entry)}</button>`}
             <div class="rh-card-main">
                 ${kind === 'app'
-                    ? `<div class="rh-card-title-field"><span>RunningHub 官方应用</span><strong>${escapeHtml(entry.title || `AI 应用 ${entry.id || ''}`)}</strong></div>`
+                    ? `<div class="rh-card-title-field"><span>RunningHub 官方应用</span><strong>${escapeHtml(runningHubLocalizedTitle(entry) || `AI 应用 ${entry.id || ''}`)}</strong></div>`
                     : `<label class="rh-card-title-field"><span>名称</span><input type="text" value="${escapeAttr(entry.title || '')}" oninput="updateRhEntry('${kind}', ${entry._rhIndex ?? index}, 'title', this.value)" placeholder="工作流名称"></label>`}
-                <div class="rh-id-line"><i data-lucide="hash" class="w-3 h-3"></i><span>${escapeHtml(kind === 'app' ? `/run/ai-app/${entry.id}` : `/run/workflow/${entry.id}`)}</span></div>
+                <div class="rh-id-line"><i data-lucide="hash" class="w-3 h-3"></i><span>${escapeHtml(entry.id)}</span></div>
                 ${kind === 'app'
                     ? `<div class="rh-card-note">${escapeHtml(String(entry.note || '').replace(/<[^>]*>/g, ' ') || '官方参数将在画布中自动生成')}</div>`
                     : `<textarea oninput="updateRhEntry('${kind}', ${entry._rhIndex ?? index}, 'note', this.value)" placeholder="备注、用途、参数说明">${escapeHtml(entry.note || '')}</textarea>`}
@@ -2816,10 +2984,10 @@ function renderProviderList(){
         return `
             <button class="provider-card provider-card-sortable ${active} ${stateClass}" type="button" onclick="selectProvider('${escapeHtml(item.id)}')"${providerDragAttrs(item)}>
                 <span class="provider-drag-handle" aria-hidden="true"><i data-lucide="grip-vertical" class="w-3.5 h-3.5"></i></span>
-                <span class="provider-mark"><i data-lucide="${item.has_key ? 'key-round' : 'key'}" class="w-4 h-4"></i></span>
+                <span class="provider-mark"><i data-lucide="${CLI_PROTOCOLS.has(itemProtocol) ? 'terminal' : item.has_key ? 'key-round' : 'key'}" class="w-4 h-4"></i></span>
                 <span class="provider-info">
                     <div class="provider-name">${escapeHtml(item.name || item.id)}</div>
-                    <div class="provider-meta">${escapeHtml(item.base_url || '未配置地址')}</div>
+                    <div class="provider-meta">${escapeHtml(CLI_PROTOCOLS.has(itemProtocol) ? '本机 CLI · 无需 API Key' : (item.base_url || '未配置地址'))}</div>
                 </span>
                 <span class="provider-side-meta">
                     <span class="provider-status-dot"></span>
@@ -2872,7 +3040,7 @@ function handleProviderDragEnd(){
 function renderEditor(){
     const item = provider();
     if(!item) return;
-    editorTitle.textContent = item.name || item.id;
+    editorTitle.textContent = comfyuiSettingsMode ? tr('api.comfyuiSettingsTitle') : (item.name || item.id);
     nameInput.value = item.name || '';
     idInput.value = item.id || '';
     updateIdPreview();
@@ -3000,8 +3168,9 @@ function renderEditor(){
     renderProviderOnboarding(item);
     renderRecommendApi();
     if(runninghubConfigBlock){
-        runninghubConfigBlock.hidden = !isRunningHub;
-        runninghubConfigBlock.style.display = isRunningHub ? 'flex' : 'none';
+        const showRunningHubConfig = comfyuiSettingsMode && comfyuiSettingsSection === 'runninghub' && isRunningHub;
+        runninghubConfigBlock.hidden = !showRunningHubConfig;
+        runninghubConfigBlock.style.display = showRunningHubConfig ? 'flex' : 'none';
     }
     if(!isRunningHub){
         if(rhPasteInput) rhPasteInput.value = '';
@@ -3249,13 +3418,21 @@ function setCodexStatus(text, ok=null){
     codexCliStatus.textContent = text || '未检测';
     codexCliStatus.classList.toggle('ok', ok === true);
     codexCliStatus.classList.toggle('bad', ok === false);
+    codexCliStatus.classList.toggle('pending', ok === null);
 }
 async function refreshCodexStatus(showInfo=true){
     if(!codexCliPanel || codexCliPanel.hidden) return;
     setCodexStatus('检测中...');
     try {
         const data = await fetch('/api/codex/status').then(r => r.json());
-        setCodexStatus(data.installed ? '已安装' : '未安装', data.installed === true);
+        const statusText = !data.installed
+            ? '未安装'
+            : data.logged_in === true
+            ? '已安装 · 已登录'
+            : data.logged_in === false
+            ? '已安装 · 未登录'
+            : '已安装 · 登录待确认';
+        setCodexStatus(statusText, data.installed ? (data.logged_in === false ? false : true) : false);
         if(showInfo && codexCliInfo){
             const parts = [];
             if(data.version) parts.push(data.version);
@@ -3263,6 +3440,8 @@ async function refreshCodexStatus(showInfo=true){
             if(data.message) parts.push(data.message);
             codexCliInfo.textContent = parts.join(' · ');
         }
+        if(codexCliPanel && data.logged_in === false) codexCliPanel.classList.add('codex-needs-login');
+        else codexCliPanel?.classList.remove('codex-needs-login');
     } catch(e){
         setCodexStatus('检测失败', false);
         if(codexCliInfo) codexCliInfo.textContent = e.message || String(e);
@@ -4120,6 +4299,7 @@ function removeMsLora(index){
     renderMsLoras();
 }
 function selectProvider(id){
+    if(comfyuiSettingsMode) closeComfyUiSettings();
     if(isProviderTemporarilyHidden(providers.find(item => item.id === id))) return;
     recommendInlineOpen = false;
     syncRecommendView();
@@ -4402,6 +4582,7 @@ async function saveProviders(){
             enabled:lora.enabled !== false,
             note:String(lora.note || '').trim()
         })).filter(lora => lora.id && lora.target_model);
+        if(item.id === 'runninghub') persistActiveRunningHubRegion(item);
     });
     if(new Set(providers.map(item => item.id)).size !== providers.length){
         alert(tr('api.duplicateId'));

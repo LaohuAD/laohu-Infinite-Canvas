@@ -714,11 +714,15 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
     def test_jimeng_catalog_models_have_version_specific_contracts(self):
         legacy_image = dynamic_profile_for_model("jimeng-cli", "3.0", "image_generation")
         edit_image = dynamic_profile_for_model("jimeng-cli", "4.7", "image_generation")
+        pro_image = dynamic_profile_for_model("jimeng-cli", "5.0Pro", "image_generation")
         standard_video = dynamic_profile_for_model("jimeng-cli", "seedance2.0fast", "video_generation")
         vip_video = dynamic_profile_for_model("jimeng-cli", "seedance2.0_vip", "video_generation")
 
         self.assertNotIn("reference", legacy_image["inputs"])
         self.assertEqual(edit_image["inputs"]["reference"]["max"], 10)
+        self.assertEqual(legacy_image["parameters"]["resolution"]["options"], ["1k", "2k"])
+        self.assertEqual(edit_image["parameters"]["resolution"]["options"], ["2k", "4k"])
+        self.assertEqual(pro_image["parameters"]["resolution"]["options"], ["1k", "2k", "4k"])
         self.assertEqual(standard_video["parameters"]["resolution"]["options"], ["720p"])
         self.assertEqual(vip_video["parameters"]["resolution"]["options"], ["720p", "1080p", "4k"])
         self.assertEqual(vip_video["inputs"]["reference_audio"]["max"], 3)
@@ -762,6 +766,27 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("--ratio=3:4", args)
         self.assertIn("--resolution_type=2k", args)
         self.assertEqual(result["value"], "/api/results/mock-image.png")
+
+    async def test_jimeng_image_cli_rejects_resolution_not_supported_by_model(self):
+        with self.assertRaises(main.HTTPException) as context:
+            await main.generate_jimeng_provider_image(
+                "测试即梦图片参数",
+                "1024x1024",
+                "4.7",
+                [],
+                {"id": "jimeng"},
+                {"resolution_type": "1k"},
+            )
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertIn("2K、4K", context.exception.detail)
+
+    def test_jimeng_image_resolution_options_match_installed_cli_contract(self):
+        self.assertEqual(main.jimeng_image_resolution_options("3.0"), ["1k", "2k"])
+        self.assertEqual(main.jimeng_image_resolution_options("4.7"), ["2k", "4k"])
+        self.assertEqual(main.jimeng_image_resolution_options("5.0Pro"), ["1k", "2k", "4k"])
+        self.assertEqual(main.jimeng_image_resolution_options("4.7", "image2image"), ["2k", "4k"])
+        self.assertNotIn("1.5k", main.jimeng_image_resolution_options("5.0Pro"))
 
     async def test_canvas_jimeng_video_routes_through_cli_adapter_without_network(self):
         provider = {
@@ -2871,9 +2896,47 @@ console.log(JSON.stringify(c.modelSupportsInputs(model,{text:1,image:1},{prompt:
         self.assertEqual(image_profile["family_id"], text_profile["family_id"])
         self.assertEqual(multi_profile["family_id"], text_profile["family_id"])
         self.assertEqual(text_profile["parameters"]["duration"]["options"], [-1, *range(4, 31)])
+        self.assertIn("native1080p", text_profile["parameters"]["resolution"]["options"])
+        self.assertNotIn("native4k", text_profile["parameters"]["resolution"]["options"])
+        self.assertEqual(image_profile["parameters"]["resolution"]["options"], text_profile["parameters"]["resolution"]["options"])
         self.assertEqual(multi_profile["inputs"]["reference"]["max"], 30)
         self.assertEqual(multi_profile["inputs"]["source_video"]["max"], 10)
         self.assertEqual(multi_profile["inputs"]["reference_audio"]["max"], 10)
+
+    def test_ai_money_fashvsr_profile_requires_a_480p_video_only(self):
+        profile = ai_money_profile_from_model_id("FashVSR_video_upscale", "video_generation")
+
+        self.assertEqual(profile["family_id"], "ai-money-fashvsr")
+        self.assertEqual(profile["family_name"], "FashVSR")
+        self.assertEqual(profile["operation"], "video_upscale")
+        self.assertEqual(set(profile["inputs"]), {"source_video"})
+        self.assertEqual(profile["inputs"]["source_video"]["min_duration_seconds"], 3)
+        self.assertEqual(profile["inputs"]["source_video"]["max_duration_seconds"], 15)
+        self.assertEqual(profile["request_mapping"]["source_video"], "metadata.video_url")
+        self.assertEqual(profile["platform"]["endpoint"], "/v1/video/generations")
+        self.assertEqual(profile["parameters"], {})
+
+        catalog = main.MODEL_CAPABILITY_REGISTRY.build_catalog([{
+            "id": "ai-money",
+            "name": "AI MONEY",
+            "video_models": ["FashVSR_video_upscale"],
+        }])
+        family = catalog["providers"][0]["families"][0]
+        self.assertEqual(family["family_id"], "ai-money-fashvsr")
+        self.assertEqual(family["display_name"], "FashVSR")
+        self.assertEqual(family["variants"][0]["variant_name"], "视频放大")
+
+    def test_ai_money_minimax_h3_ow_uses_documented_input_and_parameter_limits(self):
+        t2v = ai_money_profile_from_model_id("minimax-h3-ow-t2v", "video_generation")
+        i2v_fast = ai_money_profile_from_model_id("minimax-h3-ow-i2v-fast", "video_generation")
+        audio_drive = ai_money_profile_from_model_id("minimax-h3-ow-fl2va-audio-drive-fast", "video_generation")
+
+        self.assertEqual(t2v["parameters"]["duration"]["options"], [5, 10, 15])
+        self.assertEqual(t2v["parameters"]["resolution"]["options"], ["480p", "720p"])
+        self.assertEqual(t2v["parameters"]["aspect_ratio"]["options"], ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"])
+        self.assertEqual(i2v_fast["inputs"]["first_frame"]["max"], 1)
+        self.assertEqual(audio_drive["inputs"]["first_frame"]["max"], 1)
+        self.assertEqual(audio_drive["inputs"]["reference_audio"]["max"], 1)
 
     def test_ai_money_branded_image_variants_share_reference_family(self):
         text_profile = ai_money_profile_from_model_id("laohuaimoney-image-g2-t2i", "image_generation")

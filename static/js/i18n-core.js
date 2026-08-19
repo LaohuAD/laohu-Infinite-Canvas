@@ -39,13 +39,16 @@
 
     function apply(root=document){
         root.querySelectorAll('[data-i18n]').forEach(el => {
-            el.textContent = t(el.dataset.i18n);
+            const translated = t(el.dataset.i18n);
+            if(translated !== el.dataset.i18n) el.textContent = translated;
         });
         root.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
-            el.setAttribute('placeholder', t(el.dataset.i18nPlaceholder));
+            const translated = t(el.dataset.i18nPlaceholder);
+            if(translated !== el.dataset.i18nPlaceholder) el.setAttribute('placeholder', translated);
         });
         root.querySelectorAll('[data-i18n-title]').forEach(el => {
-            el.setAttribute('title', t(el.dataset.i18nTitle));
+            const translated = t(el.dataset.i18nTitle);
+            if(translated !== el.dataset.i18nTitle) el.setAttribute('title', translated);
         });
         root.documentElement?.setAttribute('lang', lang() === 'en' ? 'en' : 'zh-CN');
         window.dispatchEvent(new CustomEvent('studio-lang-change', { detail:{ lang:lang() } }));

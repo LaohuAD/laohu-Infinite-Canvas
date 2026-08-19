@@ -59,6 +59,107 @@ console.log(JSON.stringify({
         self.assertEqual(data["comfyWorkflow"], "smart-comfy-workflow")
         self.assertEqual(data["resultGroup"], "smart-result-group")
 
+    def test_runninghub_upload_source_covers_all_project_media_routes(self):
+        script = """
+const c=require('./static/js/smart-node-contract.js');
+console.log(JSON.stringify({
+  material:c.runningHubUploadSource('/api/materials/mat-image'),
+  result:c.runningHubUploadSource('/api/results/res-video'),
+  storage:c.runningHubUploadSource('/api/storage-files/upload/audio.wav'),
+  assets:c.runningHubUploadSource('/assets/input/image.png'),
+  output:c.runningHubUploadSource('/output/generated/video.mp4'),
+  preview:c.runningHubUploadSource('/api/media-preview?url=%2Fapi%2Fresults%2Fres-audio'),
+  remote:c.runningHubUploadSource('https://example.com/image.png'),
+  uploaded:c.runningHubUploadSource('pasted/uploaded.png'),
+  unsupported:c.runningHubUploadSource('/api/canvas/preview')
+}));
+"""
+        data = run_node(script)
+
+        self.assertEqual(data["material"], "/api/materials/mat-image")
+        self.assertEqual(data["result"], "/api/results/res-video")
+        self.assertEqual(data["storage"], "/api/storage-files/upload/audio.wav")
+        self.assertEqual(data["assets"], "/assets/input/image.png")
+        self.assertEqual(data["output"], "/output/generated/video.mp4")
+        self.assertEqual(data["preview"], "/api/results/res-audio")
+        self.assertEqual(data["remote"], "https://example.com/image.png")
+        self.assertEqual(data["uploaded"], "")
+        self.assertEqual(data["unsupported"], "")
+
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        self.assertIn("SMART_NODE_CONTRACT.runningHubUploadSource(text)", source)
+        self.assertNotIn("!text.startsWith('/output/') && !text.startsWith('/assets/')", source)
+
+    def test_runninghub_field_roles_only_use_explicit_official_schema(self):
+        data = run_node("""
+const c=require('./static/js/smart-node-contract.js');
+console.log(JSON.stringify({
+  start:c.runningHubTextFieldRole({fieldName:'text',fieldType:'STRING',label:'音频开始时间'}),
+  end:c.runningHubTextFieldRole({fieldName:'text',fieldType:'STRING',label:'音频结束时间'}),
+  labelOnly:c.runningHubTextFieldRole({fieldName:'text',fieldType:'STRING',label:'提示词文本'}),
+  explicit:c.runningHubTextFieldRole({fieldName:'text',fieldType:'STRING',label:'普通文本',inputRole:'prompt'}),
+  parsed:c.parseRunningHubOfficialFieldData('["STRING", {"role":"negative_prompt"}]').role
+}));
+""")
+
+        self.assertEqual(data["start"], "text")
+        self.assertEqual(data["end"], "text")
+        self.assertEqual(data["labelOnly"], "text")
+        self.assertEqual(data["explicit"], "prompt")
+        self.assertEqual(data["parsed"], "negative_prompt")
+
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        self.assertIn("return SMART_NODE_CONTRACT.runningHubTextFieldRole(field)", source)
+        self.assertNotIn("media?.prompt || rhDefaultValue(field)", source)
+
+    def test_runninghub_field_types_and_numeric_values_are_schema_driven(self):
+        data = run_node("""
+const c=require('./static/js/smart-node-contract.js');
+const values={
+  namedImage:c.runningHubFieldMediaKind({fieldName:'reference_image',label:'参考图片',fieldType:'STRING'}),
+  officialImage:c.runningHubFieldMediaKind({fieldName:'value',label:'普通字段',fieldType:'IMAGE'}),
+  float:c.runningHubCoerceFieldValue({nodeId:'105',fieldName:'megapixels',fieldType:'FLOAT',label:'一采参数 分辨率'},'0.6')
+};
+try{
+  c.runningHubCoerceFieldValue({nodeId:'105',fieldName:'megapixels',fieldType:'FLOAT',label:'一采参数 分辨率'},'这个女人在录音棚里面唱歌');
+}catch(error){ values.error=error.message; }
+console.log(JSON.stringify(values));
+""")
+
+        self.assertEqual(data["namedImage"], "text")
+        self.assertEqual(data["officialImage"], "image")
+        self.assertEqual(data["float"], 0.6)
+        self.assertIn("105::megapixels", data["error"])
+        self.assertIn("要求数字", data["error"])
+
+    def test_angle_control_is_a_tool_with_image_input_and_text_output(self):
+        script = """
+const c=require('./static/js/smart-node-contract.js');
+const material={id:'image-1',type:c.NODE_TYPES.material,images:[{kind:'image',url:'/api/assets/image-1'}]};
+const angle={id:'angle-1',type:c.NODE_TYPES.angleControl};
+const text={id:'text-1',type:c.NODE_TYPES.material,images:[{kind:'text',text:'prompt'}]};
+console.log(JSON.stringify({
+  angleType:c.NODE_TYPES.angleControl,
+  isTool:c.isToolNode(angle),
+  isExecution:c.isExecutionNode(angle),
+  imageToAngle:c.canConnectNodes(material, angle),
+  angleToText:c.canConnectNodes(angle, text),
+  kind:c.connectionKindForNodes(angle, text),
+  prompt:c.anglePromptFor({horizontalAngle:45,verticalAngle:30,zoom:5}),
+  reset:c.anglePromptFor({horizontalAngle:0,verticalAngle:0,zoom:5})
+}));
+"""
+        data = run_node(script)
+
+        self.assertEqual(data["angleType"], "smart-angle-control")
+        self.assertTrue(data["isTool"])
+        self.assertFalse(data["isExecution"])
+        self.assertTrue(data["imageToAngle"])
+        self.assertTrue(data["angleToText"])
+        self.assertEqual(data["kind"], "result")
+        self.assertEqual(data["prompt"], "<sks> front-right quarter view elevated shot medium shot")
+        self.assertEqual(data["reset"], "<sks> front view eye-level shot medium shot")
+
     def test_text_generator_is_a_fixed_execution_node(self):
         script = """
 const c=require('./static/js/smart-node-contract.js');
@@ -335,7 +436,7 @@ console.log(JSON.stringify({
             source.index("function capabilityParameterDescription")
         ]
         reorder = source[
-            source.index("function capabilityOptionInsertionTarget"):
+            source.index("function capabilityOptionLayout"):
             source.index("function bindPreferenceSortDrag")
         ]
 
@@ -345,14 +446,32 @@ console.log(JSON.stringify({
         self.assertIn("data-capability-option-sort", source)
         self.assertIn("data-capability-option-drag-handle", reorder)
         self.assertIn("handle.addEventListener('pointerdown'", reorder)
+        self.assertIn("function capabilityOptionLayout", reorder)
+        self.assertIn("function capabilityOptionVerticalInsertionTarget", reorder)
+        self.assertIn("if(layout === 'vertical') return capabilityOptionVerticalInsertionTarget(items, clientY);", reorder)
         self.assertIn("capabilityOptionInsertionTarget", reorder)
         self.assertIn("animateCapabilityOptionShift", reorder)
         self.assertIn("capability-option-drag-preview", reorder)
         self.assertIn("capability-option-drop-placeholder", reorder)
         self.assertIn("saveCapabilityOptionOrder", reorder)
         self.assertNotIn("addEventListener('dragstart'", reorder)
+        self.assertIn("function preferenceListButtons", reorder)
+        self.assertIn("function preferenceInsertionTarget", reorder)
+        self.assertIn("function startPreferencePointerDrag", reorder)
+        self.assertIn("function movePreferencePointerDrag", reorder)
+        self.assertIn("function finishPreferencePointerDrag", reorder)
+        self.assertIn("function cancelPreferencePointerDrag", reorder)
+        self.assertIn("handle.closest('button[data-preference-id]')", reorder)
+        self.assertIn("pointerdown", reorder)
+        self.assertIn("pointermove", reorder)
+        self.assertIn("pointerup", reorder)
+        self.assertIn("preference-drag-preview", reorder)
+        self.assertIn("is-preference-reordering", css)
+        self.assertNotIn('draggable="true"', reorder)
+        self.assertIn("currentIndexWithoutDragged", reorder)
         self.assertIn(".capability-option-drag-preview", css)
         self.assertIn(".capability-option.capability-option-drop-placeholder", css)
+        self.assertIn(".capability-option-grid.is-list,.capability-option-grid.capability-resolution-options", css)
         self.assertIn("touch-action:none", css)
         self.assertIn("width:28px !important", css[css.index(".execution-config-panel-title .capability-settings-control"):])
 
@@ -931,7 +1050,7 @@ console.log(JSON.stringify({
         self.assertIn("AI 应用", runninghub_block)
         self.assertNotIn("工作流", runninghub_block)
         self.assertNotIn("/run/workflow/", runninghub_block)
-        self.assertIn("if(numeric) return { type:'app', id:text }", source)
+        self.assertIn("if(/^[0-9A-Za-z_-]{4,}$/.test(text)) return { type:'app', id:text }", source)
         create_entry = source[source.index("async function createRhEntryFromPaste"):source.index("function updateRhEntry")]
         self.assertIn("parsed.type !== 'app'", create_entry)
         self.assertIn("const listKey = 'rh_apps'", create_entry)
@@ -939,7 +1058,7 @@ console.log(JSON.stringify({
         self.assertIn("await syncRhAppFromOfficial(targetIndex)", create_entry)
         self.assertNotIn("openRhAppEditor(targetIndex)", create_entry)
         self.assertIn("function syncRhAppFromOfficial", source)
-        self.assertIn("entry.title = String(raw.webappName", source)
+        self.assertIn("entry.title = officialTitle", source)
         self.assertIn("entry.thumbnail = String(raw.covers?.[0]?.thumbnailUri", source)
         self.assertIn("entry.fields = rhAppFieldSourceList(raw).map(normalizeFetchedRhAppField)", source)
         self.assertIn("entry.raw = raw", source)
@@ -1135,7 +1254,9 @@ console.log(JSON.stringify({
 
         self.assertIn("runningHubFieldPickerOpeningEvent", picker)
         self.assertIn("runningHubFieldPickerOpeningEvent = event", picker)
-        self.assertIn("event === runningHubFieldPickerOpeningEvent", document_click)
+        self.assertIn("function runningHubFieldPickerOpenedByDropClick(event)", picker)
+        self.assertIn("runningHubFieldPickerOpeningStamp", picker)
+        self.assertIn("runningHubFieldPickerOpenedByDropClick(event)", document_click)
         self.assertIn("closeRunningHubFieldPicker(true)", document_click)
 
     def test_runninghub_ai_app_only_replaces_the_middle_detail_area(self):
@@ -1174,8 +1295,8 @@ console.log(JSON.stringify({
         self.assertIn("flex:0 0 auto", css)
         self.assertIn(".rh-ai-app-param-list .rh-ai-app-media-control", css)
         self.assertIn("width:100%", css)
-        self.assertIn("compact ? 'is-compact' : ''", source)
-        self.assertIn(".rh-ai-app-direct-text.is-compact", css)
+        self.assertIn("renderRhUnconnectedInputControl", source)
+        self.assertIn(".rh-ai-app-unconnected-card", css)
 
     def test_result_connection_is_layout_output_but_not_workflow_input(self):
         data = run_node(
@@ -1791,6 +1912,25 @@ console.log(JSON.stringify(c.migrateLegacyCanvas(nodes,[]).nodes));
         self.assertIn("activeComposerNode()", hit_test)
         self.assertIn("getBoundingClientRect()", hit_test)
         self.assertIn("connectionNodeHitAtPoint(e.clientX, e.clientY, e.target)", source)
+        self.assertIn("if(!nodeEl){", hit_test)
+        self.assertIn("candidate.getBoundingClientRect()", hit_test)
+
+    def test_runninghub_connections_preserve_all_media_kinds_and_localized_fields(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+
+        connection = source[source.index("function runningHubSourceRefs"):source.index("function rhMediaKindLabel")]
+        self.assertIn("item?.localUrl", connection)
+        self.assertIn("item?.originalLocalUrl", connection)
+        self.assertIn("isSmartMaterialNode(from) || isSmartResultGroupNode(from)", connection)
+        self.assertIn("SMART_NODE_CONTRACT.textContentForMediaItem(ref)", connection)
+
+        field_kind = source[source.index("function rhFieldKind"):source.index("function rhFieldRole")]
+        self.assertIn("['STRING','TEXT'].includes(type)", field_kind)
+        self.assertIn("type === 'IMAGE'", field_kind)
+        self.assertNotIn("field?.label", field_kind)
+        self.assertNotIn("field?.fieldName", field_kind)
+        self.assertIn("title_en", source)
+        self.assertIn("title_zh", source)
 
     def test_node_owned_overlays_keep_connection_hit_ownership(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
@@ -1822,6 +1962,8 @@ console.log(JSON.stringify(c.migrateLegacyCanvas(nodes,[]).nodes));
         hover = source[source.index("function updatePortDragFromPointer"):source.index("function handlePortDragPointerMove")]
 
         self.assertIn("connectionNodeHitAtPoint(e.clientX, e.clientY, e.target)", port_drop)
+        self.assertIn("drag.hoverTargetId", port_drop)
+        self.assertIn("hoveredAtDrop", port_drop)
         self.assertIn("connectionNodeHitAtPoint(e.clientX, e.clientY, e.target)", hover)
         self.assertIn("port = drag.fromPort === 'out' ? 'in' : 'out'", port_drop)
         self.assertNotIn("(e.clientX - rect.left) < rect.width / 2", port_drop)
@@ -1836,6 +1978,13 @@ console.log(JSON.stringify(c.migrateLegacyCanvas(nodes,[]).nodes));
         self.assertIn("async function copySelectedMediaToSystemClipboard", source)
         self.assertIn("navigator.clipboard.write", source)
         self.assertIn("e.shiftKey && key === 'c'", source)
+        clipboard = source[source.index("function selectedClipboardMedia"):source.index("function pasteNodes")]
+        self.assertIn(".filter(node => isSmartMaterialNode(node))", clipboard)
+        self.assertIn("function clipboardMediaManifest", clipboard)
+        self.assertIn("function clipboardMediaHtml", clipboard)
+        self.assertIn("entries.length > 1", clipboard)
+        self.assertIn("const item = entries.length === 1 ? entries[0].item : null", clipboard)
+        self.assertNotIn("已复制第 1 个素材", clipboard)
 
     def test_group_bounds_and_dragging_use_every_member_type(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
@@ -1878,15 +2027,13 @@ console.log(JSON.stringify(c.migrateLegacyCanvas(nodes,[]).nodes));
         self.assertIn("canvas.revision = Number(data.canvas?.revision", frontend)
         self.assertIn("canvas.revision = Math.max(1, Number(serverCanvas.revision", frontend)
 
-    def test_classic_canvas_save_and_sync_use_revision_before_timestamps(self):
-        frontend = (ROOT / "static/js/canvas.js").read_text(encoding="utf-8")
-
-        self.assertIn("base_revision:Number(canvas.revision", frontend)
-        self.assertIn("canvas.revision = Number(data.detail?.revision", frontend)
-        self.assertIn("canvas.revision = Number(touched.revision", frontend)
-        self.assertIn("const remoteRevision = Number(remote?.revision", frontend)
-        self.assertIn("const remoteRevision = Number(meta.revision", frontend)
-        self.assertIn("const remoteRevision = Number(data.revision", frontend)
+    def test_classic_canvas_entrypoint_is_retired(self):
+        self.assertFalse((ROOT / "static/canvas.html").exists())
+        self.assertFalse((ROOT / "static/js/canvas.js").exists())
+        self.assertFalse((ROOT / "static/css/canvas.css").exists())
+        backend = (ROOT / "main.py").read_text(encoding="utf-8")
+        self.assertIn("当前只支持新建智能画布", backend)
+        self.assertIn("普通画布已停用，请使用智能画布", backend)
 
     def test_new_smart_canvases_start_on_the_current_node_schema(self):
         source = (ROOT / "main.py").read_text(encoding="utf-8")
@@ -1990,14 +2137,18 @@ const refs=[
   {url:'/api/results/r2',resultId:'r2',kind:'image',name:'风格.png'},
   {url:'/api/results/r3',resultId:'r3',kind:'audio',name:'旁白.wav'}
 ];
-const initial=c.reconcileRunningHubInputBindings(fields,refs,{});
+const ambiguous=c.reconcileRunningHubInputBindings(fields,refs,{});
+const initial=c.reconcileRunningHubInputBindings(fields,refs,{'100::image':'result:r1','112::image':'result:r2'});
 const swapped=c.swapRunningHubInputBinding(fields,refs,initial,'112::image',-1);
 const assigned=c.assignRunningHubInputBinding(fields,refs,swapped,'100::image','result:r1');
 const reordered=c.reconcileRunningHubInputBindings(fields,[refs[1],refs[0],refs[2]],swapped);
-console.log(JSON.stringify({initial,swapped,assigned,reordered,resolved:c.runningHubBoundMedia(fields,refs,reordered)}));
+console.log(JSON.stringify({ambiguous,initial,swapped,assigned,reordered,resolved:c.runningHubBoundMedia(fields,refs,reordered)}));
 """
         data = run_node(script)
 
+        self.assertNotIn("100::image", data["ambiguous"])
+        self.assertNotIn("112::image", data["ambiguous"])
+        self.assertEqual(data["ambiguous"]["200::audio"], "result:r3")
         self.assertEqual(data["initial"]["100::image"], "result:r1")
         self.assertEqual(data["initial"]["112::image"], "result:r2")
         self.assertEqual(data["swapped"]["100::image"], "result:r2")
@@ -2179,18 +2330,20 @@ console.log(JSON.stringify({explicit,resolved}));
         css = (ROOT / "static/css/smart-canvas.css").read_text(encoding="utf-8")
 
         field = source[source.index("function renderRhAiAppFieldRow"):source.index("function renderRhSettingField")]
-        self.assertIn("data-rh-direct-text", field)
-        self.assertIn("data-rh-direct-upload", field)
-        self.assertIn("data-rh-direct-url", field)
         self.assertIn("const connected = bound[key]", field)
         self.assertIn("renderRhConnectedInputControl", field)
-        self.assertIn("renderRhDirectInputControl", field)
+        self.assertIn("renderRhUnconnectedInputControl", field)
+        self.assertNotIn("data-rh-direct-text", field)
+        self.assertNotIn("data-rh-direct-upload", field)
+        self.assertNotIn("data-rh-direct-url", field)
         self.assertNotIn("data-rh-binding-select", field)
         self.assertNotIn("data-rh-input-mode", field)
         self.assertNotIn("直接输入", field)
         self.assertNotIn("外部节点", field)
-        self.assertIn(".rh-ai-app-direct-text", css)
-        self.assertIn(".rh-ai-app-direct-media", css)
+        self.assertIn(".rh-ai-app-media-row.is-missing", css)
+        self.assertIn(".rh-ai-app-media-row.is-mapped", css)
+        self.assertNotIn(".rh-ai-app-direct-text", css)
+        self.assertNotIn(".rh-ai-app-direct-media", css)
         self.assertIn(".rh-ai-app-connected-card", css)
 
     def test_runninghub_ai_app_config_popovers_are_not_clipped(self):
@@ -2592,7 +2745,6 @@ console.log(JSON.stringify({
     def test_runninghub_coin_user_facing_name_is_rh_coin(self):
         visible_sources = [
             ROOT / "static/api-settings.html",
-            ROOT / "static/js/canvas.js",
             ROOT / "static/js/i18n/api-settings.js",
             ROOT / "static/js/i18n/smart-canvas.js",
             ROOT / "static/js/i18n(1)/smart-canvas.js",
@@ -2603,7 +2755,7 @@ console.log(JSON.stringify({
         self.assertNotIn("Running Hub币", combined)
         self.assertIn("RH币", combined)
 
-    def test_runninghub_input_bindings_support_multiple_text_and_media_fields(self):
+    def test_runninghub_multiple_same_type_fields_require_explicit_slot_bindings(self):
         script = """
 const c=require('./static/js/smart-node-contract.js');
 const fields=[
@@ -2618,16 +2770,42 @@ const refs=[
   {materialId:'i1',kind:'image',url:'/assets/a.png'},
   {materialId:'a1',kind:'audio',url:'/assets/a.mp3'}
 ];
-console.log(JSON.stringify(c.reconcileRunningHubInputBindings(fields,refs,{})));
+const automatic=c.reconcileRunningHubInputBindings(fields,refs,{});
+const explicit=c.reconcileRunningHubInputBindings(fields,refs,{
+  '1::text':'material:t1',
+  '2::text':'material:t2'
+});
+console.log(JSON.stringify({automatic,explicit}));
 """
         data = run_node(script)
 
-        self.assertEqual(data, {
+        self.assertEqual(data["automatic"], {
+            "3::image": "material:i1",
+            "4::audio": "material:a1",
+        })
+        self.assertEqual(data["explicit"], {
             "1::text": "material:t1",
             "2::text": "material:t2",
             "3::image": "material:i1",
             "4::audio": "material:a1",
         })
+
+    def test_runninghub_explicit_text_target_is_not_stolen_by_earlier_string_fields(self):
+        script = """
+const c=require('./static/js/smart-node-contract.js');
+const fields=[
+  {nodeId:'361',fieldName:'text',fieldType:'STRING',label:'音频开始时间'},
+  {nodeId:'362',fieldName:'text',fieldType:'STRING',label:'音频结束时间'},
+  {nodeId:'360',fieldName:'text',fieldType:'STRING',label:'提示词文本'},
+  {nodeId:'105',fieldName:'megapixels',fieldType:'FLOAT',label:'一采参数 分辨率'}
+];
+const refs=[{materialId:'prompt',kind:'text',text:'这个女人在录音棚里面唱歌'}];
+console.log(JSON.stringify(c.reconcileRunningHubInputBindings(fields,refs,{'360::text':'material:prompt'})));
+"""
+
+        data = run_node(script)
+
+        self.assertEqual(data, {"360::text": "material:prompt"})
 
     def test_runninghub_schema_diff_detects_structural_changes(self):
         script = """
@@ -2997,6 +3175,81 @@ console.log(JSON.stringify({text:c.textContentForNode(node)}));
         self.assertIn("mediaKindForItem(ref) === 'video'", source)
         self.assertIn("function audioRefsOnly(refs)", source)
         self.assertIn("mediaKindForItem(ref) === 'audio'", source)
+
+    def test_generation_info_keeps_references_and_supports_draft_regeneration(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        css = (ROOT / "static/css/smart-canvas.css").read_text(encoding="utf-8")
+
+        self.assertIn("function smartGenerationSnapshotRefs(snapshot)", source)
+        snapshot = source[source.index("function smartGenerationSnapshotFromNode"):source.index("function smartGenerationVersions")]
+        self.assertIn("const stableSnapshotId", snapshot)
+        self.assertIn("id:stableSnapshotId ? `node:${stableSnapshotId}`", snapshot)
+        refs = source[source.index("function smartGenerationSnapshotRefs"):source.index("function smartGenerationSnapshotFromNode")]
+        self.assertIn("runInputRefs", refs)
+        self.assertIn("runPromptRefs", refs)
+        self.assertIn("runSnapshot?.refs", refs)
+        self.assertIn("runSnapshot?.images", refs)
+        self.assertIn("runSnapshot?.videos", refs)
+        self.assertIn("runSnapshot?.audios", refs)
+        self.assertIn("sources.flat()", refs)
+        self.assertIn("hasMentionReferenceContent(ref)", refs)
+        self.assertNotIn("snapshot?.runInputRefs || snapshot?.runPromptRefs", source)
+
+        info = source[source.index("function smartGenerationInfoPromptValue"):source.index("async function runFixedTextGenerationSnapshot")]
+        self.assertIn('data-generation-info-prompt', info)
+        self.assertIn("function smartGenerationInfoSnapshotWithDraft", info)
+        self.assertIn("function smartGenerationInfoPromptFromEditor", info)
+        self.assertIn("data-capability-param", info)
+        self.assertIn('contenteditable="${profile ? \'true\' : \'false\'}"', info)
+        self.assertIn("smartGenerationInfoSnapshotWithDraft(baseSnapshot, draft)", source)
+        self.assertIn("rerunSmartGeneratedMaterial(smartGenerationInfoNodeId, smartGenerationInfoDraft)", source)
+        self.assertIn("function generationRerunOverlayHtml(node)", source)
+        self.assertIn('data-cancel-generation-rerun', source)
+        self.assertIn("function cancelSmartGenerationRerun(nodeId)", source)
+        self.assertIn("generationRerunCancelRequested", source)
+        self.assertIn('data-generation-info-reference="1"', source)
+        self.assertIn("showReferenceHoverPreview(token, referenceFromMentionToken(token))", info)
+        self.assertIn("runInputRefs = cloneSmartSettings(refs)", info)
+        self.assertIn("runPromptRefs = cloneSmartSettings(refs)", info)
+        self.assertIn(".generation-info-prompt-editor", css)
+        self.assertIn(".generation-info-parameter-editor", css)
+        self.assertIn(".generation-rerun-overlay", css)
+        self.assertIn(".mention-preview { position:fixed; z-index:2600", css)
+
+        attach = source[source.index("function attachRunMeta"):source.index("function stripRunInputMeta")]
+        self.assertIn("meta.inputRefs) && meta.inputRefs.length", attach)
+        self.assertIn("meta.promptRefs || []", attach)
+
+        stripped = source[source.index("function stripRunInputMeta"):source.index("function connectionSourceResultId")]
+        self.assertIn("meta.inputRefs) && meta.inputRefs.length", stripped)
+        self.assertNotIn("inputRefs:meta.inputRefs || meta.promptRefs", stripped)
+
+        restored = source[source.index("async function restoreCanvasRuns"):source.index("async function loadCanvas")]
+        self.assertIn("function smartRunRecordedReferences", restored)
+        self.assertIn("run?.standard_request?.inputs", restored)
+        self.assertIn("target.runInputRefs = cloneSmartSettings(refs)", restored)
+        self.assertIn("(node.resultVersions || []).forEach(restoreGenerationReferences)", restored)
+
+    def test_generated_material_accepts_input_connections_and_merges_result_versions(self):
+        contract = """
+const c=require('./static/js/smart-node-contract.js');
+const source={id:'source',type:'smart-material',sourceKind:'input',images:[{url:'/assets/input/a.png',kind:'image'}]};
+const target={id:'result',type:'smart-material',sourceKind:'result',images:[{url:'/api/results/res-1',kind:'image'}]};
+console.log(JSON.stringify({can:c.canConnectNodes(source,target),kind:c.connectionKindForNodes(source,target)}));
+"""
+        self.assertEqual(run_node(contract), {"can": True, "kind": "input"})
+
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        self.assertIn("function mergeSmartGenerationVersions", source)
+        self.assertIn("const resultVersions = mergeSmartGenerationVersions(local.resultVersions, remote.resultVersions)", source)
+        self.assertIn("function smartGenerationInfoInputRefs", source)
+        self.assertIn("inputImagesFor(node)", source)
+        self.assertIn("manualReferenceImagesFor(node)", source[source.index("function smartGenerationInfoInputRefs"):source.index("function smartGenerationReferenceHtml")])
+        self.assertIn("connectionBacked:true", source[source.index("function smartGenerationInfoInputRefs"):source.index("function smartGenerationReferenceHtml")])
+        self.assertNotIn("data-generation-info-add-reference", source)
+        self.assertNotIn("openSmartGenerationInfoReferencePicker", source)
+        self.assertNotIn("generationInfoMentionTargetNodeId", source)
+        self.assertIn("preferredVersionSource", source[source.index("function mergeSmartNode"):source.index("function mergeSmartNodeLists")])
 
     def test_material_node_copy_does_not_claim_generation_capability(self):
         source = (ROOT / "static/js/i18n/smart-canvas.js").read_text(encoding="utf-8")

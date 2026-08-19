@@ -41,7 +41,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse, JSONRes
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from project_storage import ProjectStorage, StorageError, media_kind as stored_media_kind
-from model_capabilities import ModelCapabilityError, ModelCapabilityRegistry, save_provider_catalog_snapshot, save_runninghub_registry_snapshot
+from model_capabilities import ModelCapabilityError, ModelCapabilityRegistry, jimeng_image_resolution_options, save_provider_catalog_snapshot, save_runninghub_registry_snapshot
 
 QUIET_ACCESS_PATHS = {
     "/api/queue_status",
@@ -1195,6 +1195,12 @@ def normalize_runninghub_entry(raw, kind):
     if isinstance(raw_payload, dict):
         entry["raw"] = sanitize_runninghub_app_snapshot(raw_payload) if kind == "app" else raw_payload
     try:
+        schema_synced_at = int(raw.get("schemaSyncedAt") or raw.get("schema_synced_at") or 0)
+        if schema_synced_at > 0:
+            entry["schemaSyncedAt"] = schema_synced_at
+    except Exception:
+        pass
+    try:
         updated_at = int(raw.get("updatedAt") or raw.get("updated_at") or 0)
         if updated_at > 0:
             entry["updatedAt"] = updated_at
@@ -1206,10 +1212,34 @@ def normalize_runninghub_entry(raw, kind):
         entry["workflowId"] = entry["id"]
     return entry
 
+def is_unsynced_runninghub_app_placeholder(raw):
+    """识别同步失败遗留的临时卡片，避免它们进入持久配置和画布。"""
+    if not isinstance(raw, dict) or raw.get("hidden") is True:
+        return False
+    entry_id = str(raw.get("appId") or raw.get("id") or "").strip()
+    if not entry_id:
+        return False
+    title = re.sub(r"\s+", " ", str(raw.get("title") or raw.get("name") or "").strip())
+    if title != f"AI 应用 {entry_id[-6:]}":
+        return False
+    fields = raw.get("fields")
+    raw_payload = raw.get("raw")
+    has_fields = isinstance(fields, list) and any(isinstance(field, dict) for field in fields)
+    has_raw_schema = isinstance(raw_payload, dict) and bool(raw_payload)
+    has_metadata = bool(
+        str(raw.get("note") or raw.get("description") or "").strip()
+        or str(raw.get("thumbnail") or "").strip()
+        or raw.get("schemaSyncedAt")
+        or raw.get("schema_synced_at")
+    )
+    return not has_fields and not has_raw_schema and not has_metadata
+
 def normalize_runninghub_entries(values, kind):
     normalized = []
     seen = set()
     for raw in values or []:
+        if kind == "app" and is_unsynced_runninghub_app_placeholder(raw):
+            continue
         entry = normalize_runninghub_entry(raw, kind)
         if not entry or entry["id"] in seen:
             continue
@@ -1956,6 +1986,10 @@ def runninghub_preflight_app(provider, app_id, field_values):
         value = supplied_values.get(key)
         if key == "::" or value in (None, ""):
             continue
+        try:
+            value = rh_coerce_field_value(field, value)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         values[key] = value
         if rh_field_kind(field) in {"text", "image", "video", "audio"}:
             inputs[key] = value
@@ -2203,7 +2237,7 @@ def versioned_static_html(html: str) -> str:
     if not version:
         return html
     safe_version = urllib.parse.quote(version, safe="._-")
-    pattern = re.compile(r'(?P<prefix>(?:src|href)=["\']|@import\s+url\(["\'])(?P<url>/static/[^"\')?#]+(?:\.(?:js|css|html)))(?:\?v=[^"\')#]*)?', re.I)
+    pattern = re.compile(r'(?P<prefix>(?:src|href)=["\']|@import\s+url\(["\'])(?P<url>/static/[^"\')?#]+(?:\.(?:js|css|html)))(?P<query>\?[^"\')#\s]*)?', re.I)
     def replace(match):
         url = match.group("url")
         cache_version = safe_version
@@ -2215,7 +2249,10 @@ def versioned_static_html(html: str) -> str:
                 cache_version = f"{safe_version}.{int(os.path.getmtime(path))}"
         except Exception:
             pass
-        return f"{match.group('prefix')}{url}?v={cache_version}"
+        query = str(match.group("query") or "")
+        query_parts = [part for part in query.lstrip("?").split("&") if part and not part.lower().startswith("v=")]
+        query_parts.append(f"v={cache_version}")
+        return f"{match.group('prefix')}{url}?{'&'.join(query_parts)}"
     return pattern.sub(replace, html)
 
 def sync_static_html_versions():
@@ -3648,8 +3685,8 @@ class ConversationCreateRequest(BaseModel):
 
 class CanvasCreateRequest(BaseModel):
     title: str = "未命名画布"
-    icon: str = "🧩"
-    kind: str = "classic"
+    icon: str = "sparkles"
+    kind: str = "smart"
     project: Optional[str] = None
     board_x: Optional[float] = None
     board_y: Optional[float] = None
@@ -4382,6 +4419,77 @@ def hydrate_canvas_text_results(canvas):
             changed = True
     return changed
 
+
+def hydrate_canvas_result_media_kinds(canvas):
+    """根据结果索引修复画布中被错误保存的生成结果媒体类型。"""
+    if not isinstance(canvas, dict) or not isinstance(canvas.get("nodes"), list):
+        return False
+    changed = False
+    result_kind_cache = {}
+
+    def result_kind(result_id):
+        key = str(result_id or "").strip()
+        if not key:
+            return ""
+        if key in result_kind_cache:
+            return result_kind_cache[key]
+        record = PROJECT_STORAGE.get_result(key) or {}
+        path = PROJECT_STORAGE.result_path(key)
+        kind = stored_media_kind(str(path or "")) if path else ""
+        if kind not in {"image", "video", "audio", "text"}:
+            kind = explicit_media_kind(record.get("kind"))
+        result_kind_cache[key] = kind
+        return kind
+
+    def result_id_for_item(item):
+        if not isinstance(item, dict):
+            return ""
+        result_id = str(item.get("resultId") or item.get("result_id") or "").strip()
+        if result_id:
+            return result_id
+        url = str(item.get("url") or item.get("src") or "").split("?", 1)[0].split("#", 1)[0]
+        return url.rsplit("/", 1)[-1].strip() if url.startswith("/api/results/") else ""
+
+    def repair_media_item(item):
+        nonlocal changed
+        if not isinstance(item, dict):
+            return ""
+        kind = result_kind(result_id_for_item(item))
+        if kind and item.get("kind") != kind:
+            item["kind"] = kind
+            changed = True
+        return kind
+
+    def repair_result_items(value):
+        if isinstance(value, dict):
+            if "resultId" in value or "result_id" in value or str(value.get("url") or "").startswith("/api/results/"):
+                repair_media_item(value)
+            for child in value.values():
+                repair_result_items(child)
+        elif isinstance(value, list):
+            for child in value:
+                repair_result_items(child)
+
+    for node in canvas["nodes"]:
+        if not isinstance(node, dict):
+            continue
+        repair_result_items(node)
+        result_ids = []
+        run_ref = node.get("runRef") if isinstance(node.get("runRef"), dict) else {}
+        result_ids.extend(run_ref.get("resultIds") or [])
+        result_ids.extend(
+            item.get("resultId") or item.get("result_id")
+            for item in (node.get("outputs") or [])
+            if isinstance(item, dict)
+        )
+        kinds = {result_kind(result_id) for result_id in result_ids}
+        kinds.discard("")
+        if len(kinds) == 1 and node.get("outputKind") != next(iter(kinds)):
+            node["outputKind"] = next(iter(kinds))
+            changed = True
+    repair_result_items(canvas.get("logs"))
+    return changed
+
 def atomic_write_json(path, value):
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -4498,6 +4606,8 @@ def list_projects():
     projects = ensure_default_project()
     counts = {}
     for rec in iter_canvas_records(include_deleted=False):
+        if rec.get("kind") != "smart":
+            continue
         pid = rec.get("project") or DEFAULT_PROJECT_ID
         counts[pid] = counts.get(pid, 0) + 1
     out = []
@@ -4507,9 +4617,11 @@ def list_projects():
         out.append(rec)
     return out
 
-def new_canvas(title="未命名画布", icon="layers", kind="classic", project=None, board_x=None, board_y=None):
+def new_canvas(title="未命名画布", icon="sparkles", kind="smart", project=None, board_x=None, board_y=None):
+    if str(kind or "").strip().lower() != "smart":
+        raise HTTPException(status_code=400, detail="当前只支持新建智能画布")
     timestamp = now_ms()
-    canvas_kind = normalize_canvas_kind(kind)
+    canvas_kind = "smart"
     canvas = {
         "id": uuid.uuid4().hex,
         "title": (title or ("智能画布" if canvas_kind == "smart" else "未命名画布"))[:80],
@@ -4541,10 +4653,15 @@ def load_canvas(canvas_id):
         raise HTTPException(status_code=404, detail="画布不存在")
     with open(path, 'r', encoding='utf-8') as f:
         canvas = json.load(f)
+    if normalize_canvas_kind(canvas.get("kind")) != "smart":
+        raise HTTPException(status_code=410, detail="普通画布已停用，请使用智能画布")
     canvas["revision"] = max(1, int(canvas.get("revision") or 1))
     if canvas.get("deleted_at"):
         raise HTTPException(status_code=404, detail="画布已在回收站")
-    if migrate_canvas_media_references(canvas):
+    changed = migrate_canvas_media_references(canvas)
+    changed = hydrate_canvas_result_media_kinds(canvas) or changed
+    changed = hydrate_canvas_text_results(canvas) or changed
+    if changed:
         save_canvas(canvas, increment_revision=False, touch_updated_at=False)
     return canvas
 
@@ -4616,7 +4733,7 @@ def iter_canvas_records(include_deleted=False):
     return records
 
 def list_canvases():
-    records = iter_canvas_records(include_deleted=False)
+    records = [record for record in iter_canvas_records(include_deleted=False) if record.get("kind") == "smart"]
     return sorted(
         records,
         key=lambda item: (
@@ -4626,7 +4743,7 @@ def list_canvases():
     )
 
 def list_deleted_canvases():
-    records = iter_canvas_records(include_deleted=True)
+    records = [record for record in iter_canvas_records(include_deleted=True) if record.get("kind") == "smart"]
     return sorted(records, key=lambda item: item["deleted_at"], reverse=True)
 
 def canvas_asset_url_value(value):
@@ -4717,7 +4834,7 @@ def extract_canvas_assets(canvas):
                 "kind": kind,
                 "canvas_id": canvas_id,
                 "canvas_title": record.get("title") or "未命名画布",
-                "canvas_kind": record.get("kind") or "classic",
+                "canvas_kind": record.get("kind") or "smart",
                 "canvas_icon": record.get("icon") or "layers",
                 "canvas_owner": record.get("owner") or "",
                 "canvas_color": record.get("color") or "",
@@ -4761,8 +4878,8 @@ def iter_canvas_result_ids(value):
 def canvas_assets_index():
     canvases = []
     items = []
-    canvas_counts = {"all": 0, "smart": 0, "classic": 0}
-    item_counts = {"all": 0, "smart": 0, "classic": 0}
+    canvas_counts = {"all": 0, "smart": 0}
+    item_counts = {"all": 0, "smart": 0}
     cleanup_expired_canvas_trash()
     for filename in os.listdir(CANVAS_DIR):
         if not filename.endswith(".json"):
@@ -4772,6 +4889,8 @@ def canvas_assets_index():
                 canvas = json.load(f)
         except Exception:
             continue
+        if normalize_canvas_kind(canvas.get("kind")) != "smart":
+            continue
         if canvas.get("deleted_at"):
             continue
         record = canvas_record(canvas)
@@ -4779,7 +4898,7 @@ def canvas_assets_index():
         record["asset_count"] = len(canvas_items)
         canvases.append(record)
         items.extend(canvas_items)
-        kind = record.get("kind") or "classic"
+        kind = "smart"
         canvas_counts["all"] += 1
         canvas_counts[kind] = canvas_counts.get(kind, 0) + 1
         item_counts["all"] += len(canvas_items)
@@ -4789,7 +4908,6 @@ def canvas_assets_index():
     categories = [
         {"id": "all", "name": "全部画布", "count": item_counts.get("all", 0), "canvas_count": canvas_counts.get("all", 0)},
         {"id": "smart", "name": "智能画布", "count": item_counts.get("smart", 0), "canvas_count": canvas_counts.get("smart", 0)},
-        {"id": "classic", "name": "普通画布", "count": item_counts.get("classic", 0), "canvas_count": canvas_counts.get("classic", 0)},
     ]
     return {"categories": categories, "canvases": canvases, "items": items}
 
@@ -5793,11 +5911,53 @@ def is_gemini_cli_provider(provider):
 def codex_env_value(key):
     return os.getenv(key, "") or read_api_env_value(key)
 
-def codex_cli_executable():
+def codex_cli_candidates():
     configured = str(codex_env_value("CODEX_BIN") or "").strip()
+    candidates = []
     if configured:
-        return configured
-    return shutil.which("codex") or shutil.which("codex.exe") or shutil.which("codex.cmd") or ""
+        configured_path = os.path.expanduser(configured)
+        if os.path.isabs(configured_path) or os.sep in configured_path or (os.altsep and os.altsep in configured_path):
+            candidates.append(configured_path)
+        else:
+            candidates.append(configured)
+    candidates.extend(["codex", "codex.exe", "codex.cmd"])
+    home = os.path.expanduser("~")
+    if sys.platform == "darwin":
+        candidates.extend([
+            "/Applications/ChatGPT.app/Contents/Resources/codex",
+            os.path.join(home, "Applications", "ChatGPT.app", "Contents", "Resources", "codex"),
+        ])
+    elif os.name == "nt":
+        app_data = os.getenv("APPDATA", "")
+        local_app_data = os.getenv("LOCALAPPDATA", "")
+        candidates.extend([
+            os.path.join(app_data, "npm", "codex.cmd") if app_data else "",
+            os.path.join(local_app_data, "Programs", "codex", "codex.exe") if local_app_data else "",
+            os.path.join(local_app_data, "npm", "codex.cmd") if local_app_data else "",
+        ])
+    else:
+        candidates.extend([
+            os.path.join(home, ".local", "bin", "codex"),
+            "/usr/local/bin/codex",
+            "/usr/bin/codex",
+        ])
+    result = []
+    seen = set()
+    for candidate in candidates:
+        candidate = str(candidate or "").strip()
+        if candidate and candidate not in seen:
+            result.append(candidate)
+            seen.add(candidate)
+    return result
+
+def codex_cli_executable():
+    for candidate in codex_cli_candidates():
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return ""
 
 def codex_timeout(default=CODEX_DEFAULT_TIMEOUT):
     try:
@@ -6937,6 +7097,20 @@ def jimeng_image_model_version(model, mode="text2image"):
     allowed = JIMENG_IMAGE2IMAGE_MODELS if mode == "image2image" else JIMENG_TEXT2IMAGE_MODELS
     return version if version in allowed else ""
 
+def jimeng_validate_image_resolution(model, resolution, mode="text2image"):
+    requested = str(resolution or "").strip().lower()
+    if not requested:
+        return ""
+    version = jimeng_image_model_version(model, mode)
+    if not version:
+        supported_models = ", ".join(sorted(JIMENG_IMAGE2IMAGE_MODELS if mode == "image2image" else JIMENG_TEXT2IMAGE_MODELS))
+        raise HTTPException(status_code=400, detail=f"即梦 {mode} 不支持图片模型「{model}」，当前支持：{supported_models}。")
+    options = jimeng_image_resolution_options(version, mode)
+    if requested not in options:
+        readable = "、".join(item.upper() for item in options)
+        raise HTTPException(status_code=400, detail=f"即梦图片模型 {version} 不支持分辨率 {requested.upper()}，请选择：{readable}。")
+    return requested
+
 def jimeng_image_resolution(model, size, mode="text2image"):
     text = str(model or "").lower()
     if "4k" in text:
@@ -6955,18 +7129,17 @@ def jimeng_image_resolution(model, size, mode="text2image"):
             desired = "2k"
         else:
             desired = "1k"
-    # 按官方规则收敛到模型允许的分辨率
-    version = jimeng_normalize_image_model(model)
-    if mode == "image2image":
-        if version == "5.0Pro":
-            return desired if desired in {"1k", "2k", "4k"} else "1k"
-        return "4k" if desired == "4k" else "2k"
-    if version in ("3.0", "3.1", "5.0Pro"):
-        if version == "5.0Pro" and desired == "4k":
-            return "4k"
-        return "1k" if desired == "1k" else "2k"
-    # 4.x/5.0 只支持 2k/4k
-    return "4k" if desired == "4k" else "2k"
+    version = jimeng_image_model_version(model, mode) or "5.0"
+    options = jimeng_image_resolution_options(version, mode)
+    if not options:
+        raise HTTPException(status_code=400, detail=f"即梦图片模型 {model} 不支持当前的图片输入模式。")
+    if desired in options:
+        return desired
+    if desired == "4k" and "4k" in options:
+        return "4k"
+    if desired in {"2k", "4k"} and "2k" in options:
+        return "2k"
+    return options[0]
 
 JIMENG_VIDEO_HIGH_RES_MODELS = {"seedance2.0_vip"}
 JIMENG_VIDEO_MODEL_VERSIONS = {
@@ -7232,7 +7405,12 @@ async def generate_jimeng_provider_image(prompt, size, model, reference_images=N
     refs = [ref for ref in (reference_images or []) if ref.get("url")]
     mapped_parameters = dict(capability_parameters or {})
     requested_ratio = str(mapped_parameters.get("ratio") or "").strip()
-    requested_resolution = str(mapped_parameters.get("resolution_type") or "").strip()
+    requested_resolution = str(mapped_parameters.get("resolution_type") or mapped_parameters.get("resolution") or "").strip()
+    mode = "image2image" if refs else "text2image"
+    model_version = jimeng_image_model_version(model, mode)
+    if not model_version:
+        raise HTTPException(status_code=400, detail=f"即梦 {mode} 不支持图片模型「{model}」，请重新选择模型。")
+    resolution = jimeng_validate_image_resolution(model_version, requested_resolution, mode) if requested_resolution else jimeng_image_resolution(model_version, size, mode)
     temp_paths = []
     try:
         args = []
@@ -7242,23 +7420,21 @@ async def generate_jimeng_provider_image(prompt, size, model, reference_images=N
                 image_path, created = await jimeng_prepare_local_media(ref.get("url"), "image")
                 image_paths.append(jimeng_cli_path_arg(image_path))
                 temp_paths.extend(created)
-            model_version = jimeng_image_model_version(model, "image2image")
             args = [
                 "image2image",
                 f"--images={','.join(image_paths)}",
                 f"--prompt={prompt}",
-                f"--resolution_type={requested_resolution or jimeng_image_resolution(model, size, 'image2image')}",
+                f"--resolution_type={resolution}",
                 f"--poll={jimeng_poll_seconds()}",
             ]
             if model_version:
                 args.append(f"--model_version={model_version}")
         else:
-            model_version = jimeng_image_model_version(model, "text2image")
             args = [
                 "text2image",
                 f"--prompt={prompt}",
                 f"--ratio={requested_ratio or jimeng_ratio_from_size(size)}",
-                f"--resolution_type={requested_resolution or jimeng_image_resolution(model, size, 'text2image')}",
+                f"--resolution_type={resolution}",
                 f"--poll={jimeng_poll_seconds()}",
             ]
             if model_version:
@@ -7560,11 +7736,25 @@ def ai_money_video_request_body(model, prompt, seconds, aspect_ratio="", resolut
             content.append({"type": "audio_url", "audio_url": {"url": url}})
         if content:
             metadata["content"] = content
+    elif lower_model.endswith(("-fl2va-audio-drive-fast", "-ref2va-audio-drive-fast")):
+        if images:
+            body["images"] = images[:1]
+        if audios:
+            metadata["audio_urls"] = audios[:1]
     elif images:
         body["images"] = images
     if metadata:
         body["metadata"] = metadata
     return merge_request_body(body, capability_parameters)
+
+def ai_money_fashvsr_request_body(model, video_url):
+    model_name = str(model or "").strip()
+    if model_name.lower() not in {"fashvsr_video_upscale", "fashvsr-video-upscale"}:
+        raise HTTPException(status_code=400, detail=f"不是 FashVSR 视频放大模型：{model_name}")
+    source_url = str(video_url or "").strip()
+    if not source_url:
+        raise HTTPException(status_code=400, detail="FashVSR 视频放大需要一个输入视频。")
+    return {"model": model_name, "metadata": {"video_url": source_url}}
 
 AI_MONEY_AUDIO_FORMATS = {"wav", "mp3", "pcm", "ogg_opus"}
 AI_MONEY_AUDIO_SAMPLE_RATES = {8000, 16000, 24000, 32000, 44100}
@@ -7983,6 +8173,30 @@ async def generate_ai_money_midjourney_image(prompt, size, model, reference_imag
 async def generate_ai_money_video(payload, provider, capability_parameters=None):
     base_url = str(provider.get("base_url") or AI_MONEY_DEFAULT_BASE_URL).rstrip("/")
     async with httpx.AsyncClient(timeout=VIDEO_POLL_TIMEOUT) as client:
+        if str(payload.model or "").strip().lower() in {"fashvsr_video_upscale", "fashvsr-video-upscale"}:
+            if len(payload.videos or []) != 1:
+                raise HTTPException(status_code=400, detail="FashVSR 视频放大需要且只能连接一个输入视频。")
+            if payload.images or payload.audios:
+                raise HTTPException(status_code=400, detail="FashVSR 视频放大只接受视频输入，不接受图片或音频。")
+            uploaded_video = await ai_money_upload_reference(client, provider, payload.videos[0], "video")
+            body = ai_money_fashvsr_request_body(payload.model, uploaded_video)
+            submit_url = f"{base_url}/v1/video/generations"
+            response = await client.post(
+                submit_url,
+                headers=api_headers(provider=provider, model=body["model"]),
+                json=body,
+            )
+            response.raise_for_status()
+            raw = response.json()
+            task_id = extract_task_id(raw)
+            if not task_id and isinstance(raw, dict):
+                data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+                task_id = data.get("id") or raw.get("id") or raw.get("task_id")
+            result = raw if video_output_urls(raw) else await wait_for_video_task(client, provider, str(task_id), submit_url) if task_id else raw
+            urls = video_output_urls(result)
+            if not urls:
+                raise HTTPException(status_code=502, detail=f"AI MONEY FashVSR 成功但没有返回视频：{result}")
+            return {"videos": [await save_remote_video_to_output(url, prefix="ai_money_fashvsr_") for url in urls], "task_id": task_id, "raw": result}
         image_urls = []
         for ref in (payload.images or [])[:10]:
             image_urls.append(await ai_money_upload_reference(client, provider, getattr(ref, "url", ""), "image"))
@@ -8500,12 +8714,21 @@ async def promote_result_record(result_id: str, payload: ResultPromoteRequest, r
     save_asset_library(library)
     return {"library": library, "item": item, "result": result_public_item(result)}
 
+@app.patch("/api/results/{result_id}")
+async def rename_generation_result(result_id: str, payload: Dict[str, Any], request: Request):
+    ensure_same_origin_request(request)
+    try:
+        item = PROJECT_STORAGE.rename_result(result_id, str((payload or {}).get("name") or ""))
+    except StorageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"item": result_public_item(item)}
+
 def sync_canvas_result_origins(canvas):
     record = canvas_record(canvas)
     source = {
         "id": record.get("id") or "",
         "title": record.get("title") or "未命名画布",
-        "kind": record.get("kind") or "classic",
+        "kind": record.get("kind") or "smart",
     }
     if not source["id"]:
         return 0
@@ -8523,14 +8746,17 @@ def sync_all_canvas_result_origins():
     for path in paths:
         try:
             with open(path, "r", encoding="utf-8-sig") as handle:
-                sync_canvas_result_origins(json.load(handle))
+                canvas = json.load(handle)
+            if normalize_canvas_kind(canvas.get("kind")) == "smart":
+                sync_canvas_result_origins(canvas)
         except (OSError, ValueError, TypeError):
             continue
 
 @app.get("/api/results")
-async def list_generation_results(kind: str = "all"):
+async def list_generation_results(kind: str = "all", prune_missing: bool = True):
     sync_all_canvas_result_origins()
     selected_kind = "" if kind in {"", "all"} else kind
+    removed_missing = PROJECT_STORAGE.prune_missing_results(selected_kind) if prune_missing else 0
     items = [result_public_item(item) for item in PROJECT_STORAGE.list_results(selected_kind)]
     counts = {name: len(PROJECT_STORAGE.list_results("" if name == "all" else name)) for name in ("all", "image", "video", "audio", "text")}
     canvases = {}
@@ -8544,7 +8770,7 @@ async def list_generation_results(kind: str = "all"):
             "count": 0,
         })
         entry["count"] += 1
-    return {"items": items, "total": len(items), "kind": kind or "all", "counts": counts, "canvases": list(canvases.values())}
+    return {"items": items, "total": len(items), "kind": kind or "all", "counts": counts, "canvases": list(canvases.values()), "removed_missing": removed_missing}
 
 @app.post("/api/canvas-text-results")
 async def create_canvas_text_result(payload: CanvasTextResultRequest):
@@ -11303,8 +11529,73 @@ async def save_ai_image_to_output(image_data, prefix="online_", category="output
         print(f"保存上游图片失败: {e}; url={value}")
         return value
 
-def image_output_meta(url, source_item=None):
-    meta = {"url": url, "kind": "image"}
+MEDIA_KIND_ALIASES = {
+    "image": "image",
+    "images": "image",
+    "picture": "image",
+    "photo": "image",
+    "video": "video",
+    "videos": "video",
+    "movie": "video",
+    "audio": "audio",
+    "audios": "audio",
+    "sound": "audio",
+    "music": "audio",
+    "text": "text",
+    "txt": "text",
+}
+
+
+def explicit_media_kind(value):
+    """只解析上游明确提供的类型或 MIME，不从字段名称推测媒体类型。"""
+    if isinstance(value, dict):
+        for key in (
+            "kind", "type", "mediaKind", "mediaType", "media_type", "outputKind", "output_type",
+            "fileType", "file_type", "mime", "mimeType", "contentType", "content_type",
+        ):
+            kind = explicit_media_kind(value.get(key))
+            if kind:
+                return kind
+        return ""
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if text.startswith("image/"):
+        return "image"
+    if text.startswith("video/"):
+        return "video"
+    if text.startswith("audio/"):
+        return "audio"
+    if text.startswith("text/"):
+        return "text"
+    return MEDIA_KIND_ALIASES.get(text, "")
+
+
+def media_kind_from_reference(value):
+    """从真实本地文件或带扩展名的 URL 读取类型，未知时返回空。"""
+    path = local_media_reference_path(value)
+    if path:
+        kind = stored_media_kind(str(path))
+        if kind in {"image", "video", "audio", "text"}:
+            return kind
+    text = str(value or "").strip()
+    parsed = urllib.parse.urlparse(text)
+    kind = stored_media_kind(parsed.path or text)
+    return kind if kind in {"image", "video", "audio", "text"} else ""
+
+
+def media_output_kind(url, source_item=None, kind_hint=""):
+    """按官方类型、真实文件类型、URL 扩展名依次确定输出媒体类型。"""
+    return (
+        explicit_media_kind(source_item)
+        or explicit_media_kind(kind_hint)
+        or media_kind_from_reference(url)
+        or "image"
+    )
+
+
+def image_output_meta(url, source_item=None, kind_hint=""):
+    meta = {"url": url, "kind": media_output_kind(url, source_item, kind_hint)}
     if not url:
         return meta
     parsed_name = os.path.basename(urllib.parse.urlparse(str(url)).path)
@@ -11926,17 +12217,60 @@ def runninghub_api_key(provider=None, use_wallet=False, prefer_wallet=False, reg
         raise HTTPException(status_code=400, detail="未配置 RunningHub API Key，请在 RH 设置中填写。")
     return api_key
 
-def runninghub_app_headers(json_body=True, use_wallet=False, provider=None, region=None):
+def runninghub_app_headers(json_body=True, use_wallet=False, provider=None, region=None, api_key=""):
     provider = provider or runninghub_provider(region)
     host = urllib.parse.urlsplit(str((provider or {}).get("base_url") or RUNNINGHUB_DEFAULT_BASE_URL)).netloc or "www.runninghub.ai"
     headers = {"Host": host}
     if provider:
-        api_key = runninghub_api_key(provider, use_wallet=use_wallet, region=region)
-        if api_key:
-            headers["Authorization"] = bearer_auth_value(api_key)
+        selected_key = str(api_key or "").strip() or runninghub_api_key(provider, use_wallet=use_wallet, region=region)
+        if selected_key:
+            headers["Authorization"] = bearer_auth_value(selected_key)
     if json_body:
         headers["Content-Type"] = "application/json"
     return headers
+
+def runninghub_app_info_key_candidates(provider=None, region=None):
+    """按当前站点收集可用于读取 AI 应用 Schema 的 Key，避免跨站点或泄露 Key。"""
+    provider = provider or runninghub_provider(region)
+    active_region = runninghub_normalize_region(
+        region or (provider or {}).get("rh_region"),
+        runninghub_region_from_base_url((provider or {}).get("base_url"), "global"),
+    )
+    values = [
+        str((provider or {}).get("api_key") or "").strip(),
+        runninghub_region_key_value(active_region, use_wallet=False),
+        str((provider or {}).get("wallet_api_key") or "").strip(),
+        runninghub_region_key_value(active_region, use_wallet=True),
+    ]
+    candidates = []
+    for value in values:
+        if value and value not in candidates:
+            candidates.append(value)
+    return candidates
+
+def runninghub_response_message(raw, fallback="RunningHub 返回了无法识别的错误"):
+    if isinstance(raw, dict):
+        for key in ("msg", "message", "errorMessage", "error", "errorMessages"):
+            value = raw.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, list):
+                text = "; ".join(str(item).strip() for item in value if str(item).strip())
+                if text:
+                    return text
+        data = raw.get("data")
+        if isinstance(data, dict):
+            return runninghub_response_message(data, fallback)
+    return fallback
+
+def runninghub_app_info_should_retry(status_code, raw):
+    if status_code in (401, 403):
+        return True
+    if not isinstance(raw, dict):
+        return False
+    code = str(raw.get("code") or "").strip()
+    message = runninghub_response_message(raw, "").upper()
+    return code in {"1602", "332"} or "API_KEY" in message or "USER_DOES_NOT_EXIST" in message
 
 def runninghub_local_asset_path(url):
     text = str(url or "").strip()
@@ -12002,7 +12336,7 @@ def rewrite_runninghub_file_url(url):
     target = RUNNINGHUB_FILE_HOST_REWRITES.get((parsed.netloc or "").lower())
     return parsed._replace(netloc=target).geturl() if target else text
 
-def runninghub_extract_outputs(data):
+def runninghub_extract_output_items(data):
     arr = []
     if isinstance(data, list):
         arr = data
@@ -12017,14 +12351,19 @@ def runninghub_extract_outputs(data):
     outputs = []
     for item in arr:
         if isinstance(item, str):
-            outputs.append(rewrite_runninghub_file_url(item))
+            outputs.append({"url": rewrite_runninghub_file_url(item), "source": None})
         elif isinstance(item, dict):
             url = item.get("fileUrl") or item.get("file_url") or item.get("url") or item.get("downloadUrl") or item.get("download_url")
             if isinstance(url, list):
-                outputs.extend([rewrite_runninghub_file_url(u) for u in url if u])
+                outputs.extend({"url": rewrite_runninghub_file_url(u), "source": item} for u in url if u)
             elif url:
-                outputs.append(rewrite_runninghub_file_url(url))
+                outputs.append({"url": rewrite_runninghub_file_url(url), "source": item})
     return outputs
+
+
+def runninghub_extract_outputs(data):
+    """兼容旧调用方，只返回 RunningHub 输出地址。"""
+    return [item["url"] for item in runninghub_extract_output_items(data) if item.get("url")]
 
 async def runninghub_store_remote_output(client, remote):
     remote = rewrite_runninghub_file_url(remote)
@@ -12637,13 +12976,6 @@ def rh_field_kind(field):
         return "boolean"
     if t in ("SELECT", "SWITCH", "DROPDOWN", "ENUM"):
         return "select"
-    key = f"{field.get('fieldName') or ''} {field.get('fieldValue') or ''}".lower()
-    if re.search(r"\b(image|img|mask|photo|picture)\b", key) or re.search(r"\.(png|jpe?g|webp|gif|bmp)(\?|$)", key, re.I):
-        return "image"
-    if re.search(r"\b(video|movie|mp4)\b", key) or re.search(r"\.(mp4|webm|mov|m4v|mkv)(\?|$)", key, re.I):
-        return "video"
-    if re.search(r"\b(audio|sound|music|voice)\b", key) or re.search(r"\.(mp3|wav|ogg|m4a|flac|aac)(\?|$)", key, re.I):
-        return "audio"
     return "text"
 
 def rh_field_role(field):
@@ -12651,10 +12983,31 @@ def rh_field_role(field):
     if kind in ("image", "video", "audio", "number", "slider", "boolean"):
         return kind
     field = field or {}
-    text = f"{field.get('fieldName') or ''} {field.get('label') or ''} {field.get('group') or ''}".lower()
-    if re.search(r"prompt|positive|negative|text|caption|description|关键词|提示词|正向|负向", text):
+    explicit = next((str(field.get(key) or "").strip().lower().replace("-", "_").replace(" ", "_") for key in (
+        "inputRole", "input_role", "semanticRole", "semantic_role", "role"
+    ) if str(field.get(key) or "").strip()), "")
+    if explicit in {"prompt", "positive_prompt", "negative_prompt", "caption", "description", "instruction"}:
         return "prompt"
     return "text"
+
+def rh_coerce_field_value(field, value):
+    field = field or {}
+    field_type = str(field.get("fieldType") or field.get("type") or "").strip().upper()
+    if value is None or str(value).strip() == "":
+        return value
+    if field_type not in {"FLOAT", "NUMBER", "SLIDER", "INT", "INTEGER"}:
+        return value
+    key = f"{field.get('nodeId') or ''}::{field.get('fieldName') or ''}"
+    label = str(field.get("label") or field.get("description") or field.get("fieldName") or key).strip()
+    try:
+        number = float(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"RunningHub 字段“{label}”（{key}）要求数字，当前值为“{value}”") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"RunningHub 字段“{label}”（{key}）要求有限数字，当前值为“{value}”")
+    if field_type in {"INT", "INTEGER"} and not number.is_integer():
+        raise ValueError(f"RunningHub 字段“{label}”（{key}）要求整数，当前值为“{value}”")
+    return int(number) if field_type in {"INT", "INTEGER"} else number
 
 def _rh_natural_cmp(x, y):
     if x == y:
@@ -12749,10 +13102,24 @@ def sanitize_runninghub_app_snapshot(data):
     if not isinstance(data, dict):
         return {}
     allowed = (
-        "webappId", "webappName", "title", "description", "descriptionCn", "descriptionEn",
+        "webappId", "webappName", "webappNameZh", "webappNameEn", "title", "titleZh", "titleEn",
+        "name", "nameZh", "nameEn", "description", "descriptionCn", "descriptionEn",
         "covers", "tags", "nodeInfoList", "fieldCount", "version", "updatedAt",
     )
     snapshot = {key: data[key] for key in allowed if key in data}
+    for key in ("titles", "names", "localizedNames", "webappNames"):
+        value = data.get(key)
+        if not isinstance(value, dict):
+            continue
+        clean = {}
+        for locale, title in value.items():
+            if len(clean) >= 8 or not isinstance(title, (str, int, float)):
+                continue
+            text = re.sub(r"\s+", " ", str(title).strip())[:200]
+            if text:
+                clean[str(locale).strip()[:20]] = text
+        if clean:
+            snapshot[key] = clean
     if isinstance(snapshot.get("covers"), list):
         snapshot["covers"] = [
             {key: cover[key] for key in ("id", "url", "thumbnailUri", "imageWidth", "imageHeight") if key in cover}
@@ -12770,6 +13137,7 @@ def sanitize_runninghub_app_snapshot(data):
                 for key in (
                     "nodeId", "nodeName", "fieldName", "fieldValue", "fieldData", "fieldType",
                     "description", "descriptionCn", "descriptionEn", "required", "defaultValue",
+                    "inputRole", "input_role", "semanticRole", "semantic_role", "role",
                 )
                 if key in field
             }
@@ -12786,6 +13154,24 @@ def sanitize_runninghub_node_info_list(items):
         clean = dict(item)
         if rh_is_seed_like_name(clean.get("fieldName"), clean.get("label"), clean.get("note")):
             clean["fieldValue"] = normalize_seed_uint32(clean.get("fieldValue"))
+        result.append(clean)
+    return result
+
+def validate_runninghub_node_info_list(items, fields):
+    field_by_key = {
+        (str(field.get("nodeId") or ""), str(field.get("fieldName") or "")): field
+        for field in (fields or []) if isinstance(field, dict)
+    }
+    result = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        clean = dict(item)
+        key = (str(clean.get("nodeId") or ""), str(clean.get("fieldName") or ""))
+        field = field_by_key.get(key)
+        if not field:
+            raise ValueError(f"RunningHub 提交包含官方 Schema 中不存在的字段：{key[0]}::{key[1]}")
+        clean["fieldValue"] = rh_coerce_field_value(field, clean.get("fieldValue"))
         result.append(clean)
     return result
 
@@ -14746,21 +15132,60 @@ async def runninghub_app_info(webappId: str = "", region: str = ""):
     if not webapp_id:
         raise HTTPException(status_code=400, detail="webappId 必填")
     provider = runninghub_provider(region)
-    api_key = runninghub_api_key(provider, region=region)
-    url = runninghub_endpoint_url(provider, f"/api/webapp/apiCallDemo?apiKey={urllib.parse.quote(api_key)}&webappId={urllib.parse.quote(webapp_id)}")
+    active_region = runninghub_normalize_region(
+        region or provider.get("rh_region"),
+        runninghub_region_from_base_url(provider.get("base_url"), "global"),
+    )
+    api_keys = runninghub_app_info_key_candidates(provider, active_region)
+    if not api_keys:
+        site_name = "国内站" if active_region == "cn" else "国际站"
+        raise HTTPException(
+            status_code=400,
+            detail=f"RunningHub {site_name}未配置 API Key。请先在该站点填写 RH币 API Key；若只配置了另一个站点的 Key，请切换站点后再同步。",
+        )
+    url = runninghub_endpoint_url(provider, "/api/webapp/apiCallDemo")
+    raw = None
+    last_status = 502
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=120.0, write=30.0, pool=20.0)) as client:
-        try:
-            response = await client.get(url, headers=runninghub_app_headers(False, provider=provider, region=region))
-            raw = response.json()
-        except httpx.HTTPStatusError as exc:
-            raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text[:500]) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"请求 RunningHub 应用信息失败：{exc}") from exc
-    if response.status_code >= 400:
-        raise HTTPException(status_code=response.status_code, detail=json.dumps(raw, ensure_ascii=False)[:500])
-    if isinstance(raw, dict) and raw.get("code") not in (0, "0", None):
-        raise HTTPException(status_code=400, detail=raw.get("msg") or f"RunningHub 查询失败 code={raw.get('code')}")
-    data = raw.get("data") if isinstance(raw, dict) else {}
+        for index, api_key in enumerate(api_keys):
+            headers = runninghub_app_headers(False, provider=provider, region=active_region, api_key=api_key)
+            try:
+                response = await client.get(url, params={"apiKey": api_key, "webappId": webapp_id}, headers=headers)
+                last_status = response.status_code
+                raw = response.json()
+                # 国内站和国际站目前都提供同一资料接口，但部分国内站网关会拒绝 GET。
+                # 只有明确收到方法/路由不支持时才用 POST 重试，避免把一次正常请求变成重复请求。
+                if response.status_code in (404, 405):
+                    response = await client.post(
+                        url,
+                        headers=runninghub_app_headers(True, provider=provider, region=active_region, api_key=api_key),
+                        json={"apiKey": api_key, "webappId": webapp_id},
+                    )
+                    last_status = response.status_code
+                    raw = response.json()
+            except ValueError:
+                raw = {"message": "上游没有返回有效 JSON"}
+            except Exception as exc:
+                if index == len(api_keys) - 1:
+                    raise HTTPException(status_code=502, detail=f"请求 RunningHub 应用信息失败：{exc}") from exc
+                continue
+            accepted = response.status_code < 400 and isinstance(raw, dict) and raw.get("code") in (0, "0", None)
+            if accepted:
+                break
+            if index == len(api_keys) - 1 or not runninghub_app_info_should_retry(response.status_code, raw):
+                message = runninghub_response_message(raw, f"RunningHub HTTP {response.status_code}")
+                raise HTTPException(status_code=response.status_code if response.status_code >= 400 else 400, detail=f"读取 AI 应用 {webapp_id} 失败：{message}")
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=last_status if last_status >= 400 else 502, detail="RunningHub 未返回有效的 AI 应用信息")
+    data = raw.get("data")
+    if not isinstance(data, dict) or not data:
+        raise HTTPException(status_code=404, detail=f"未找到 AI 应用 {webapp_id}，请确认 ID、当前站点和 API Key 属于同一 RunningHub 账号。")
+    app_title = str(data.get("webappName") or data.get("title") or "").strip()
+    if not app_title or not isinstance(data.get("nodeInfoList"), list):
+        raise HTTPException(
+            status_code=502,
+            detail=f"RunningHub 返回的 AI 应用 {webapp_id} 资料不完整，请确认应用 ID、当前站点和 API Key 属于同一站点。",
+        )
     return {"success": True, "data": sanitize_runninghub_app_snapshot(data or {})}
 
 @app.post("/api/runninghub/submit")
@@ -14770,10 +15195,17 @@ async def runninghub_submit(payload: RunningHubSubmitRequest):
         raise HTTPException(status_code=400, detail="webappId 必填")
     provider = runninghub_provider(payload.region)
     api_key = runninghub_api_key(provider, use_wallet=payload.useWallet, region=payload.region)
+    entry = runninghub_entry_config_from_model(provider, f"app:{webapp_id}")
+    if not entry:
+        raise HTTPException(status_code=400, detail=f"RunningHub AI 应用未同步官方 Schema：{webapp_id}")
+    try:
+        node_info_list = validate_runninghub_node_info_list(payload.nodeInfoList or [], entry.get("fields") or [])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     body = {
         "apiKey": api_key,
         "webappId": webapp_id,
-        "nodeInfoList": sanitize_runninghub_node_info_list(payload.nodeInfoList or []),
+        "nodeInfoList": sanitize_runninghub_node_info_list(node_info_list),
     }
     instance_type = str(payload.instanceType or "").strip()
     if instance_type:
@@ -15017,13 +15449,14 @@ async def runninghub_query(taskId: str = "", useWallet: bool = False, region: st
         image_items = []
         if code in (0, "0"):
             status = "SUCCESS"
-            for remote in runninghub_extract_outputs(raw.get("data")):
+            for output_item in runninghub_extract_output_items(raw.get("data")):
+                remote = output_item["url"]
                 try:
                     local_url = await runninghub_store_remote_output(client, remote)
                 except Exception:
                     local_url = remote
                 urls.append(local_url)
-                image_items.append(image_output_meta(local_url))
+                image_items.append(image_output_meta(local_url, output_item.get("source")))
         elif code in (804, "804"):
             status = "RUNNING"
         elif code in (813, "813"):
@@ -15085,7 +15518,8 @@ async def codex_status():
         return {
             "installed": False,
             "logged_in": False,
-            "message": "未找到 OpenAI Codex CLI，请先安装。",
+            "state": "missing",
+            "message": "未找到 OpenAI Codex CLI。请在 API 设置的 GPT CLI 卡片中安装或更新。",
         }
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -15098,18 +15532,47 @@ async def codex_status():
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
         out_text, err_text = codex_decode_output(stdout, stderr)
         ok = proc.returncode == 0
+        logged_in = None
+        login_message = ""
+        if ok:
+            try:
+                login_proc = await asyncio.create_subprocess_exec(
+                    exe,
+                    "login",
+                    "status",
+                    cwd=BASE_DIR,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                login_stdout, login_stderr = await asyncio.wait_for(login_proc.communicate(), timeout=10)
+                login_out, login_err = codex_decode_output(login_stdout, login_stderr)
+                login_text = f"{login_out}\n{login_err}".lower()
+                if re.search(r"not\s+(logged|authenticated)|未登录|未认证", login_text):
+                    logged_in = False
+                    login_message = "已安装，但当前未登录。请执行 codex login。"
+                elif login_proc.returncode == 0 and re.search(r"logged\s+in|authenticated|已登录|已认证", login_text):
+                    logged_in = True
+                    login_message = "已安装并已登录，可直接运行文本生成。"
+                elif login_proc.returncode != 0:
+                    logged_in = False
+                    login_message = "已安装，但登录状态检查未通过。请执行 codex login。"
+            except Exception:
+                logged_in = None
+        state = "ready" if ok and logged_in is True else "not_logged_in" if ok and logged_in is False else "installed" if ok else "invalid"
         return {
             "installed": ok,
-            "logged_in": None,
+            "logged_in": logged_in,
+            "state": state,
             "version": out_text or err_text,
             "path": exe,
-            "message": "OpenAI Codex CLI 已安装，仅提供文本生成能力。登录状态会在首次执行 codex exec 时由 CLI 校验。" if ok else (err_text or out_text or "Codex CLI 检测失败"),
+            "message": login_message if ok and login_message else ("OpenAI Codex CLI 检测失败：" + (err_text or out_text or "版本命令未成功")),
             "raw": {"stdout": out_text, "stderr": err_text, "returncode": proc.returncode},
         }
     except Exception as exc:
         return {
             "installed": False,
             "logged_in": False,
+            "state": "error",
             "path": exe,
             "message": f"Codex CLI 检测失败：{exc}",
         }
@@ -16613,6 +17076,25 @@ async def build_online_image_result(payload: OnlineImageRequest):
         "params": {"provider_id": provider["id"], "model": model, "size": request_size, "requested_size": payload.size, "quality": payload.quality, "n": count, "reference_images": refs},
         "raw_usage": raw.get("usage") if isinstance(raw, dict) else None,
     }
+    generation_derivation = {
+        "operation": "online-image",
+        "prompt": payload.prompt,
+        "provider_id": provider["id"],
+        "provider_name": provider.get("name") or provider["id"],
+        "model": model,
+        "parameters": result["params"],
+    }
+    for url in local_urls:
+        clean_url = urllib.parse.unquote(str(url or "").split("?", 1)[0]).rstrip("/")
+        if not clean_url.startswith("/api/results/"):
+            continue
+        result_id = clean_url.rsplit("/", 1)[-1].strip()
+        if not result_id:
+            continue
+        try:
+            PROJECT_STORAGE.update_result_metadata(result_id, derivation=generation_derivation)
+        except StorageError:
+            continue
     save_to_history(result)
     if GLOBAL_LOOP:
         asyncio.run_coroutine_threadsafe(manager.broadcast_new_image(result), GLOBAL_LOOP)
@@ -16932,14 +17414,15 @@ async def query_image_task(payload: ImageTaskQueryRequest):
                 if code in (0, "0"):
                     local_urls = []
                     local_items = []
-                    for remote in runninghub_extract_outputs(raw.get("data")):
+                    for output_item in runninghub_extract_output_items(raw.get("data")):
+                        remote = output_item["url"]
                         try:
                             local_url = await runninghub_store_remote_output(client, remote)
                         except Exception:
                             local_url = rewrite_runninghub_file_url(remote)
                         if local_url:
                             local_urls.append(local_url)
-                            local_items.append(image_output_meta(local_url))
+                            local_items.append(image_output_meta(local_url, output_item.get("source")))
                     result = {
                         "status": "succeeded",
                         "prompt": "",
@@ -17468,6 +17951,8 @@ def video_submit_url_candidates(provider, base_url):
 
 def video_task_url_candidates(provider, base_url, task_id, submit_url=""):
     if is_ai_money_provider(provider):
+        if "/v1/video/generations" in str(submit_url or ""):
+            return [f"{base_url}/v1/video/generations/{urllib.parse.quote(str(task_id), safe='')}" ]
         return [f"{base_url}/v1/videos/{urllib.parse.quote(str(task_id), safe='')}" ]
     if is_tudou_provider(provider):
         quoted_id = urllib.parse.quote(str(task_id), safe="")
@@ -19126,6 +19611,8 @@ async def trashed_canvases():
 
 @app.post("/api/canvases")
 async def create_canvas(payload: CanvasCreateRequest):
+    if str(payload.kind or "").strip().lower() != "smart":
+        raise HTTPException(status_code=400, detail="当前只支持新建智能画布")
     return {"canvas": new_canvas(payload.title, payload.icon, payload.kind, payload.project, payload.board_x, payload.board_y)}
 
 @app.get("/api/canvases/{canvas_id}/meta")
@@ -20329,6 +20816,8 @@ async def batch_crop_asset_library_items(payload: AssetLibraryBatchCropRequest):
 async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
     with CANVAS_LOCK:
         canvas = load_canvas(canvas_id)
+        if normalize_canvas_kind(canvas.get("kind")) != "smart":
+            raise HTTPException(status_code=410, detail="普通画布已停用，请使用智能画布")
         current_revision = max(1, int(canvas.get("revision") or 1))
         canvas["revision"] = current_revision
         if payload.base_revision and int(payload.base_revision) != current_revision:
@@ -20354,6 +20843,7 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
         canvas["kind"] = normalize_canvas_kind(canvas.get("kind"))
         incoming_nodes = {"nodes": payload.nodes}
         migrate_canvas_media_references(incoming_nodes)
+        hydrate_canvas_result_media_kinds(incoming_nodes)
         hydrate_canvas_text_results(incoming_nodes)
         canvas["nodes"] = incoming_nodes["nodes"]
         canvas["connections"] = payload.connections
@@ -21840,6 +22330,7 @@ def runninghub_normalize_field(raw, fallback=None):
         "fieldName": field_name,
         "fieldValue": field_value,
         "fieldType": str(raw.get("fieldType") or fallback.get("fieldType") or "TEXT"),
+        "inputRole": str(raw.get("inputRole") or raw.get("input_role") or raw.get("semanticRole") or raw.get("semantic_role") or raw.get("role") or fallback.get("inputRole") or ""),
         "label": str(raw.get("label") or raw.get("title") or field_name or fallback.get("label") or ""),
         "enabled": bool(raw.get("enabled", fallback.get("enabled", True))),
         "sourceFromUpstream": bool(raw.get("sourceFromUpstream", fallback.get("sourceFromUpstream", True))),

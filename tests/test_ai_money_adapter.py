@@ -78,6 +78,44 @@ class AiMoneyAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["seconds"], 6)
         self.assertEqual(body["metadata"], {"ratio": "16:9", "resolution": "1080p"})
 
+    def test_fashvsr_request_body_uses_uploaded_video_metadata_field(self):
+        body = main.ai_money_fashvsr_request_body(
+            "FashVSR_video_upscale",
+            "https://cdn.example.com/input.mp4",
+        )
+
+        self.assertEqual(body, {
+            "model": "FashVSR_video_upscale",
+            "metadata": {"video_url": "https://cdn.example.com/input.mp4"},
+        })
+
+    def test_minimax_h3_audio_drive_request_keeps_image_and_audio_in_documented_fields(self):
+        body = main.ai_money_video_request_body(
+            "minimax-h3-ow-fl2va-audio-drive-fast",
+            "让人物随音频说话",
+            5,
+            image_urls=["https://cdn.example.com/frame.png"],
+            audio_urls=["https://cdn.example.com/voice.mp3"],
+            capability_parameters={
+                "seconds": 5,
+                "metadata": {"resolution": "720p", "ratio": "16:9"},
+            },
+        )
+
+        self.assertEqual(body["images"], ["https://cdn.example.com/frame.png"])
+        self.assertEqual(body["metadata"]["audio_urls"], ["https://cdn.example.com/voice.mp3"])
+        self.assertEqual(body["seconds"], 5)
+
+    def test_ai_money_video_task_polling_uses_specialist_endpoint(self):
+        urls = main.video_task_url_candidates(
+            {"id": "ai-money", "base_url": "https://api.laohuaimoney.com"},
+            "https://api.laohuaimoney.com",
+            "task-1",
+            "https://api.laohuaimoney.com/v1/video/generations",
+        )
+
+        self.assertEqual(urls, ["https://api.laohuaimoney.com/v1/video/generations/task-1"])
+
     def test_audio_request_body_supports_mureka_capability_parameters(self):
         body = main.ai_money_audio_request_body(
             "mureka-v9-bgm",

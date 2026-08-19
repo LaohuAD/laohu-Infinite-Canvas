@@ -5,6 +5,16 @@ body { margin:0; min-height:100vh; background:var(--bg); color:var(--text); font
 button { font-family:inherit; cursor:pointer; border:0; background:transparent; color:inherit; }
 .page { min-height:100vh; padding:32px 24px 80px; }
 .wrap { max-width:1280px; margin:0 auto; }
+html.comfyui-embedded,
+html.comfyui-embedded body { background:transparent; }
+html.comfyui-embedded .page { min-height:0 !important; padding:0 !important; }
+html.comfyui-embedded .wrap { max-width:none !important; }
+html.comfyui-embedded .page-head { display:none !important; }
+html.comfyui-embedded .layout { grid-template-columns:minmax(0,1fr) !important; gap:0 !important; }
+html.comfyui-embedded .sidebar { position:static !important; max-height:none !important; overflow:visible !important; }
+html.comfyui-embedded .content { gap:0 !important; }
+html.comfyui-embedded .graph-card { border:0 !important; border-radius:0 !important; padding:0 !important; background:transparent !important; }
+html.comfyui-embedded .nodes-toggle { margin-top:12px !important; }
 .page-head { padding:0 4px 28px; display:flex; justify-content:space-between; align-items:end; gap:24px; flex-wrap:wrap; }
 .page-head .title { font-size:26px; line-height:1.05; font-weight:900; letter-spacing:-.015em; }
 .page-head .sub { margin-top:8px; color:var(--muted); font-size:12.5px; line-height:1.55; font-weight:600; max-width:520px; }

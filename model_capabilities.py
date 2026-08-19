@@ -29,6 +29,23 @@ RUNNINGHUB_PROFILE_ALIASES = {
     "seedance-2.0-global/image-to-video": "Seedance2.0 Image to Video",
 }
 
+JIMENG_IMAGE_TEXT2IMAGE_MODELS = {"3.0", "3.1", "4.0", "4.1", "4.5", "4.6", "4.7", "5.0", "5.0Pro"}
+JIMENG_IMAGE2IMAGE_MODELS = {"4.0", "4.1", "4.5", "4.6", "4.7", "5.0", "5.0Pro"}
+
+
+def jimeng_image_resolution_options(model_id: str, mode: str = "text2image") -> List[str]:
+    """Return the resolution_type values accepted by the installed Dreamina CLI."""
+    normalized = str(model_id or "").strip()
+    if mode == "image2image" and normalized in {"3.0", "3.1"}:
+        return []
+    if normalized == "5.0Pro":
+        return ["1k", "2k", "4k"]
+    if normalized in {"3.0", "3.1"}:
+        return ["1k", "2k"]
+    if normalized in (JIMENG_IMAGE2IMAGE_MODELS if mode == "image2image" else JIMENG_IMAGE_TEXT2IMAGE_MODELS):
+        return ["2k", "4k"]
+    return ["2k", "4k"]
+
 
 def _is_music_model_id(model_id: str) -> bool:
     lower = str(model_id or "").strip().lower()
@@ -853,7 +870,9 @@ def runninghub_profile_from_registry_item(item: Dict[str, Any]) -> Dict[str, Any
 def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
     normalized = str(model_id or "").strip()
     lower = normalized.lower()
-    if lower == "laohuaimoney-upscaler":
+    if lower in {"fashvsr_video_upscale", "fashvsr-video-upscale"}:
+        operation = "video_upscale"
+    elif lower == "laohuaimoney-upscaler":
         operation = "video_upscale"
     elif lower.endswith(("-start-end", "-start-to-end")):
         operation = "start_end_to_video"
@@ -863,6 +882,8 @@ def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
         operation = "video_to_video"
     elif lower.endswith("-short-play"):
         operation = "script_to_video"
+    elif lower.endswith(("-fl2va-audio-drive-fast", "-ref2va-audio-drive-fast")):
+        operation = "audio_driven_video"
     elif re.search(r"-t2v(?:-|$)", lower):
         operation = "text_to_video"
     elif re.search(r"-i2v(?:-|$)", lower):
@@ -888,6 +909,7 @@ def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
         (r"^kling-o3-", "kling-o3"),
         (r"^kling-v3(?:\.0)?-", "kling-v3.0"),
         (r"^minimax-h3-ow-", "minimax-h3"),
+        (r"^fashvsr[_-]", "fashvsr"),
         (r"^vidu-q3-", "vidu-q3"),
         (r"^wan-2\.7-spicy-", "wan-2.7-spicy"),
         (r"^laohuaimoney-video-v31-", "veo3.1"),
@@ -895,16 +917,28 @@ def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
         (r"^laohuaimoney-video-gk-", "grok-video"),
     )
     family_name = next((name for pattern, name in family_patterns if re.search(pattern, lower)), base)
-    if lower == "laohuaimoney-upscaler":
+    if lower in {"fashvsr_video_upscale", "fashvsr-video-upscale"}:
+        family_name = "FashVSR"
+    elif lower == "laohuaimoney-upscaler":
         family_name = "upscaler"
     elif lower == "midjourney-video":
         family_name = "midjourney"
-    family_id = "ai-money-" + re.sub(r"[^a-z0-9]+", "-", family_name).strip("-")
+    family_id = "ai-money-" + re.sub(r"[^a-z0-9]+", "-", family_name.lower()).strip("-")
     inputs: Dict[str, Dict[str, Any]] = {"prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}}
     mapping = {"prompt": "prompt"}
     if operation == "video_upscale":
-        inputs = {"source_video": {"media_type": "video", "min": 1, "max": 1, "role": "source_video"}}
-        mapping = {"source_video": "metadata.content"}
+        if lower in {"fashvsr_video_upscale", "fashvsr-video-upscale"}:
+            inputs = {
+                "source_video": {
+                    "media_type": "video", "min": 1, "max": 1, "role": "source_video",
+                    "min_duration_seconds": 3, "max_duration_seconds": 15,
+                    "max_pixels": 854 * 480, "label": "480P 输入视频",
+                },
+            }
+            mapping = {"source_video": "metadata.video_url"}
+        else:
+            inputs = {"source_video": {"media_type": "video", "min": 1, "max": 1, "role": "source_video"}}
+            mapping = {"source_video": "metadata.content"}
     elif operation == "start_end_to_video":
         inputs["first_frame"] = {"media_type": "image", "min": 1, "max": 1, "role": "first_frame"}
         inputs["last_frame"] = {"media_type": "image", "min": 1, "max": 1, "role": "last_frame"}
@@ -928,6 +962,13 @@ def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
             "reference_audio": {"media_type": "audio", "min": 0, "max": 5, "role": "reference_audio"},
         })
         mapping.update({"reference": "metadata.content", "source_video": "metadata.content", "reference_audio": "metadata.content"})
+    elif lower.endswith(("-fl2va-audio-drive-fast", "-ref2va-audio-drive-fast")):
+        inputs = {
+            "prompt": {"media_type": "text", "min": 0, "max": 1, "role": "prompt"},
+            "first_frame": {"media_type": "image", "min": 1, "max": 1, "role": "first_frame"},
+            "reference_audio": {"media_type": "audio", "min": 1, "max": 1, "role": "reference_audio"},
+        }
+        mapping = {"prompt": "prompt", "first_frame": "images", "reference_audio": "metadata.audio_urls"}
     parameters = {
         "duration": {"level": "optional", "type": "integer", "min": 1, "max": 60, "default": 5, "source_field": "seconds"},
         "resolution": {"level": "optional", "type": "enum", "options": ["720p", "1080p", "2k"], "source_field": "metadata.resolution"},
@@ -943,10 +984,18 @@ def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
             inputs["reference_audio"]["max"] = 10
         parameters = {
             "duration": {"level": "optional", "type": "enum", "options": [-1, *range(4, 31)], "default": 5, "source_field": "seconds"},
-            "resolution": {"level": "optional", "type": "enum", "options": ["480p", "720p", "1080p", "2k", "4k"], "default": "720p", "source_field": "metadata.resolution"},
+            "resolution": {"level": "optional", "type": "enum", "options": ["480p", "720p", "1080p", "2k", "4k", "native1080p"], "default": "720p", "source_field": "metadata.resolution"},
             "aspect_ratio": {"level": "optional", "type": "enum", "options": ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16", "21:9"], "default": "adaptive" if operation == "image_to_video" else "16:9", "source_field": "metadata.ratio"},
             "generate_audio": {"level": "optional", "type": "boolean", "default": True, "source_field": "metadata.generate_audio"},
             "return_last_frame": {"level": "optional", "type": "boolean", "default": False, "source_field": "metadata.return_last_frame"},
+        }
+    elif lower in {"fashvsr_video_upscale", "fashvsr-video-upscale"}:
+        parameters = {}
+    elif lower.startswith("minimax-h3-ow-"):
+        parameters = {
+            "duration": {"level": "optional", "type": "enum", "options": [5, 10, 15], "default": 5, "source_field": "seconds"},
+            "resolution": {"level": "optional", "type": "enum", "options": ["480p", "720p"], "default": "720p", "source_field": "metadata.resolution"},
+            "aspect_ratio": {"level": "optional", "type": "enum", "options": ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"], "default": "16:9", "source_field": "metadata.ratio"},
         }
     elif lower.startswith("laohuaimoney-video-v31-"):
         inputs = {
@@ -971,7 +1020,7 @@ def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
             "source_video": {"media_type": "video", "min": 0, "max": 1, "role": "source_video"},
         }
         mapping = {"prompt": "prompt", "reference": "images", "source_video": "metadata.video_url"}
-    elif operation == "video_upscale":
+    elif operation == "video_upscale" and lower not in {"fashvsr_video_upscale", "fashvsr-video-upscale"}:
         parameters = {
             "resolution": {"level": "optional", "type": "enum", "options": ["720p", "1080p", "2k", "4k"], "default": "1080p", "source_field": "metadata.resolution"},
         }
@@ -984,12 +1033,13 @@ def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
         for key, spec in parameters.items()
     })
     return {
-        "model_id": normalized, "family_id": family_id, "family_name": family_name.replace("-", " ").title(),
+        "model_id": normalized, "family_id": family_id,
+        "family_name": "FashVSR" if lower in {"fashvsr_video_upscale", "fashvsr-video-upscale"} else family_name.replace("-", " ").title(),
         "display_name": normalized, "variant_id": operation, "node_type": "video_generation", "operation": operation,
         "status": "confirmed", "readiness": "ready", "runnable": True, "version": 1,
         "evidence_level": "official_documented", "inputs": inputs, "parameters": parameters,
         "request_mapping": mapping, "output": {"media_type": "video", "min": 1, "async": True},
-        "platform": {"endpoint": "/v1/videos"},
+        "platform": {"endpoint": "/v1/video/generations" if lower in {"fashvsr_video_upscale", "fashvsr-video-upscale"} else "/v1/videos"},
     }
 
 
@@ -1538,14 +1588,14 @@ def modelscope_profile_from_model_id(model_id: str, node_type: str) -> Dict[str,
 def jimeng_profile_from_model_id(model_id: str, node_type: str) -> Dict[str, Any]:
     normalized = str(model_id or "").strip()
     if node_type == "image_generation":
-        supported = {"3.0", "3.1", "4.0", "4.1", "4.5", "4.6", "4.7", "5.0", "5.0Pro"}
-        editable = {"4.0", "4.1", "4.5", "4.6", "4.7", "5.0", "5.0Pro"}
+        supported = JIMENG_IMAGE_TEXT2IMAGE_MODELS
+        editable = JIMENG_IMAGE2IMAGE_MODELS
         if normalized not in supported:
             raise ModelCapabilityError(f"即梦 CLI 图片模型 {normalized} 不在命令白名单中")
         inputs = {"prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}}
         if normalized in editable:
             inputs["reference"] = {"media_type": "image", "min": 0, "max": 10, "role": "reference"}
-        resolution_options = ["1k", "2k", "4k"] if normalized == "5.0Pro" else ["1k", "2k"] if normalized in {"3.0", "3.1"} else ["2k", "4k"]
+        resolution_options = jimeng_image_resolution_options(normalized)
         operation = "text_to_image_or_image_to_image" if normalized in editable else "text_to_image"
         return {
             "model_id": normalized, "family_id": f"jimeng-image-{normalized.lower()}",

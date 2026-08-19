@@ -16,6 +16,7 @@
         musicGenerator:'smart-music-generator',
         aiApp:'smart-ai-app',
         comfyWorkflow:'smart-comfy-workflow',
+        angleControl:'smart-angle-control',
         resultGroup:'smart-result-group'
     });
     const EXECUTION_TYPES = new Set([
@@ -26,6 +27,49 @@
         NODE_TYPES.musicGenerator,
         NODE_TYPES.aiApp,
         NODE_TYPES.comfyWorkflow
+    ]);
+    const TOOL_TYPES = new Set([NODE_TYPES.angleControl]);
+    const ANGLE_HORIZONTAL_LABELS = Object.freeze([
+        [0, 'front view'],
+        [45, 'front-right quarter view'],
+        [90, 'right side view'],
+        [135, 'back-right quarter view'],
+        [180, 'back view'],
+        [-135, 'back-left quarter view'],
+        [-90, 'left side view'],
+        [-45, 'front-left quarter view']
+    ]);
+    const ANGLE_VERTICAL_LABELS = Object.freeze([
+        [-45, 'low-angle shot'],
+        [0, 'eye-level shot'],
+        [30, 'elevated shot'],
+        [60, 'high-angle shot']
+    ]);
+    const ANGLE_DISTANCE_LABELS = Object.freeze([
+        [0, 'wide shot'],
+        [4, 'medium shot'],
+        [8, 'close-up']
+    ]);
+    const ANGLE_HORIZONTAL_LABELS_ZH = Object.freeze([
+        [0, '正面视角'],
+        [45, '右前方四分之三视角'],
+        [90, '右侧面视角'],
+        [135, '右后方四分之三视角'],
+        [180, '背面视角'],
+        [-135, '左后方四分之三视角'],
+        [-90, '左侧面视角'],
+        [-45, '左前方四分之三视角']
+    ]);
+    const ANGLE_VERTICAL_LABELS_ZH = Object.freeze([
+        [-45, '低机位仰拍'],
+        [0, '平视'],
+        [30, '高机位视角'],
+        [60, '高机位俯拍']
+    ]);
+    const ANGLE_DISTANCE_LABELS_ZH = Object.freeze([
+        [0, '全景'],
+        [4, '中景'],
+        [8, '特写']
     ]);
     const LEGACY_TYPES = new Set(['', 'smart-image', 'smart-container']);
     const EXECUTION_FIELDS = [
@@ -72,10 +116,13 @@
         return Boolean(node && LEGACY_TYPES.has(nodeType(node)));
     }
     function isMaterialNode(node){
-        return Boolean(node && nodeType(node) === NODE_TYPES.material);
+        return Boolean(node && [NODE_TYPES.material, 'smart-image'].includes(nodeType(node)));
     }
     function isExecutionNode(node){
         return Boolean(node && EXECUTION_TYPES.has(nodeType(node)));
+    }
+    function isToolNode(node){
+        return Boolean(node && TOOL_TYPES.has(nodeType(node)));
     }
     function isResultGroupNode(node){
         return Boolean(node && nodeType(node) === NODE_TYPES.resultGroup);
@@ -91,7 +138,11 @@
     }
     function connectionKindForNodes(fromNode, toNode){
         if(isExecutionNode(fromNode) && isMaterialNode(toNode)) return 'result';
+        if(isToolNode(fromNode) && isMaterialNode(toNode) && textContentForNode(toNode)) return 'result';
         return 'input';
+    }
+    function isGeneratedMaterialNode(node){
+        return isMaterialNode(node) && String(node?.sourceKind || '').toLowerCase() === 'result';
     }
     function canConnectNodes(fromNode, toNode){
         if(!fromNode || !toNode || fromNode.id === toNode.id) return false;
@@ -99,14 +150,32 @@
         const toType = nodeType(toNode);
         if(toType === 'smart-group' || toType === 'smart-result-group') return false;
         if(isMaterialNode(fromNode)){
+            if(isToolNode(toNode)) return (fromNode.images || []).some(item => mediaKindForReference(item) === 'image' && (item.url || item.path || item.src || item.uri));
+            if(isGeneratedMaterialNode(toNode)) return true;
             return isExecutionNode(toNode) || ['smart-prompt', 'smart-loop', 'smart-minimax'].includes(toType);
         }
         if(isExecutionNode(fromNode)) return isMaterialNode(toNode);
+        if(isToolNode(fromNode)) return isMaterialNode(toNode) && Boolean(textContentForNode(toNode) || !toNode.images?.length);
         if(isResultGroupNode(fromNode)) return isExecutionNode(toNode) || toType === 'smart-loop';
         if(fromType === 'smart-prompt') return isExecutionNode(toNode) || toType === 'smart-loop';
         if(fromType === 'smart-loop') return isExecutionNode(toNode) || isMaterialNode(toNode);
         if(fromType === 'smart-group') return isExecutionNode(toNode) || toType === 'smart-loop';
         return false;
+    }
+    function nearestAngleLabel(value, labels){
+        const number = Number(value);
+        if(!Number.isFinite(number)) return labels[0][1];
+        return labels.reduce((best, item) => Math.abs(item[0] - number) < Math.abs(best[0] - number) ? item : best, labels[0])[1];
+    }
+    function anglePromptFor(options={}){
+        const horizontal = Number(options.horizontalAngle || 0);
+        const vertical = Number(options.verticalAngle || 0);
+        const zoom = Number(options.zoom ?? 5);
+        const chinese = String(options.language || options.lang || '').toLowerCase().startsWith('zh');
+        const horizontalLabels = chinese ? ANGLE_HORIZONTAL_LABELS_ZH : ANGLE_HORIZONTAL_LABELS;
+        const verticalLabels = chinese ? ANGLE_VERTICAL_LABELS_ZH : ANGLE_VERTICAL_LABELS;
+        const distanceLabels = chinese ? ANGLE_DISTANCE_LABELS_ZH : ANGLE_DISTANCE_LABELS;
+        return `<sks> ${nearestAngleLabel(horizontal, horizontalLabels)} ${nearestAngleLabel(vertical, verticalLabels)} ${nearestAngleLabel(zoom, distanceLabels)}`;
     }
     function normalizeExecutionSettings(node, settings){
         const next = clone(settings) || {};
@@ -223,6 +292,18 @@
             role:copy.role || `${kind}_${position}`,
             ...(resultId ? {resultId} : {})
         };
+    }
+    function runningHubUploadSource(value){
+        const text = String(value || '').trim();
+        if(!text) return '';
+        let source = text;
+        try{
+            const parsed = new URL(text, 'http://localhost');
+            if(parsed.pathname === '/api/media-preview') source = parsed.searchParams.get('url') || text;
+        }catch(_error){}
+        if(/^https?:\/\//i.test(source)) return source;
+        if(/^\/(?:output|assets|api\/(?:materials|results|storage-files))\//i.test(source)) return source;
+        return '';
     }
     function textContentForMediaItem(item){
         if(mediaKindForReference(item) !== 'text') return '';
@@ -501,9 +582,30 @@
         if(['boolean','bool'].includes(type)) return 'boolean';
         return type;
     }
+    function runningHubTextFieldRole(field){
+        const explicit = [field?.inputRole, field?.input_role, field?.semanticRole, field?.semantic_role, field?.role]
+            .map(value => String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_'))
+            .find(Boolean) || '';
+        if(['prompt','positive_prompt','negative_prompt','caption','description','instruction'].includes(explicit)) return 'prompt';
+        return 'text';
+    }
+    function runningHubCoerceFieldValue(field, value){
+        const type = String(field?.fieldType || field?.type || '').trim().toUpperCase();
+        if(value === undefined || value === null || String(value).trim() === '') return value;
+        if(['FLOAT','NUMBER','SLIDER','INT','INTEGER'].includes(type)){
+            const numberValue = typeof value === 'number' ? value : Number(String(value).trim());
+            const key = runningHubFieldKey(field);
+            const label = String(field?.label || field?.description || field?.fieldName || key).trim();
+            if(!Number.isFinite(numberValue)) throw new Error(`RunningHub 字段“${label}”（${key}）要求数字，当前值为“${String(value)}”`);
+            if(['INT','INTEGER'].includes(type) && !Number.isInteger(numberValue)) throw new Error(`RunningHub 字段“${label}”（${key}）要求整数，当前值为“${String(value)}”`);
+            return numberValue;
+        }
+        return value;
+    }
     function parseRunningHubOfficialFieldData(value){
         const result = {
             type:'',
+            role:'',
             options:[],
             optionLabels:{},
             min:'',
@@ -526,7 +628,7 @@
             payload = value.slice(1);
         }
         const metadata = payload.find(item => item && typeof item === 'object' && !Array.isArray(item)
-            && ['min','max','step','default','defaultValue','required','acceptsUpload','options','image_upload','video_upload','audio_upload'].some(key => Object.prototype.hasOwnProperty.call(item, key)));
+            && ['min','max','step','default','defaultValue','required','acceptsUpload','options','image_upload','video_upload','audio_upload','inputRole','input_role','semanticRole','semantic_role','role'].some(key => Object.prototype.hasOwnProperty.call(item, key)));
         if(metadata){
             result.min = metadata.min ?? '';
             result.max = metadata.max ?? '';
@@ -537,6 +639,7 @@
                 || metadata.image_upload === true
                 || metadata.video_upload === true
                 || metadata.audio_upload === true;
+            result.role = String(metadata.inputRole ?? metadata.input_role ?? metadata.semanticRole ?? metadata.semantic_role ?? metadata.role ?? '').trim();
             if(metadata.image_upload === true) result.type = 'IMAGE';
             else if(metadata.video_upload === true) result.type = 'VIDEO';
             else if(metadata.audio_upload === true) result.type = 'AUDIO';
@@ -591,18 +694,19 @@
                 fieldName:String(rawField?.fieldName ?? saved?.fieldName ?? ''),
                 fieldValue:fieldValue == null ? '' : String(fieldValue),
                 fieldType:normalizedRunningHubFieldType(official, rawField?.fieldType || saved?.fieldType),
+                inputRole:String(rawField?.inputRole ?? rawField?.input_role ?? rawField?.semanticRole ?? rawField?.semantic_role ?? rawField?.role ?? official.role ?? saved?.inputRole ?? saved?.input_role ?? '').trim(),
                 label,
                 enabled:saved?.enabled !== false,
                 sourceFromUpstream:saved?.sourceFromUpstream !== false,
                 group:String(saved?.group || rawField?.group || rawField?.category || 'AI 应用参数'),
                 note:String(saved?.note || rawField?.note || rawField?.description || ''),
-                options:official.options.length ? official.options : (Array.isArray(saved?.options) ? saved.options.map(String) : []),
-                optionLabels:Object.keys(official.optionLabels).length ? official.optionLabels : (saved?.optionLabels || {}),
-                acceptsUpload:official.acceptsUpload || saved?.acceptsUpload === true,
-                required:rawField?.required === true || official.required || saved?.required === true,
-                min:official.min !== '' ? official.min : saved?.min ?? '',
-                max:official.max !== '' ? official.max : saved?.max ?? '',
-                step:official.step !== '' ? official.step : saved?.step ?? '',
+                options:official.options,
+                optionLabels:official.optionLabels,
+                acceptsUpload:official.acceptsUpload || ['IMAGE','VIDEO','AUDIO'].includes(String(rawField?.fieldType || '').toUpperCase()),
+                required:rawField?.required === true || official.required,
+                min:official.min !== '' ? official.min : rawField?.min ?? '',
+                max:official.max !== '' ? official.max : rawField?.max ?? '',
+                step:official.step !== '' ? official.step : rawField?.step ?? '',
                 schemaOrder:index,
                 imageOrder:Number(saved?.imageOrder ?? rawField?.imageOrder ?? rawField?.image_order ?? index) || 0
             };
@@ -760,7 +864,8 @@
         const refByKey = new Map(normalizedRefs.map(entry => [entry.key, entry]));
         const used = new Set();
         const next = {};
-        runningHubMediaFields(fields).forEach(field => {
+        const mediaFields = runningHubMediaFields(fields);
+        mediaFields.forEach(field => {
             const fieldKey = runningHubFieldKey(field);
             const kind = runningHubFieldMediaKind(field);
             const requested = String(bindings?.[fieldKey] || '').trim();
@@ -768,8 +873,15 @@
             if(requestedRef?.kind === kind && !used.has(requested)){
                 next[fieldKey] = requested;
                 used.add(requested);
-                return;
             }
+        });
+        mediaFields.forEach(field => {
+            const fieldKey = runningHubFieldKey(field);
+            if(next[fieldKey]) return;
+            const kind = runningHubFieldMediaKind(field);
+            const sameKindFields = mediaFields.filter(item => runningHubFieldMediaKind(item) === kind);
+            const sameKindRefs = normalizedRefs.filter(entry => entry.kind === kind);
+            if(sameKindFields.length !== 1 || sameKindRefs.length !== 1) return;
             const fallback = normalizedRefs.find(entry => entry.kind === kind && !used.has(entry.key));
             if(!fallback) return;
             next[fieldKey] = fallback.key;
@@ -1014,12 +1126,15 @@
         NODE_TYPES,
         isLegacyNode,
         isMaterialNode,
+        isGeneratedMaterialNode,
         isExecutionNode,
+        isToolNode,
         isResultGroupNode,
         canConnectNodes,
         isWorkflowConnection,
         isOutputLayoutConnection,
         connectionKindForNodes,
+        anglePromptFor,
         normalizeExecutionSettings,
         normalizeExecutionNode,
         normalizeQueueInfo,
@@ -1030,6 +1145,7 @@
         mediaKindForReference,
         normalizeInputRole,
         normalizeMediaReference,
+        runningHubUploadSource,
         textContentForMediaItem,
         textContentForNode,
         createTextMaterial,
@@ -1045,6 +1161,8 @@
         resultGroupMediaForConnection,
         runningHubFieldKey,
         runningHubFieldMediaKind,
+        runningHubTextFieldRole,
+        runningHubCoerceFieldValue,
         parseRunningHubOfficialFieldData,
         hydrateRunningHubProviderApps,
         runningHubSchemaSnapshot,

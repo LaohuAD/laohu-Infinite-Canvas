@@ -162,6 +162,34 @@ class ProjectStorageTests(unittest.TestCase):
         self.assertEqual(first["path"], "input/temporary/image/封面.png")
         self.assertEqual(len(list((self.root / "assets" / "input").rglob("*.png"))), 1)
 
+    def test_rename_result_preserves_stable_id_and_url(self):
+        source = self.root / "generated.png"
+        source.write_bytes(b"generated-image")
+        result = self.storage.store_result_file(source, "第一次名称.png", move=True)
+
+        renamed = self.storage.rename_result(result["id"], "第二次名称")
+
+        self.assertEqual(renamed["id"], result["id"])
+        self.assertEqual(renamed["url"], self.storage.result_url(result["id"]))
+        self.assertEqual(renamed["display_name"], "第二次名称.png")
+        self.assertTrue(self.storage.result_path(result["id"]).is_file())
+        self.assertEqual(self.storage.result_path(result["id"]).read_bytes(), b"generated-image")
+
+    def test_prune_missing_results_only_removes_missing_requested_kind(self):
+        image_source = self.root / "missing.png"
+        image_source.write_bytes(b"missing-image")
+        image_result = self.storage.store_result_file(image_source, "失效图片.png", move=True)
+
+        text_source = self.root / "kept.md"
+        text_source.write_text("保留文本", encoding="utf-8")
+        text_result = self.storage.store_result_file(text_source, "保留文本.md", move=True)
+        self.storage.result_path(image_result["id"]).unlink()
+
+        self.assertEqual(self.storage.prune_missing_results("image"), 1)
+        self.assertIsNone(self.storage.get_result(image_result["id"]))
+        self.assertIsNotNone(self.storage.get_result(text_result["id"]))
+        self.assertEqual([item["id"] for item in self.storage.list_results("text")], [text_result["id"]])
+
     def test_promoting_material_does_not_create_another_file(self):
         temporary = self.storage.store_material_bytes(b"image", "人物.png", scope="temporary")
         promoted = self.storage.promote_material(temporary["id"])

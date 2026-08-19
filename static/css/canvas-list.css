@@ -176,7 +176,6 @@ html[data-studio-scale="off"].studio-scale-managed .workspace {
 .ws-card-icon.icon-has-color { background:var(--accent); color:#fff; border-color:transparent; }
 .ws-card-kind { display:inline-flex; align-items:center; justify-content:center; flex:0 1 auto; min-width:0; max-width:calc(100% - 36px); height:22px; padding:0 8px; border-radius:6px; font-size:10px; font-weight:850; letter-spacing:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .ws-card-kind.smart { background:#f5f3ff; color:#6d28d9; border:1px solid #ddd6fe; }
-.ws-card-kind.classic { background:var(--soft-2); color:var(--muted); border:1px solid var(--line); }
 .ws-card-menu { margin-left:auto; width:28px; height:28px; flex:0 0 28px; border-radius:8px; display:flex; align-items:center; justify-content:center; color:var(--faint); background:transparent; border:1px solid transparent; cursor:pointer; opacity:.58; transition:all .14s var(--ease); }
 .ws-card:hover .ws-card-menu,.ws-card:focus-within .ws-card-menu { opacity:1; }
 .ws-card-menu:hover { color:var(--text); background:var(--soft); border-color:var(--line); }
@@ -216,9 +215,6 @@ html[data-studio-scale="off"].studio-scale-managed .workspace {
 .ws-create-title { font-size:12px; font-weight:850; color:var(--text); }
 .ws-create-input { width:100%; height:34px; border-radius:8px; border:1px solid var(--line); background:var(--soft); color:var(--text); font-size:13px; font-weight:600; padding:0 10px; outline:none; }
 .ws-create-input:focus { border-color:var(--line-2); background:var(--card-solid); }
-.ws-create-toggle { display:flex; gap:4px; padding:4px; border-radius:8px; background:var(--soft-2); border:1px solid var(--line-2); }
-.ws-create-toggle-btn { flex:1; height:30px; border-radius:8px; font-size:11px; font-weight:800; color:var(--muted); background:transparent; border:none; cursor:pointer; transition:all .13s var(--ease); }
-.ws-create-toggle-btn.active { background:var(--strong); color:var(--strong-text); box-shadow:0 6px 14px var(--shadow); }
 .ws-create-actions { display:flex; gap:6px; }
 .ws-create-confirm,.ws-create-cancel { flex:1; height:32px; border-radius:8px; font-size:12px; font-weight:800; cursor:pointer; border:none; }
 .ws-create-confirm { background:var(--strong); color:var(--strong-text); }
@@ -265,7 +261,6 @@ html[data-studio-scale="off"].studio-scale-managed .workspace {
 .theme-dark .ws-mini-btn.primary { background:#d8dee9; color:#0f172a; border-color:#d8dee9; }
 .theme-dark .ws-card-kind.smart { background:rgba(139,92,246,.18); color:#c4b5fd; border-color:rgba(139,92,246,.3); }
 .theme-dark .ws-create-confirm { background:#d8dee9; color:#0f172a; }
-.theme-dark .ws-create-toggle-btn.active { background:#d8dee9; color:#0f172a; }
 .theme-dark .ws-trash-act.restore:hover { color:#6ee7b7; background:rgba(5,150,105,.15); border-color:rgba(110,231,183,.35); }
 .theme-dark .ws-trash-act.purge:hover { color:#fecaca; background:rgba(220,38,38,.18); border-color:rgba(248,113,113,.35); }
 .theme-dark .ws-pop-item.danger:hover { background:rgba(220,38,38,.18); }

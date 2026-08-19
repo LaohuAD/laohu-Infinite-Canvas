@@ -19,9 +19,8 @@
     <script src="/static/vendor/js/tailwindcss-cdn.js?v=2026.08.17.1786430759"></script>
     <script src="/static/vendor/js/lucide.js?v=2026.08.17.1786430759"></script>
     <script src="/static/js/theme.js?v=2026.08.17.1786430759"></script>
-    <script src="/static/js/i18n.js?v=2026.08.17.1786952927"></script>
     <link rel="stylesheet" href="/static/css/theme.css?v=2026.08.17.1786430759">
-    <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.08.17.1786780996">
+    <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.08.17.1787100747">
     <link rel="stylesheet" href="/static/css/studio-ui-polish.css?v=2026.08.17.1786747623">
 </head>
 <body>
@@ -37,6 +36,19 @@
 
             <div class="layout">
                 <aside class="sidebar">
+                    <div id="comfyuiSubnav" class="comfyui-subnav">
+                        <div class="side-section-title" data-i18n="api.comfyuiSubnavTitle">ComfyUI 设置</div>
+                        <div class="comfyui-subnav-list">
+                            <button id="localComfyuiNav" class="provider-card comfyui-subnav-item" type="button" onclick="openComfyUiSettings('local')">
+                                <span class="provider-mark"><i data-lucide="computer" class="w-3.5 h-3.5"></i></span>
+                                <span class="provider-info"><span class="provider-name" data-i18n="api.localComfyuiNav">本地 ComfyUI</span></span>
+                            </button>
+                            <button id="runningHubComfyuiNav" class="provider-card comfyui-subnav-item" type="button" onclick="openComfyUiSettings('runninghub')">
+                                <span class="provider-mark"><i data-lucide="cloud-cog" class="w-3.5 h-3.5"></i></span>
+                                <span class="provider-info"><span class="provider-name" data-i18n="api.runningHubComfyuiNav">RunningHub ComfyUI</span></span>
+                            </button>
+                        </div>
+                    </div>
                     <div class="side-section-title" data-i18n="api.providersTitle">平台列表</div>
                     <div id="providerList" class="provider-list"></div>
                     <button class="add-btn" type="button" onclick="addProvider()"><i data-lucide="plus" class="w-4 h-4"></i><span data-i18n="api.addProvider">新增平台</span></button>
@@ -64,6 +76,7 @@
                         </div>
                     </div>
 
+                    <div id="providerSettingsView">
                     <section id="providerOnboardingCard" class="provider-onboarding-card" hidden></section>
 
                     <section id="customProviderGuide" class="custom-provider-guide" hidden>
@@ -337,26 +350,44 @@
                         </div>
                     </section>
 
-                    <section id="runninghubConfigBlock" class="block runninghub-config-block" hidden>
-                        <div class="block-head">
+                    <section id="comfyuiSettingsBlock" class="comfyui-settings-block" hidden>
+                        <div class="comfyui-settings-intro">
                             <div>
-                                <div class="block-title">AI 应用</div>
-                                <div class="block-desc">只需输入 AI 应用 ID；标题、封面和参数会从 RunningHub 官方自动同步。</div>
+                                <div class="block-title" data-i18n="api.comfyuiSettingsTitle">ComfyUI 设置</div>
+                                <div class="block-desc" data-i18n="api.comfyuiSettingsDesc">在这里统一管理 RunningHub AI 应用和本地 ComfyUI 工作流。RunningHub 的 API Key 仍在对应平台中保存。</div>
                             </div>
+                            <button class="action-btn" type="button" onclick="closeComfyUiSettings()"><i data-lucide="arrow-left" class="w-3.5 h-3.5"></i><span data-i18n="api.comfyuiSettingsBack">返回平台设置</span></button>
                         </div>
-                        <div class="rh-paste-row">
-                            <input id="rhPasteInput" class="rh-paste-input" type="text" placeholder="AI 应用 ID 或 /run/ai-app/...">
-                            <button class="action-btn" type="button" onclick="createRhEntryFromPaste()"><i data-lucide="plus" class="w-3.5 h-3.5"></i><span>添加并同步</span></button>
-                        </div>
-                        <div class="rh-card-columns">
-                            <div class="rh-card-group">
-                                <div class="rh-group-head">
-                                    <div class="rh-group-title">AI 应用</div>
-                                    <div id="rhAppsCount" class="rh-group-count">0</div>
+                        <section id="comfyuiLocalSection" class="comfyui-local-embed">
+                            <div class="block-head">
+                                <div>
+                                    <div class="block-title" data-i18n="api.localComfyuiTitle">本地 ComfyUI</div>
+                                    <div class="block-desc" data-i18n="api.localComfyuiDesc">配置本地后端和工作流字段，画布中的本地 ComfyUI 节点会读取这里的设置。</div>
                                 </div>
-                                <div id="rhAppsList" class="rh-card-list"></div>
                             </div>
-                        </div>
+                            <iframe class="comfyui-settings-embed" src="/static/comfyui-settings.html?v=2026.08.17.1787095971" title="本地 ComfyUI 设置" data-i18n-title="api.localComfyuiTitle"></iframe>
+                        </section>
+                        <section id="runninghubConfigBlock" class="block runninghub-config-block" hidden>
+                            <div class="block-head">
+                                <div>
+                                    <div class="block-title" data-i18n="api.runningHubAppsTitle">RunningHub AI 应用</div>
+                                    <div class="block-desc" data-i18n="api.runningHubAppsDesc">只需输入 AI 应用 ID；标题、封面和参数会从当前 RunningHub 站点官方自动同步。</div>
+                                </div>
+                            </div>
+                            <div class="rh-paste-row">
+                                <input id="rhPasteInput" class="rh-paste-input" type="text" placeholder="AI 应用 ID" data-i18n-placeholder="api.runningHubAppIdPlaceholder">
+                                <button class="action-btn" type="button" onclick="createRhEntryFromPaste()"><i data-lucide="plus" class="w-3.5 h-3.5"></i><span data-i18n="api.runningHubAppAdd">添加并同步</span></button>
+                            </div>
+                            <div class="rh-card-columns">
+                                <div class="rh-card-group">
+                                    <div class="rh-group-head">
+                                        <div class="rh-group-title" data-i18n="api.runningHubAppsTitleShort">AI 应用</div>
+                                        <div id="rhAppsCount" class="rh-group-count">0</div>
+                                    </div>
+                                    <div id="rhAppsList" class="rh-card-list"></div>
+                                </div>
+                            </div>
+                        </section>
                     </section>
 
                     <div id="modelsHead" class="block models-toolbar">
@@ -436,6 +467,7 @@
                             <div id="msLoraList" class="lora-list"></div>
                         </section>
                 </div>
+                    </div>
             </main>
                 <main id="recommendContent" class="content recommend-content" hidden>
                     <div class="content-head">
@@ -621,7 +653,15 @@
         </div>
     </div>
 
-    <script src="/static/js/smart-node-contract.js?v=2026.08.17.1786947583"></script>
-    <script src="/static/js/api-settings.js?v=2026.08.17.1786780996"></script>
+    <script src="/static/js/i18n-core.js?v=2026.08.17.1787069037"></script>
+    <script src="/static/js/i18n/common.js?v=2026.08.17.1786464778"></script>
+    <script src="/static/js/i18n/studio.js?v=2026.08.17.1787050382"></script>
+    <script src="/static/js/i18n/canvas.js?v=2026.08.17.1786430759"></script>
+    <script src="/static/js/i18n/smart-canvas.js?v=2026.08.17.1787054964"></script>
+    <script src="/static/js/i18n/comfyui-settings.js?v=2026.08.17.1786430759"></script>
+    <script src="/static/js/i18n/asset-manager.js?v=2026.08.17.1786459099"></script>
+    <script src="/static/js/smart-node-contract.js?v=2026.08.17.1787097564"></script>
+    <script src="/static/js/i18n/api-settings.js?v=2026.08.17.1787068270"></script>
+    <script src="/static/js/api-settings.js?v=2026.08.17.1787098191"></script>
 </body>
 </html>

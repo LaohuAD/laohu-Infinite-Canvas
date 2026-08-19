@@ -1081,9 +1081,7 @@ function groupCanvasAssetItems(items){
             groups.set(key, {
                 key,
                 title:known ? (source.title || '未命名画布') : '未记录来源',
-                subtitle:known
-                    ? (source.kind === 'smart' ? '智能画布生成' : '普通画布生成')
-                    : '这些结果暂时无法确认来源画布',
+                subtitle:known ? '智能画布生成' : '这些结果暂时无法确认来源画布',
                 items:[]
             });
         }
@@ -1552,7 +1550,7 @@ function renderCanvasAssetCard(item){
         <input class="asset-card-check" type="checkbox" data-canvas-asset-check="${escapeAttr(item.id)}" ${selectedCanvasAssetIds.has(item.id) ? 'checked' : ''}>
         <div class="asset-thumb canvas-asset-thumb">${assetThumb(item)}${renderCanvasAssetKindBadge(item)}${assetPreviewCue(item)}</div>
         <div class="asset-card-body">
-            <div class="asset-card-name" title="${escapeAttr(item.name || item.display_name || '')}">${escapeHtml(item.name || item.display_name || '生成结果')}</div>
+            <div class="asset-card-name" data-result-rename="${escapeAttr(item.id)}" title="编辑名称">${escapeHtml(item.name || item.display_name || '生成结果')}</div>
             <div class="asset-card-meta">${escapeHtml(canvasAssetKindLabel(item))} · ${escapeHtml(formatDate(item.created_at))}</div>
         </div>
     </article>`;
@@ -1566,6 +1564,7 @@ function renderCanvasAssetDetail(item){
     if(!item) return `<div class="panel-head"><div class="panel-title"><strong>生成结果详情</strong><span>选择一个结果查看详情</span></div></div><div class="detail-scroll"><div class="detail-empty"><i data-lucide="sparkles"></i><span>暂无生成结果</span></div></div>`;
     const kind = assetKind(item);
     const canPreview = ['image','video','audio','text'].includes(kind);
+    const canEditText = kind === 'text';
     const previewIcon = ['video','audio'].includes(kind) ? 'play' : kind === 'text' ? 'file-text' : 'maximize-2';
     const previewTitle = ['video','audio'].includes(kind) ? i18nText('asset.play', '播放') : kind === 'text' ? i18nText('asset.expandText', '展开文本') : i18nText('asset.expandImage', '展开图片');
     return `
@@ -1573,8 +1572,11 @@ function renderCanvasAssetDetail(item){
             <div class="panel-title"><strong>生成结果详情</strong><span>${escapeHtml(canvasAssetKindLabel(item))}</span></div>
             <div class="panel-actions">
                 ${canPreview ? `<button class="asset-icon-btn" type="button" data-canvas-asset-preview="${escapeAttr(item.id)}" title="${previewTitle}"><i data-lucide="${previewIcon}"></i></button>` : ''}
+                ${canEditText ? `<button class="asset-icon-btn" type="button" data-text-edit="canvas-asset:${escapeAttr(item.id)}" title="编辑文本内容"><i data-lucide="pencil-line"></i></button>` : ''}
+                <button class="asset-icon-btn" type="button" data-result-promote="${escapeAttr(item.id)}" title="收藏到资产素材"><i data-lucide="bookmark-plus"></i></button>
                 <button class="asset-icon-btn" type="button" data-canvas-asset-open="${escapeAttr(item.id)}" title="打开链接"><i data-lucide="external-link"></i></button>
                 <button class="asset-icon-btn" type="button" data-canvas-asset-copy="${escapeAttr(item.id)}" title="复制链接"><i data-lucide="copy"></i></button>
+                <button class="asset-icon-btn" type="button" data-result-rename="${escapeAttr(item.id)}" title="编辑名称"><i data-lucide="pencil"></i></button>
                 <button class="asset-btn primary" type="button" data-canvas-asset-download="${escapeAttr(item.id)}"><i data-lucide="download"></i><span>下载</span></button>
                 <button class="asset-icon-btn danger" type="button" data-result-delete="${escapeAttr(item.id)}" title="删除结果"><i data-lucide="trash-2"></i></button>
             </div>
@@ -1586,7 +1588,7 @@ function renderCanvasAssetDetail(item){
                     : `<div class="detail-media-frame">${assetThumb(item)}</div>`}
             </div>
             <div class="detail-body">
-                <div class="detail-name">${escapeHtml(item.name || item.display_name || '生成结果')}</div>
+                ${renderMaterialNameEditor(item, 'data-result-inline-name', item.id)}
                 <div class="detail-meta-grid">
                     <div class="detail-meta"><span>类型</span><strong>${escapeHtml(canvasAssetKindLabel(item))}</strong></div>
                     <div class="detail-meta"><span>大小</span><strong>${escapeHtml(formatFileSize(item.size))}</strong></div>
@@ -1821,6 +1823,7 @@ function renderLocalUploadDetail(item){
     if(!item) return `<div class="panel-head"><div class="panel-title"><strong>素材预览</strong><span>选择一个素材查看详情</span></div></div><div class="detail-scroll"><div class="detail-empty"><i data-lucide="image"></i><span>暂无可预览素材</span></div></div>`;
     const isImage = assetKind(item) === 'image';
     const kind = assetKind(item);
+    const canEditText = kind === 'text';
     const previewIcon = ['video','audio'].includes(kind) ? 'play' : kind === 'text' ? 'file-text' : 'maximize-2';
     const previewTitle = ['video','audio'].includes(kind) ? i18nText('asset.play', '播放') : kind === 'text' ? i18nText('asset.expandText', '展开文本') : i18nText('asset.expandImage', '展开图片');
     return `
@@ -1828,6 +1831,7 @@ function renderLocalUploadDetail(item){
             <div class="panel-title"><strong>素材预览</strong><span>${escapeHtml(assetKindLabel(item))}</span></div>
             <div class="panel-actions">
                 <button class="asset-icon-btn" type="button" data-localup-preview="${escapeAttr(item.id)}" title="${previewTitle}"><i data-lucide="${previewIcon}"></i></button>
+                ${canEditText ? `<button class="asset-icon-btn" type="button" data-text-edit="localup:${escapeAttr(item.id)}" title="编辑文本内容"><i data-lucide="pencil-line"></i></button>` : ''}
                 <button class="asset-icon-btn" type="button" data-localup-promote="${escapeAttr(item.id)}" title="收藏到资产素材"><i data-lucide="bookmark-plus"></i></button>
                 <button class="asset-icon-btn" type="button" data-localup-rename="${escapeAttr(item.id)}" title="重命名"><i data-lucide="pencil"></i></button>
                 <button class="asset-icon-btn" type="button" data-localup-download="${escapeAttr(item.id)}" title="下载"><i data-lucide="download"></i></button>
@@ -1923,6 +1927,7 @@ function renderLocalClipboardBar(){
 function renderLocalDetail(item){
     if(!item) return `<div class="panel-head"><div class="panel-title"><strong>本地预览</strong><span>选择一个本地素材查看详情</span></div></div><div class="detail-scroll"><div class="detail-empty"><i data-lucide="folder-open"></i><span>暂无可预览素材</span></div></div>`;
     const kind = localItemKind(item);
+    const canEditText = kind === 'text';
     const previewIcon = ['video','audio'].includes(kind) ? 'play' : kind === 'text' ? 'file-text' : 'maximize-2';
     const previewTitle = ['video','audio'].includes(kind) ? i18nText('asset.play', '播放') : kind === 'text' ? i18nText('asset.expandText', '展开文本') : i18nText('asset.expandImage', '展开图片');
     return `
@@ -1930,6 +1935,7 @@ function renderLocalDetail(item){
             <div class="panel-title"><strong>本地预览</strong><span>${escapeHtml(assetKindLabel(item))}</span></div>
             <div class="panel-actions">
                 <button class="asset-icon-btn" type="button" data-local-preview="${escapeAttr(item.id)}" title="${previewTitle}"><i data-lucide="${previewIcon}"></i></button>
+                ${canEditText ? `<button class="asset-icon-btn" type="button" data-text-edit="local:${escapeAttr(item.id)}" title="编辑文本内容"><i data-lucide="pencil-line"></i></button>` : ''}
                 <button class="asset-btn primary" type="button" data-local-import-one="${escapeAttr(item.id)}"><i data-lucide="download"></i><span>导入</span></button>
             </div>
         </div>
@@ -2346,6 +2352,7 @@ function renderAssetDetail(item){
     if(!item) return `<div class="panel-head"><div class="panel-title"><strong>素材预览</strong><span>选择一个素材查看详情</span></div></div><div class="detail-scroll"><div class="detail-empty"><i data-lucide="image"></i><span>暂无可预览素材</span></div></div>`;
     const kind = assetKind(item);
     const isImage = kind === 'image';
+    const canEditText = kind === 'text';
     const previewIcon = ['video','audio'].includes(kind) ? 'play' : kind === 'text' ? 'file-text' : 'maximize-2';
     const previewTitle = ['video','audio'].includes(kind) ? i18nText('asset.play', '播放') : kind === 'text' ? i18nText('asset.expandText', '展开文本') : i18nText('asset.expandImage', '展开图片');
     if(assetEditMode && item.id === selectedAssetId){
@@ -2375,6 +2382,7 @@ function renderAssetDetail(item){
             <div class="panel-title"><strong>素材预览</strong><span>${escapeHtml(assetKindLabel(item))}</span></div>
             <div class="panel-actions">
                 <button class="asset-icon-btn" type="button" data-asset-preview="${escapeAttr(item.id)}" title="${previewTitle}"><i data-lucide="${previewIcon}"></i></button>
+                ${canEditText ? `<button class="asset-icon-btn" type="button" data-text-edit="asset:${escapeAttr(item.id)}" title="编辑文本内容"><i data-lucide="pencil-line"></i></button>` : ''}
                 <button class="asset-icon-btn" type="button" data-asset-download="${escapeAttr(item.id)}" title="下载素材"><i data-lucide="download"></i></button>
                 <button class="asset-icon-btn" type="button" data-asset-rename="${escapeAttr(item.id)}" title="编辑"><i data-lucide="pencil"></i></button>
                 <button class="asset-icon-btn danger ${pendingDeleteAssetId === item.id ? 'detail-confirm' : ''}" type="button" data-asset-delete="${escapeAttr(item.id)}" title="${pendingDeleteAssetId === item.id ? '再次点击确认删除' : '删除'}"><i data-lucide="trash-2"></i></button>
@@ -2823,6 +2831,24 @@ async function promoteLocalUploadItem(id){
         onError:error => setStatus(error?.message || '收藏失败')
     });
 }
+async function promoteCanvasAssetItem(id){
+    const item = findCanvasAssetItem(id);
+    const resultId = item?.id || '';
+    if(!item || !resultId){
+        setStatus('这个生成结果暂时不能收藏');
+        return;
+    }
+    await window.MaterialPromote.open({
+        resultId,
+        name:item.name || item.display_name || '',
+        onSuccess:async data => {
+            assetLibrary = data.library || assetLibrary;
+            await refreshCanvasAssets();
+            setStatus('已收藏到资产素材');
+        },
+        onError:error => setStatus(error?.message || '收藏失败')
+    });
+}
 async function downloadSelectedLocalUploads(){
     const items = [...selectedLocalUploadIds].map(id => findLocalUpload(id)).filter(it => it?.url);
     if(!items.length){ setStatus('没有可下载的素材'); return; }
@@ -3092,6 +3118,70 @@ function beginAssetInlineRename(id){
     input.addEventListener('mousedown', event => event.stopPropagation());
     input.addEventListener('click', event => event.stopPropagation());
     input.addEventListener('blur', () => finish(true));
+}
+function beginResultInlineRename(id){
+    const item = findCanvasAssetItem(id);
+    const card = [...root.querySelectorAll('[data-canvas-asset-card]')].find(el => el.dataset.canvasAssetCard === id);
+    const nameEl = card?.querySelector('.asset-card-name');
+    if(!item || !card || !nameEl || card.querySelector('.asset-card-name-input')) return;
+    const previousName = materialNameParts(item).stem;
+    const extension = materialNameParts(item).extension;
+    const input = document.createElement('input');
+    input.className = 'asset-card-name-input';
+    input.type = 'text';
+    input.value = previousName;
+    input.setAttribute('aria-label', '生成结果名称');
+    const editor = document.createElement('div');
+    editor.className = 'asset-name-editor';
+    editor.append(input);
+    const suffix = document.createElement('span');
+    suffix.className = 'asset-name-extension';
+    suffix.textContent = extension;
+    editor.append(suffix);
+    nameEl.replaceWith(editor);
+    input.focus();
+    input.select();
+    let done = false;
+    const restore = () => { if(editor.isConnected) editor.replaceWith(nameEl); };
+    const finish = async save => {
+        if(done) return;
+        done = true;
+        const name = materialNameStem(input.value);
+        if(!save || !name || name === previousName){ restore(); return; }
+        input.disabled = true;
+        await saveResultInlineName(id, name);
+    };
+    input.addEventListener('keydown', event => {
+        event.stopPropagation();
+        if(event.key === 'Enter'){ event.preventDefault(); finish(true); }
+        else if(event.key === 'Escape'){ event.preventDefault(); finish(false); }
+    });
+    input.addEventListener('pointerdown', event => event.stopPropagation());
+    input.addEventListener('mousedown', event => event.stopPropagation());
+    input.addEventListener('click', event => event.stopPropagation());
+    input.addEventListener('blur', () => finish(true));
+}
+async function renameResultItem(id){
+    if(!findCanvasAssetItem(id)) return;
+    selectedCanvasAssetId = id;
+    refreshCanvasAssetSelectionOnly();
+    requestAnimationFrame(() => beginResultInlineRename(id));
+}
+async function saveResultInlineName(id, name){
+    const item = findCanvasAssetItem(id);
+    name = materialNameStem(name);
+    if(!item || !String(name || '').trim()) return;
+    if(materialNameParts(item).stem === String(name || '').trim()) return;
+    const data = await apiJson(`/api/results/${encodeURIComponent(id)}`, {
+        method:'PATCH',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({name})
+    });
+    const updated = data.item || {};
+    canvasAssetsData.items = (canvasAssetsData.items || []).map(entry => entry.id === id ? {...entry, ...updated} : entry);
+    refreshCanvasAssetSelectionOnly();
+    render();
+    setStatus('生成结果名称已保存');
 }
 async function createLocalUploadFolder(){
     const name = await siteTextInput({title:'新建文件夹', value:'新文件夹', placeholder:'文件夹名称', confirmLabel:'新建'});
@@ -3476,6 +3566,12 @@ async function handleClick(event){
         return;
     }
     if(target.closest?.('#refreshBtn')){ await loadAll(); return; }
+    const textEdit = target.closest?.('[data-text-edit]');
+    if(textEdit){
+        const [source, id] = String(textEdit.dataset.textEdit || '').split(':', 2);
+        await openTextContentEditor(source || 'asset', id || '');
+        return;
+    }
     const assetPreview = target.closest?.('[data-asset-preview]');
     if(assetPreview){ showDetailPreview('asset', assetPreview.dataset.assetPreview || ''); return; }
     const canvasAssetPreview = target.closest?.('[data-canvas-asset-preview]');
@@ -3608,6 +3704,10 @@ async function handleClick(event){
     if(target.closest?.('[data-canvas-asset-clear-selection]')){ selectedCanvasAssetIds.clear(); render(); return; }
     if(target.closest?.('[data-canvas-asset-download-selected]')){ await downloadCanvasAssetItems([...selectedCanvasAssetIds]); return; }
     if(target.closest?.('[data-result-delete-selected]')){ await deleteGenerationResults([...selectedCanvasAssetIds]); return; }
+    const resultRename = target.closest?.('[data-result-rename]');
+    if(resultRename){ event.stopPropagation(); await renameResultItem(resultRename.dataset.resultRename || ''); return; }
+    const resultPromote = target.closest?.('[data-result-promote]');
+    if(resultPromote){ await promoteCanvasAssetItem(resultPromote.dataset.resultPromote || ''); return; }
     const canvasAssetDownload = target.closest?.('[data-canvas-asset-download]');
     if(canvasAssetDownload){ await downloadCanvasAssetItems([canvasAssetDownload.dataset.canvasAssetDownload || '']); return; }
     const resultDelete = target.closest?.('[data-result-delete]');
@@ -3987,6 +4087,9 @@ function openAssetItem(id){
     const item = findAssetItem(id);
     if(item?.url) window.open(item.url, '_blank', 'noopener');
 }
+function materialOverlayHost(){
+    return document.documentElement || document.body;
+}
 async function showDetailPreview(source, id){
     const item = source === 'local'
         ? findLocalItem(id)
@@ -4024,7 +4127,7 @@ async function showDetailPreview(source, id){
                         : `<img class="asset-lightbox-image" src="${escapeAttr(url)}" alt="${escapeAttr(item.name || 'preview')}" draggable="false">`}
         </div>
     `;
-    document.body.appendChild(overlay);
+    materialOverlayHost().appendChild(overlay);
     document.body.classList.add('asset-lightbox-open');
     refreshIcons();
     if(kind === 'text'){
@@ -4042,6 +4145,96 @@ async function showDetailPreview(source, id){
                 content.textContent = error?.message || i18nText('asset.textReadFailed', '文本读取失败');
             }
         }
+    }
+}
+let assetTextEditorState = null;
+function textEditorItem(source, id){
+    if(source === 'local') return findLocalItem(id);
+    if(source === 'localup') return findLocalUpload(id);
+    if(source === 'canvas-asset') return findCanvasAssetItem(id);
+    return findAssetItem(id);
+}
+async function readTextEditorContent(item, source){
+    const embedded = [item?.text, item?.content, item?.value, item?.prompt]
+        .find(value => typeof value === 'string' && value.trim());
+    if(embedded) return embedded;
+    const url = source === 'local' ? localObjectUrl(item) : item?.url;
+    if(!url) return '';
+    const response = await fetch(url);
+    const value = await response.text();
+    if(!response.ok) throw new Error('文本读取失败');
+    return value;
+}
+async function openTextContentEditor(source, id){
+    const item = textEditorItem(source, id);
+    if(!item) return;
+    closeDetailPreview();
+    document.querySelector('.asset-text-editor-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'asset-text-editor-overlay';
+    overlay.innerHTML = `<section class="asset-text-editor" role="dialog" aria-modal="true" aria-label="编辑文本素材">
+        <header><div><strong>编辑文本素材</strong><span>${escapeHtml(item.name || item.display_name || '文本素材')}</span></div><button class="asset-icon-btn" type="button" data-text-editor-close title="关闭"><i data-lucide="x"></i></button></header>
+        <textarea data-text-editor-content spellcheck="false" placeholder="正在读取文本..."></textarea>
+        <footer><span>保存后生成新的文本结果，原文件保持不变。</span><div><button class="asset-btn" type="button" data-text-editor-close>取消</button><button class="asset-btn primary" type="button" data-text-editor-save><i data-lucide="save"></i><span>保存为新结果</span></button></div></footer>
+    </section>`;
+    materialOverlayHost().appendChild(overlay);
+    refreshIcons();
+    const textarea = overlay.querySelector('[data-text-editor-content]');
+    const saveButton = overlay.querySelector('[data-text-editor-save]');
+    assetTextEditorState = {source, id, item, overlay};
+    overlay.addEventListener('pointerdown', event => {
+        if(event.target === overlay) closeTextContentEditor();
+    });
+    overlay.addEventListener('click', event => {
+        if(event.target.closest('[data-text-editor-close]')) closeTextContentEditor();
+        if(event.target.closest('[data-text-editor-save]')) saveTextContentEditor();
+    });
+    try {
+        textarea.value = await readTextEditorContent(item, source);
+        textarea.placeholder = '输入文本内容';
+        textarea.focus({preventScroll:true});
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    } catch(error) {
+        textarea.placeholder = error?.message || '文本读取失败';
+        saveButton.disabled = true;
+        setStatus(error?.message || '文本读取失败');
+    }
+}
+function closeTextContentEditor(){
+    assetTextEditorState?.overlay?.remove();
+    assetTextEditorState = null;
+}
+async function saveTextContentEditor(){
+    const state = assetTextEditorState;
+    const textarea = state?.overlay?.querySelector('[data-text-editor-content]');
+    const saveButton = state?.overlay?.querySelector('[data-text-editor-save]');
+    const text = String(textarea?.value || '').trim();
+    if(!state || !text){
+        setStatus('文本内容不能为空');
+        return;
+    }
+    saveButton.disabled = true;
+    try {
+        const parts = materialNameParts(state.item);
+        const sourceCanvas = state.item?.source_canvas || {};
+        const response = await apiJson('/api/canvas-text-results', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({
+                text,
+                name:`${parts.stem || '文本结果'}-编辑.md`,
+                canvas_id:sourceCanvas.id || '',
+                canvas_title:sourceCanvas.title || ''
+            })
+        });
+        closeTextContentEditor();
+        await refreshCanvasAssets();
+        selectedCanvasAssetId = response.id || selectedCanvasAssetId;
+        if(activeTab === 'results') render();
+        setStatus('已生成新的文本结果，原文保留');
+    } catch(error) {
+        saveButton.disabled = false;
+        setStatus(error?.message || '文本保存失败');
     }
 }
 function closeDetailPreview(){
@@ -4823,7 +5016,10 @@ document.addEventListener('click', event => {
     if(event.target.closest?.('.asset-lightbox') && !event.target.closest?.('.asset-lightbox-image,.asset-lightbox-video,.asset-lightbox-audio,.asset-lightbox-text')) closeDetailPreview();
 });
 document.addEventListener('keydown', event => {
-    if(event.key === 'Escape') closeDetailPreview();
+    if(event.key === 'Escape'){
+        closeDetailPreview();
+        closeTextContentEditor();
+    }
     if(event.target?.id === 'assetTreeEditInput'){
         if(event.key === 'Enter'){ event.preventDefault(); saveAssetTreeEdit().catch(err => setStatus(err.message || '保存失败')); }
         if(event.key === 'Escape'){ event.preventDefault(); assetTreeEdit = null; render(); }
@@ -4897,6 +5093,11 @@ root.addEventListener('change', event => {
     const inlineAssetName = event.target.closest?.('[data-asset-inline-name]');
     if(inlineAssetName){
         saveAssetInlineName(inlineAssetName.dataset.assetInlineName || '', inlineAssetName.value || '').catch(err => setStatus(err.message || '保存失败'));
+        return;
+    }
+    const inlineResultName = event.target.closest?.('[data-result-inline-name]');
+    if(inlineResultName){
+        saveResultInlineName(inlineResultName.dataset.resultInlineName || '', inlineResultName.value || '').catch(err => setStatus(err.message || '保存失败'));
         return;
     }
     const inlineWorkflowName = event.target.closest?.('[data-workflow-inline-name]');

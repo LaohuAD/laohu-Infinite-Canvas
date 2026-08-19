@@ -70,14 +70,14 @@
       },
       optionsB(aId) {
         const all = (state.raw.canvas && state.raw.canvas.canvases) || [];
-        const list = aId && aId !== 'all' ? all.filter((c) => (c.kind || 'classic') === aId) : all;
+        const list = aId && aId !== 'all' ? all.filter((c) => (c.kind || 'smart') === aId) : all;
         return [{ id: '__all__', name: '全部画布' }].concat(
           list.map((c) => ({ id: c.id, name: `${c.title || '未命名画布'} · ${c.asset_count || 0}` }))
         );
       },
       items(aId, bId) {
         let list = (state.raw.canvas && state.raw.canvas.items) || [];
-        if (aId && aId !== 'all') list = list.filter((it) => (it.canvas_kind || 'classic') === aId);
+        if (aId && aId !== 'all') list = list.filter((it) => (it.canvas_kind || 'smart') === aId);
         if (bId && bId !== '__all__') list = list.filter((it) => it.canvas_id === bId);
         return list.map((it) => ({
           id: it.id, name: it.name || '未命名', url: it.url, kind: it.kind || 'image',

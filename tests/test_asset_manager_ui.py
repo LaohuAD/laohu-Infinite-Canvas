@@ -96,6 +96,23 @@ class AssetManagerUiTests(unittest.TestCase):
         self.assertIn("source_canvas", self.script)
         self.assertIn("未记录来源", self.script)
 
+    def test_generation_results_share_material_preview_edit_and_promote_actions(self):
+        result_detail = self.script.split("function renderCanvasAssetDetail(item){", 1)[1].split("function refreshCanvasAssetSelectionOnly", 1)[0]
+        self.assertIn("data-canvas-asset-preview", result_detail)
+        self.assertIn("data-result-rename", result_detail)
+        self.assertIn("data-result-inline-name", result_detail)
+        self.assertIn("data-result-promote", result_detail)
+        self.assertIn("data-text-edit", result_detail)
+        self.assertIn("function beginResultInlineRename(id)", self.script)
+        self.assertIn("function promoteCanvasAssetItem(id)", self.script)
+        self.assertIn("function openTextContentEditor(source, id)", self.script)
+        self.assertIn("function materialOverlayHost()", self.script)
+        self.assertGreaterEqual(self.script.count("materialOverlayHost().appendChild(overlay)"), 2)
+        self.assertIn("/api/results/${encodeURIComponent(id)}", self.script)
+        self.assertIn("root.addEventListener('dblclick'", self.script)
+        self.assertIn(".asset-text-editor {", self.styles)
+        self.assertIn("background:var(--card)", self.styles)
+
     def test_default_asset_library_has_no_delete_action(self):
         self.assertIn("activeAssetLibraryId === 'default'", self.script)
 
