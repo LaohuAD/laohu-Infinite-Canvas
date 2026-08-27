@@ -146,6 +146,11 @@ const previewCard = document.getElementById('previewContent');
 const miniCanvasHost = document.getElementById('miniCanvasHost');
 
 function setStatus(text){ statusEl.textContent = text || ''; }
+function broadcastComfyUiChange(type){
+    const message = { type, updated_at: Date.now() };
+    try { new BroadcastChannel('studio-api').postMessage(message); } catch(e) {}
+    try { window.parent?.postMessage(message, '*'); } catch(e) {}
+}
 function escapeHtml(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function escapeAttr(s){ return escapeHtml(s); }
 function fieldKind(f){
@@ -247,8 +252,7 @@ async function saveComfyInstances(){
         const data = await res.json();
         comfyInstances = data.instances || cleaned;
         renderComfyInstances();
-        try { new BroadcastChannel('studio-api').postMessage({ type: 'comfy-instances-changed' }); } catch(e) {}
-        try { window.parent?.postMessage({ type: 'comfy-instances-changed' }, '*'); } catch(e) {}
+        broadcastComfyUiChange('comfy-instances-changed');
         setStatus('ComfyUI 后端地址已保存');
     } catch(e){
         alert(e.message || '保存失败');
@@ -1337,9 +1341,9 @@ async function onUpload(event){
         const result = await data.json();
         if(!data.ok) throw new Error(result.detail || tr('comfy.uploadFailed'));
         await loadList();
-        selectWorkflow(result.name);
+        await selectWorkflow(result.name);
         setStatus(tr('comfy.uploaded') + result.name);
-        new BroadcastChannel('studio-api').postMessage({ type: 'workflows-changed' });
+        broadcastComfyUiChange('workflows-changed');
     } catch(e){ alert(e.message || tr('comfy.uploadFailed')); }
 }
 
@@ -1361,7 +1365,7 @@ async function onSave(){
         if(!res.ok) throw new Error((await res.json()).detail || tr('comfy.saveFailed'));
         setStatus(tr('comfy.saved'));
         await loadList();
-        new BroadcastChannel('studio-api').postMessage({ type: 'workflows-changed' });
+        broadcastComfyUiChange('workflows-changed');
     } catch(e){ alert(e.message || tr('comfy.saveFailed')); setStatus(tr('comfy.saveFailed')); }
 }
 
@@ -1378,7 +1382,7 @@ async function onDelete(){
         renderPreview();
         renderWorkspaceView();
         await loadList();
-        new BroadcastChannel('studio-api').postMessage({ type: 'workflows-changed' });
+        broadcastComfyUiChange('workflows-changed');
     } catch(e){ alert(e.message || tr('comfy.deleteFailed')); }
 }
 
@@ -1394,4 +1398,3 @@ document.addEventListener('DOMContentLoaded', () => {
     loadList();
     loadComfyInstances();
 });
-

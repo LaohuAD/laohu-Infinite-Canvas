@@ -619,6 +619,21 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context["operation"], "prompt_enhancement")
         self.assertEqual(context["inputs"]["reference_audio"]["max"], 3)
 
+    def test_ai_money_new_image_and_flowmusic_models_have_official_contracts(self):
+        image = ai_money_profile_from_model_id("laohuaimoney-image-gk-v2-edit", "image_generation")
+        flow_generation = ai_money_profile_from_model_id("flowmusic-generation", "music_generation")
+        flow_lyrics = ai_money_profile_from_model_id("flowmusic-lyrics", "music_generation")
+        flow_video = ai_money_profile_from_model_id("flowmusic-video-clip", "music_generation")
+
+        self.assertEqual(image["inputs"]["reference"]["max"], 3)
+        self.assertEqual(image["parameters"]["resolution"]["options"], ["1k", "2k"])
+        self.assertEqual(image["request_mapping"]["aspect_ratio"], "aspect_ratio")
+        self.assertEqual(flow_generation["platform"]["endpoint"], "/v1/music/generations")
+        self.assertEqual(flow_generation["request_mapping"]["prompt"], "sound_prompt")
+        self.assertEqual(flow_generation["parameters"]["version"]["default"], "lyria-3.5")
+        self.assertEqual(flow_lyrics["output"]["media_type"], "text")
+        self.assertEqual(flow_video["output"]["media_type"], "video")
+
     def test_required_action_parameters_are_rejected_before_network_request(self):
         provider = {
             "id": "ai-money", "name": "AI MONEY", "protocol": "openai", "enabled": True,
@@ -717,6 +732,7 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
         pro_image = dynamic_profile_for_model("jimeng-cli", "5.0Pro", "image_generation")
         standard_video = dynamic_profile_for_model("jimeng-cli", "seedance2.0fast", "video_generation")
         vip_video = dynamic_profile_for_model("jimeng-cli", "seedance2.0_vip", "video_generation")
+        seedance_25 = dynamic_profile_for_model("jimeng-cli", "seedance2.5", "video_generation")
 
         self.assertNotIn("reference", legacy_image["inputs"])
         self.assertEqual(edit_image["inputs"]["reference"]["max"], 10)
@@ -726,6 +742,35 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(standard_video["parameters"]["resolution"]["options"], ["720p"])
         self.assertEqual(vip_video["parameters"]["resolution"]["options"], ["720p", "1080p", "4k"])
         self.assertEqual(vip_video["inputs"]["reference_audio"]["max"], 3)
+        self.assertEqual(standard_video["inputs"]["prompt"]["max_chars"], 4000)
+        self.assertEqual(seedance_25["family_name"], "Seedance 2.5")
+        self.assertEqual(seedance_25["inputs"]["prompt"]["max_chars"], 15000)
+        self.assertEqual(seedance_25["inputs"]["reference"]["max"], 30)
+        self.assertEqual(seedance_25["inputs"]["source_video"]["max"], 10)
+        self.assertEqual(seedance_25["inputs"]["reference_audio"]["max"], 10)
+        self.assertEqual(seedance_25["parameters"]["duration"]["max"], 30)
+        self.assertEqual(seedance_25["parameters"]["resolution"]["options"], ["480p", "720p"])
+        self.assertEqual(
+            seedance_25["platform"]["prompt_modes"],
+            {
+                "text_to_video": 15000,
+                "image_to_video": 15000,
+                "frames_to_video": 15000,
+                "multimodal_to_video": 15000,
+                "video_edit": 15000,
+            },
+        )
+
+    def test_canvas_video_request_allows_seedance_25_prompt_ceiling(self):
+        prompt = "字" * 15000
+
+        payload = main.CanvasVideoRequest(
+            provider_id="jimeng",
+            model="seedance2.5",
+            prompt=prompt,
+        )
+
+        self.assertEqual(len(payload.prompt), 15000)
 
     async def test_canvas_jimeng_image_routes_through_cli_adapter_without_network(self):
         provider = {
@@ -809,6 +854,33 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["task_id"], "jimeng-task")
         self.assertEqual(generate_mock.await_args.args[0].model, "seedance2.0")
         self.assertEqual(generate_mock.await_args.args[2], {})
+
+    async def test_canvas_jimeng_video_validates_prompt_limit_by_selected_model(self):
+        provider = {
+            "id": "jimeng", "name": "即梦 CLI", "protocol": "jimeng", "enabled": True,
+            "image_models": [], "chat_models": [],
+            "video_models": ["seedance2.0", "seedance2.5"], "audio_models": [],
+        }
+        generate = AsyncMock(return_value={"videos": ["/api/results/mock-video.mp4"]})
+
+        with patch.object(main, "get_api_provider", return_value=provider), \
+             patch.object(main, "load_api_providers", return_value=[provider]), \
+             patch.object(main, "generate_jimeng_video", generate):
+            accepted = await main.canvas_video(main.CanvasVideoRequest(
+                provider_id="jimeng",
+                model="seedance2.5",
+                prompt="字" * 15000,
+            ))
+            with self.assertRaises(main.HTTPException) as context:
+                await main.canvas_video(main.CanvasVideoRequest(
+                    provider_id="jimeng",
+                    model="seedance2.0",
+                    prompt="字" * 4001,
+                ))
+
+        self.assertEqual(accepted["videos"], ["/api/results/mock-video.mp4"])
+        self.assertEqual(generate.await_count, 1)
+        self.assertIn("最多允许 4000 个字符", str(context.exception.detail))
 
     async def test_canvas_jimeng_multimodal_video_preserves_selected_parameters_without_network(self):
         provider = {
@@ -1051,8 +1123,7 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
         expected = {
             "runninghub": (340, 336),
             "modelscope": (7, 7),
-            "jimeng": (14, 14),
-            "codex": (1, 1),
+            "jimeng": (15, 15),
         }
 
         for provider_id, counts in expected.items():
@@ -1063,6 +1134,15 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
                 provider.get("rh_region", "global"),
             )
             self.assertEqual((report["total"], report["ready"]), counts, provider_id)
+
+        codex = next(item for item in providers if item.get("id") == "codex")
+        codex_report = registry.audit_catalog_coverage(
+            "codex",
+            {field: codex.get(field, []) for field in ("chat_models", "image_models", "video_models", "audio_models")},
+            codex.get("rh_region", "global"),
+        )
+        self.assertEqual(codex_report["total"], len(codex.get("chat_models") or []))
+        self.assertEqual(codex_report["ready"], codex_report["total"])
 
     def test_runtime_catalog_generates_profiles_for_enabled_official_models(self):
         providers = [{
@@ -2903,6 +2983,75 @@ console.log(JSON.stringify(c.modelSupportsInputs(model,{text:1,image:1},{prompt:
         self.assertEqual(multi_profile["inputs"]["source_video"]["max"], 10)
         self.assertEqual(multi_profile["inputs"]["reference_audio"]["max"], 10)
 
+    def test_ai_money_wan_3_prime_models_use_documented_inputs_and_parameters(self):
+        domestic_i2v = ai_money_profile_from_model_id("wan-3.0-prime-i2v", "video_generation")
+        domestic_r2v = ai_money_profile_from_model_id("wan-3.0-prime-r2v", "video_generation")
+        global_i2v = ai_money_profile_from_model_id("wan-3.0-global-prime-i2v", "video_generation")
+        global_r2v = ai_money_profile_from_model_id("wan-3.0-global-prime-r2v", "video_generation")
+        profiles = (domestic_i2v, domestic_r2v, global_i2v, global_r2v)
+
+        self.assertEqual({item["family_id"] for item in profiles}, {"ai-money-wan-3-0"})
+        self.assertEqual({item["family_name"] for item in profiles}, {"Wan 3.0"})
+        self.assertEqual(domestic_i2v["operation"], "image_to_video")
+        self.assertEqual(domestic_r2v["operation"], "reference_to_video")
+        self.assertEqual(global_i2v["inputs"]["first_frame"]["min"], 1)
+        self.assertEqual(global_i2v["inputs"]["last_frame"]["min"], 0)
+        self.assertEqual(global_i2v["inputs"]["last_frame"]["max"], 1)
+        self.assertEqual(domestic_r2v["inputs"]["reference"]["max"], 10)
+        self.assertEqual(domestic_r2v["inputs"]["source_video"]["max"], 5)
+        self.assertEqual(domestic_r2v["inputs"]["reference_audio"]["max"], 5)
+        self.assertTrue(all(item["inputs"]["prompt"]["max_chars"] == 20000 for item in profiles))
+
+        parameters = domestic_r2v["parameters"]
+        self.assertEqual(parameters["duration"]["options"], [-1, *range(2, 31)])
+        self.assertEqual(parameters["resolution"]["options"], ["480p", "720p", "1080p"])
+        self.assertEqual(parameters["aspect_ratio"]["options"], ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"])
+        self.assertTrue(parameters["generate_audio"]["default"])
+        self.assertEqual(parameters["seed"]["max"], 2147483647)
+        self.assertNotIn("enable_thinking", global_i2v["parameters"])
+        self.assertNotIn("return_last_frame", global_r2v["parameters"])
+        self.assertEqual(domestic_r2v["request_mapping"]["reference"], "metadata.content")
+        self.assertEqual(domestic_r2v["request_mapping"]["source_video"], "metadata.content")
+        self.assertEqual(domestic_r2v["request_mapping"]["reference_audio"], "metadata.content")
+        self.assertTrue(all(item["platform"]["endpoint"] == "/v1/videos" for item in profiles))
+
+    def test_wan_3_prime_prompt_reaches_its_20000_character_model_limit(self):
+        payload = main.CanvasVideoRequest(
+            provider_id="ai-money",
+            model="wan-3.0-prime-i2v",
+            prompt="字" * 20000,
+        )
+        profile = ai_money_profile_from_model_id(payload.model, "video_generation")
+
+        main.validate_canvas_video_prompt(profile, payload.prompt)
+        self.assertEqual(len(payload.prompt), 20000)
+
+    def test_ai_money_wan_3_reference_video_preflight_requires_any_reference_media(self):
+        providers = [{
+            "id": "ai-money",
+            "name": "AI MONEY",
+            "enabled": True,
+            "video_models": ["wan-3.0-prime-r2v"],
+        }]
+
+        with self.assertRaises(ModelCapabilityError):
+            main.MODEL_CAPABILITY_REGISTRY.validate_request(
+                providers,
+                "ai-money",
+                "wan-3.0-prime-r2v",
+                "video_generation",
+                input_counts={"prompt": 1, "image": 0, "video": 0, "audio": 0},
+            )
+
+        profile = main.MODEL_CAPABILITY_REGISTRY.validate_request(
+            providers,
+            "ai-money",
+            "wan-3.0-prime-r2v",
+            "video_generation",
+            input_counts={"prompt": 1, "image": 0, "video": 1, "audio": 0},
+        )
+        self.assertEqual(profile["model_id"], "wan-3.0-prime-r2v")
+
     def test_ai_money_fashvsr_profile_requires_a_480p_video_only(self):
         profile = ai_money_profile_from_model_id("FashVSR_video_upscale", "video_generation")
 
@@ -3058,6 +3207,58 @@ console.log(JSON.stringify(c.modelsForVerifiedInputs(catalog,'video_generation',
 """
 
         self.assertEqual(run_node(source), ["multi"])
+
+    def test_jimeng_multi_command_models_remain_visible_for_each_supported_video_mode(self):
+        provider = next(item for item in main.load_api_providers() if item.get("id") == "jimeng")
+        catalog = main.MODEL_CAPABILITY_REGISTRY.build_catalog([provider])
+        source = f"""
+const c=require('./static/js/smart-model-capabilities.js');
+const catalog={json.dumps(catalog, ensure_ascii=False)};
+const cases={{
+  text:c.familiesForInputs(catalog,'video_generation',{{text:1,image:0,video:0,audio:0}},'jimeng','',{{prompt:1}},{{__execution_mode:'text2video'}}),
+  image:c.familiesForInputs(catalog,'video_generation',{{text:1,image:1,video:0,audio:0}},'jimeng','',{{prompt:1,reference:1}},{{__execution_mode:'image2video'}}),
+  frames:c.familiesForInputs(catalog,'video_generation',{{text:1,image:2,video:0,audio:0}},'jimeng','',{{prompt:1,first_frame:1,last_frame:1}},{{__execution_mode:'frames2video'}}),
+  multimodal:c.familiesForInputs(catalog,'video_generation',{{text:1,image:1,video:1,audio:0}},'jimeng','',{{prompt:1,reference:1,source_video:1}},{{__execution_mode:'multimodal2video'}})
+}};
+console.log(JSON.stringify(Object.fromEntries(Object.entries(cases).map(([key,families]) => [key,
+  Object.fromEntries(families.map(family => [family.family_id, family.compatible_variants.map(variant => variant.model_id)]))
+]))));
+"""
+
+        expected = {
+            "jimeng-seedance-2.5": ["seedance2.5"],
+            "jimeng-seedance-2.0": [
+                "seedance2.0fast_vip",
+                "seedance2.0_vip",
+                "seedance2.0",
+                "seedance2.0fast",
+                "seedance2.0mini",
+            ],
+        }
+        result = run_node(source)
+        self.assertEqual(result["text"], expected)
+        self.assertEqual(result["image"], expected)
+        self.assertEqual(result["frames"], expected)
+        self.assertEqual(result["multimodal"], expected)
+
+    def test_direct_static_canvas_html_uses_current_asset_mtime_and_disables_html_cache(self):
+        asset = ROOT / "static" / "js" / "smart-model-capabilities.js"
+        expected = (
+            "/static/js/smart-model-capabilities.js"
+            f"?v={main.current_app_version()}.{asset.stat().st_mtime_ns}"
+        )
+
+        response = TestClient(main.app).get("/static/smart-canvas.html")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("cache-control"), "no-cache")
+        self.assertIn(expected, response.text)
+
+    def test_startup_does_not_rewrite_tracked_static_html_cache_versions(self):
+        source = (ROOT / "main.py").read_text(encoding="utf-8")
+        startup = source.split("async def startup_event():", 1)[1].split('@app.websocket("/ws/stats")', 1)[0]
+
+        self.assertNotIn("sync_static_html_versions()", startup)
 
     def test_frontend_builds_strict_audio_request_with_endpoint_field_names(self):
         source = """

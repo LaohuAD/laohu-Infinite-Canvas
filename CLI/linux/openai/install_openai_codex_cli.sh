@@ -33,7 +33,8 @@ LOG_PATH="$LOG_DIR/openai-codex-cli-install-$(date +%Y%m%d-%H%M%S).log"
         echo "Codex CLI found: $(command -v codex)"
         codex --version || true
         echo ""
-        echo "安装完成。请在终端运行 'codex' 登录；本项目仅接入 OpenAI Codex CLI 的文本能力。"
+        echo "安装完成。画布会自动跟随当前 Codex 登录，不保存独立凭据。"
+        echo "如需切换 API Key 或 ChatGPT 账号，请在 Codex 桌面端或官方 CLI 中操作；本项目仅接入 OpenAI Codex CLI 的文本能力。"
     else
         echo "Codex CLI was installed, but 'codex' is not available in this shell PATH yet."
         echo "Open a new shell, then run: codex"

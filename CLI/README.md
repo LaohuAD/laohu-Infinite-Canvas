@@ -9,13 +9,13 @@ This folder keeps third-party CLI setup scripts grouped by platform.
 - macOS: `CLI/macos/openai/install_openai_codex_cli.command`
 - Linux: `CLI/linux/openai/install_openai_codex_cli.sh`
 
-After installation, open a new terminal and run:
+The canvas follows the currently active Codex Desktop / official CLI authentication and does not keep a second credential store. After installation, sign in or switch authentication in Codex itself:
 
 ```bash
-codex
+codex login
 ```
 
-The first run prompts you to sign in with a ChatGPT account or an API key.
+If Codex is later switched between API-key login and ChatGPT account login, the canvas follows that current state on its next call. The canvas must not restore an older credential or modify the authentication mode on its own.
 
 ## Gemini CLI
 

@@ -49,7 +49,7 @@ def jimeng_image_resolution_options(model_id: str, mode: str = "text2image") -> 
 
 def _is_music_model_id(model_id: str) -> bool:
     lower = str(model_id or "").strip().lower()
-    return bool(re.search(r"(?:^|[-/:_])(music|mureka|suno)(?:[-/:_]|$)", lower))
+    return lower.startswith("flowmusic") or bool(re.search(r"(?:^|[-/:_])(music|mureka|suno)(?:[-/:_]|$)", lower))
 
 
 _MODEL_TIER_LABELS = {
@@ -870,6 +870,7 @@ def runninghub_profile_from_registry_item(item: Dict[str, Any]) -> Dict[str, Any
 def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
     normalized = str(model_id or "").strip()
     lower = normalized.lower()
+    is_wan_3_prime = bool(re.fullmatch(r"wan-3\.0-(?:global-)?prime-(?:i2v|r2v)", lower))
     if lower in {"fashvsr_video_upscale", "fashvsr-video-upscale"}:
         operation = "video_upscale"
     elif lower == "laohuaimoney-upscaler":
@@ -900,6 +901,7 @@ def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
         raise ModelCapabilityError(f"不是已确认的 AI MONEY 视频模型：{model_id}")
     base = re.sub(r"-(t2v|i2v|multi|r2v|reference-to-video|start-end|start-to-end|v2v|edit|motion|short-play)$", "", lower)
     family_patterns = (
+        (r"^wan-3\.0-", "wan-3.0"),
         (r"^seedance-2\.5-", "seedance-2.5"),
         (r"^seedance-2\.0-", "seedance-2.0"),
         (r"^flux-3-video-", "flux-3-video"),
@@ -924,7 +926,12 @@ def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
     elif lower == "midjourney-video":
         family_name = "midjourney"
     family_id = "ai-money-" + re.sub(r"[^a-z0-9]+", "-", family_name.lower()).strip("-")
-    inputs: Dict[str, Dict[str, Any]] = {"prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}}
+    inputs: Dict[str, Dict[str, Any]] = {
+        "prompt": {
+            "media_type": "text", "min": 1, "max": 1, "role": "prompt",
+            **({"max_chars": 20000} if is_wan_3_prime else {}),
+        }
+    }
     mapping = {"prompt": "prompt"}
     if operation == "video_upscale":
         if lower in {"fashvsr_video_upscale", "fashvsr-video-upscale"}:
@@ -944,14 +951,26 @@ def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
         inputs["last_frame"] = {"media_type": "image", "min": 1, "max": 1, "role": "last_frame"}
         mapping.update({"first_frame": "images", "last_frame": "images"})
     elif operation == "reference_to_video":
-        inputs["reference"] = {"media_type": "image", "min": 1, "max": 9, "role": "reference"}
-        mapping["reference"] = "images"
+        if is_wan_3_prime:
+            inputs.update({
+                "reference": {"media_type": "image", "min": 0, "max": 10, "role": "reference"},
+                "source_video": {"media_type": "video", "min": 0, "max": 5, "role": "source_video"},
+                "reference_audio": {"media_type": "audio", "min": 0, "max": 5, "role": "reference_audio"},
+            })
+            mapping.update({
+                "reference": "metadata.content",
+                "source_video": "metadata.content",
+                "reference_audio": "metadata.content",
+            })
+        else:
+            inputs["reference"] = {"media_type": "image", "min": 1, "max": 9, "role": "reference"}
+            mapping["reference"] = "images"
     elif operation == "video_to_video":
         inputs["source_video"] = {"media_type": "video", "min": 1, "max": 1, "role": "source_video"}
         mapping["source_video"] = "metadata.video_url"
     elif operation == "image_to_video":
         inputs["first_frame"] = {"media_type": "image", "min": 1, "max": 1, "role": "first_frame"}
-        if lower.startswith("seedance-2.5-"):
+        if lower.startswith("seedance-2.5-") or is_wan_3_prime:
             inputs["last_frame"] = {"media_type": "image", "min": 0, "max": 1, "role": "last_frame"}
             mapping["last_frame"] = "images"
         mapping["first_frame"] = "images"
@@ -977,7 +996,15 @@ def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
         "return_last_frame": {"level": "optional", "type": "boolean", "default": False, "source_field": "metadata.return_last_frame"},
         "seed": {"level": "advanced", "type": "integer", "min": 0, "max": 4294967295, "source_field": "metadata.seed"},
     }
-    if lower.startswith("seedance-2.5-"):
+    if is_wan_3_prime:
+        parameters = {
+            "duration": {"level": "optional", "type": "enum", "options": [-1, *range(2, 31)], "default": 5, "source_field": "seconds"},
+            "resolution": {"level": "optional", "type": "enum", "options": ["480p", "720p", "1080p"], "default": "720p", "source_field": "metadata.resolution"},
+            "aspect_ratio": {"level": "optional", "type": "enum", "options": ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"], "default": "adaptive", "source_field": "metadata.ratio"},
+            "generate_audio": {"level": "optional", "type": "boolean", "default": True, "source_field": "metadata.generate_audio"},
+            "seed": {"level": "advanced", "type": "integer", "min": 0, "max": 2147483647, "source_field": "metadata.seed"},
+        }
+    elif lower.startswith("seedance-2.5-"):
         if operation == "multimodal_to_video":
             inputs["reference"]["max"] = 30
             inputs["source_video"]["max"] = 10
@@ -1038,8 +1065,9 @@ def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
         "display_name": normalized, "variant_id": operation, "node_type": "video_generation", "operation": operation,
         "status": "confirmed", "readiness": "ready", "runnable": True, "version": 1,
         "evidence_level": "official_documented", "inputs": inputs, "parameters": parameters,
-        "request_mapping": mapping, "output": {"media_type": "video", "min": 1, "async": True},
+        "request_mapping": mapping, "output": {"media_type": "video", "min": 1, "max": 1, "async": True},
         "platform": {"endpoint": "/v1/video/generations" if lower in {"fashvsr_video_upscale", "fashvsr-video-upscale"} else "/v1/videos"},
+        **({"requires_any_media": ["image", "video", "audio"]} if is_wan_3_prime and operation == "reference_to_video" else {}),
     }
 
 
@@ -1093,6 +1121,126 @@ def _ai_money_text_family_mode(model_id: str) -> Dict[str, str]:
         "variant_id": "default",
         "variant_name": "默认",
         "variant_name_en": "Default",
+    }
+
+
+def _ai_money_flowmusic_profile(model_id: str) -> Dict[str, Any]:
+    action = str(model_id or "").strip().lower().removeprefix("flowmusic-")
+    action_labels = {
+        "generation": ("音乐生成", "Music generation"),
+        "lyrics": ("歌词生成", "Lyrics generation"),
+        "extend": ("音乐续写", "Extend music"),
+        "replace": ("片段替换", "Replace section"),
+        "cover": ("风格翻唱", "Cover music"),
+        "stems": ("分离音轨", "Separate stems"),
+        "upload-audio": ("导入音频", "Upload audio"),
+        "download-audio": ("导出音频", "Download audio"),
+        "video-clip": ("音乐视频", "Music video"),
+    }
+    if action not in action_labels:
+        raise ModelCapabilityError(f"未知 FlowMusic 操作：{model_id}")
+    family_id = "ai-money-flowmusic-lyria-3-5"
+    family_name, family_name_en = "FlowMusic · Lyria 3.5", "FlowMusic · Lyria 3.5"
+    variant_name, variant_name_en = action_labels[action]
+    prompt_input = {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}
+    inputs: Dict[str, Dict[str, Any]] = {}
+    parameters: Dict[str, Dict[str, Any]] = {}
+    mapping: Dict[str, str] = {}
+    version_actions = {"generation", "extend", "replace", "cover"}
+    if action == "generation":
+        inputs["prompt"] = prompt_input
+        mapping["prompt"] = "sound_prompt"
+        parameters = {
+            "version": {"level": "optional", "type": "text", "default": "lyria-3.5", "ui_hidden": True},
+            "lyrics": {"level": "optional", "type": "text"},
+            "title": {"level": "optional", "type": "text"},
+            "bpm": {"level": "optional", "type": "integer", "min": 1},
+            "length": {"level": "optional", "type": "integer", "min": 1, "max": 240},
+            "seed": {"level": "optional", "type": "integer"},
+        }
+        output = {"media_type": "audio", "min": 1, "max": 1, "async": True}
+    elif action == "lyrics":
+        inputs["prompt"] = {**prompt_input, "max_chars": 3000}
+        mapping["prompt"] = "prompt"
+        output = {"media_type": "text", "min": 1, "max": 1, "async": True}
+    elif action in {"extend", "replace", "cover"}:
+        parameters = {"clip_id": {"level": "required", "type": "text"}}
+        mapping["clip_id"] = "clip_id"
+        if action == "extend":
+            parameters.update({
+                "version": {"level": "optional", "type": "text", "default": "lyria-3.5", "ui_hidden": True},
+                "extend_from_s": {"level": "required", "type": "number", "min": 0},
+                "extend_s": {"level": "required", "type": "number", "min": 1, "max": 164},
+                "instruction": {"level": "required", "type": "text"},
+                "title": {"level": "optional", "type": "text"},
+                "seed": {"level": "optional", "type": "integer"},
+            })
+        elif action == "replace":
+            parameters.update({
+                "version": {"level": "optional", "type": "text", "default": "lyria-3.5", "ui_hidden": True},
+                "start_s": {"level": "required", "type": "number", "min": 0},
+                "end_s": {"level": "required", "type": "number", "min": 0},
+                "instruction": {"level": "required", "type": "text"},
+                "title": {"level": "optional", "type": "text"},
+                "seed": {"level": "optional", "type": "integer"},
+            })
+        else:
+            parameters.update({
+                "instruction": {"level": "required", "type": "text"},
+                "strength": {"level": "optional", "type": "number", "min": 0, "max": 1, "default": 0.5},
+                "title": {"level": "optional", "type": "text"},
+                "seed": {"level": "optional", "type": "integer"},
+            })
+        output = {"media_type": "audio", "min": 1, "max": 1, "async": True}
+    elif action == "stems":
+        parameters = {"clip_id": {"level": "required", "type": "text"}}
+        mapping["clip_id"] = "clip_id"
+        output = {"media_type": "file", "min": 1, "max": 1, "async": True}
+    elif action == "upload-audio":
+        inputs["reference_audio"] = {"media_type": "audio", "min": 1, "max": 1, "role": "reference_audio"}
+        mapping["reference_audio"] = "audio_url"
+        output = {"media_type": "audio", "min": 1, "max": 1, "async": True}
+    elif action == "download-audio":
+        parameters = {
+            "clip_id": {"level": "required", "type": "text"},
+            "format": {"level": "optional", "type": "enum", "options": ["wav", "mp3"], "default": "wav"},
+        }
+        mapping.update({"clip_id": "clip_id", "format": "format"})
+        output = {"media_type": "audio", "min": 1, "max": 1, "async": True}
+    else:
+        parameters = {
+            "clip_id": {"level": "required", "type": "text"},
+            "preset": {"level": "optional", "type": "enum", "options": ["simple", "modern", "player"], "default": "modern"},
+        }
+        mapping.update({"clip_id": "clip_id", "preset": "preset"})
+        output = {"media_type": "video", "min": 1, "max": 1, "async": True}
+    for key in parameters:
+        mapping.setdefault(key, key)
+    return {
+        "model_id": model_id,
+        "family_id": family_id,
+        "family_name": family_name,
+        "family_name_en": family_name_en,
+        "display_name": model_id,
+        "variant_id": action,
+        "variant_name": variant_name,
+        "variant_name_en": variant_name_en,
+        "node_type": "music_generation",
+        "operation": f"flowmusic_{action.replace('-', '_')}",
+        "status": "confirmed",
+        "readiness": "ready",
+        "runnable": True,
+        "version": 1,
+        "evidence_level": "official_documented",
+        "inputs": inputs,
+        "parameters": parameters,
+        "request_mapping": mapping,
+        "output": output,
+        "platform": {
+            "endpoint": "/v1/music/generations" if action == "generation" else f"/v1/music/generations/{action}",
+            "model": "flowmusic",
+            **({"version": "lyria-3.5"} if action in version_actions else {}),
+        },
     }
 
 
@@ -1280,13 +1428,29 @@ def ai_money_profile_from_model_id(model_id: str, node_type: str = "") -> Dict[s
             optional_reference_max = 16
         if operation in {"image_to_image", "layer_decomposition"} or optional_reference_max:
             reference_min = 1 if operation in {"image_to_image", "layer_decomposition"} else 0
-            reference_max = 1 if layer_decomposition or lower.startswith("laohuaimoney-image-gk-v15-edit") else (optional_reference_max or 10)
+            if lower == "laohuaimoney-image-gk-v2-edit":
+                reference_max = 3
+            else:
+                reference_max = 1 if layer_decomposition or lower.startswith("laohuaimoney-image-gk-v15-edit") else (optional_reference_max or 10)
             inputs["reference"] = {"media_type": "image", "min": reference_min, "max": reference_max, "role": "reference"}
             mapping["reference"] = "images"
         parameters = {
             "resolution": {"level": "optional", "type": "enum", "options": ["1k", "2k", "4k"], "source_field": "metadata.resolution"},
             "aspect_ratio": {"level": "optional", "type": "enum", "options": ["1:1", "16:9", "9:16", "4:3", "3:4"], "source_field": "metadata.ratio"},
         }
+        if lower == "laohuaimoney-image-gk-v2-edit":
+            parameters = {
+                "resolution": {"level": "optional", "type": "enum", "options": ["1k", "2k"], "source_field": "resolution"},
+                "aspect_ratio": {"level": "optional", "type": "enum", "options": ["auto", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "9:21", "1:2", "2:1"], "source_field": "aspect_ratio"},
+                "count": {"level": "optional", "type": "integer", "min": 1, "max": 10, "source_field": "n"},
+                "nsfw_check": {"level": "optional", "type": "boolean", "default": False, "source_field": "nsfw_check"},
+            }
+        elif lower == "laohuaimoney-image-gk-v2":
+            parameters = {
+                "resolution": {"level": "optional", "type": "enum", "options": ["quality"], "source_field": "resolution"},
+                "aspect_ratio": {"level": "optional", "type": "enum", "options": ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9"], "source_field": "size"},
+                "count": {"level": "optional", "type": "integer", "min": 1, "max": 12, "source_field": "n"},
+            }
         if lower == "laohuaimoney-image-g-v2-lowprice":
             parameters["aspect_ratio"]["source_field"] = "size"
             parameters["count"] = {"level": "optional", "type": "integer", "min": 1, "max": 10, "source_field": "n"}
@@ -1300,7 +1464,7 @@ def ai_money_profile_from_model_id(model_id: str, node_type: str = "") -> Dict[s
             "variant_id": operation, "node_type": "image_generation", "operation": operation,
             "status": "confirmed", "readiness": "ready", "runnable": True, "version": 1,
             "evidence_level": "official_documented", "inputs": inputs,
-            "parameters": parameters, "request_mapping": mapping, "output": {"media_type": "image", "min": 1, "async": True},
+            "parameters": parameters, "request_mapping": mapping, "output": {"media_type": "image", "min": 1, "max": 10, "async": True},
             "platform": {"endpoint": "/v1/image/generations"},
         }
     if normalized == "doubao-seed-audio-1.0":
@@ -1483,6 +1647,8 @@ def ai_money_profile_from_model_id(model_id: str, node_type: str = "") -> Dict[s
             "output": {"media_type": "audio", "min": 1, "max": 3, "async": True},
             "platform": {"endpoint": "/v1/audio/generations"},
         }
+    if lower.startswith("flowmusic-"):
+        return _ai_money_flowmusic_profile(normalized)
     if lower == "kling-lip-sync-tts" and node_type == "audio_generation":
         return {
             "model_id": normalized, "family_id": "ai-money-kling-lip-sync", "family_name": "可灵对口型",
@@ -1612,26 +1778,37 @@ def jimeng_profile_from_model_id(model_id: str, node_type: str) -> Dict[str, Any
             "platform": {"transport": "local_cli", "commands": ["text2image"] + (["image2image"] if normalized in editable else [])},
         }
     if node_type == "video_generation":
-        supported = {"seedance2.0_vip", "seedance2.0fast_vip", "seedance2.0", "seedance2.0fast", "seedance2.0mini"}
+        supported = {"seedance2.0_vip", "seedance2.0fast_vip", "seedance2.0", "seedance2.0fast", "seedance2.0mini", "seedance2.5"}
         if normalized not in supported:
             raise ModelCapabilityError(f"即梦 CLI 视频模型 {normalized} 不在命令白名单中")
+        is_seedance_25 = normalized == "seedance2.5"
+        prompt_max_chars = 15000 if is_seedance_25 else 4000
+        reference_max = 30 if is_seedance_25 else 9
+        video_max = 10 if is_seedance_25 else 3
+        audio_max = 10 if is_seedance_25 else 3
         return {
-            "model_id": normalized, "family_id": "jimeng-seedance-2.0", "family_name": "Seedance 2.0",
+            "model_id": normalized,
+            "family_id": "jimeng-seedance-2.5" if is_seedance_25 else "jimeng-seedance-2.0",
+            "family_name": "Seedance 2.5" if is_seedance_25 else "Seedance 2.0",
             "display_name": normalized, "variant_id": normalized, "node_type": node_type,
             "operation": "multimodal_to_video", "status": "confirmed", "readiness": "ready",
             "runnable": True, "version": 1, "evidence_level": "runtime_verified",
             "inputs": {
-                "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"},
+                "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt", "max_chars": prompt_max_chars},
                 "first_frame": {"media_type": "image", "min": 0, "max": 1, "role": "first_frame"},
                 "last_frame": {"media_type": "image", "min": 0, "max": 1, "role": "last_frame"},
-                "reference": {"media_type": "image", "min": 0, "max": 9, "role": "reference"},
-                "source_video": {"media_type": "video", "min": 0, "max": 3, "role": "source_video"},
-                "reference_audio": {"media_type": "audio", "min": 0, "max": 3, "role": "reference_audio"},
+                "reference": {"media_type": "image", "min": 0, "max": reference_max, "role": "reference"},
+                "source_video": {"media_type": "video", "min": 0, "max": video_max, "role": "source_video"},
+                "reference_audio": {"media_type": "audio", "min": 0, "max": audio_max, "role": "reference_audio"},
             },
             "parameters": {
-                "duration": {"level": "optional", "type": "integer", "min": 4, "max": 15, "default": 5},
+                "duration": {"level": "optional", "type": "integer", "min": 4, "max": 30 if is_seedance_25 else 15, "default": 5},
                 "aspect_ratio": {"level": "optional", "type": "enum", "options": ["1:1", "3:4", "16:9", "4:3", "9:16", "21:9"]},
-                "resolution": {"level": "optional", "type": "enum", "options": ["720p", "1080p", "4k"] if normalized == "seedance2.0_vip" else ["720p"]},
+                "resolution": {
+                    "level": "optional",
+                    "type": "enum",
+                    "options": ["480p", "720p"] if is_seedance_25 else (["720p", "1080p", "4k"] if normalized == "seedance2.0_vip" else ["720p"]),
+                },
             },
             "request_mapping": {
                 "prompt": "prompt", "first_frame": "first", "last_frame": "last", "reference": "image",
@@ -1639,7 +1816,20 @@ def jimeng_profile_from_model_id(model_id: str, node_type: str) -> Dict[str, Any
                 "aspect_ratio": "ratio", "resolution": "video_resolution",
             },
             "output": {"media_type": "video", "min": 1, "max": 1, "async": True},
-            "platform": {"transport": "local_cli", "commands": ["text2video", "image2video", "frames2video", "multimodal2video"]},
+            "platform": {
+                "transport": "local_cli",
+                "commands": ["text2video", "image2video", "frames2video", "multimodal2video"],
+                **({
+                    "vip_only": True,
+                    "prompt_modes": {
+                        "text_to_video": 15000,
+                        "image_to_video": 15000,
+                        "frames_to_video": 15000,
+                        "multimodal_to_video": 15000,
+                        "video_edit": 15000,
+                    },
+                } if is_seedance_25 else {}),
+            },
         }
     raise ModelCapabilityError(f"即梦 CLI 模型 {normalized} 不支持节点类型 {node_type}")
 
@@ -1730,6 +1920,47 @@ def agnes_profile_from_model_id(model_id: str, node_type: str) -> Dict[str, Any]
 
 def dynamic_profile_for_model(provider_id: str, model_id: str, node_type: str) -> Optional[Dict[str, Any]]:
     try:
+        if provider_id == "codex-cli":
+            normalized = str(model_id or "").strip()
+            if node_type != "text_generation" or not normalized:
+                raise ModelCapabilityError(f"Codex 模型 {normalized or model_id} 不支持节点类型 {node_type}")
+            follows_current = normalized.lower() == "auto"
+            return {
+                "model_id": normalized,
+                "family_id": "codex-current" if follows_current else normalized,
+                "family_name": "Codex 当前配置" if follows_current else normalized,
+                "variant_id": "follow_current_config" if follows_current else "explicit_model_override",
+                "node_type": "text_generation",
+                "operation": "chat_or_agent_text",
+                "status": "confirmed",
+                "readiness": "ready",
+                "runnable": True,
+                "version": 1,
+                "evidence_level": "runtime_verified",
+                "inputs": {
+                    "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"},
+                    "system_prompt": {"media_type": "text", "min": 0, "max": 1, "role": "system_prompt"},
+                    "reference_image": {"media_type": "image", "min": 0, "max": 10, "role": "reference", "context_only": True},
+                },
+                "parameters": {} if follows_current else {
+                    "model": {
+                        "level": "required",
+                        "type": "model",
+                        "ui_hidden": True,
+                        "description": "当前节点的单次 Codex --model 覆盖，不修改全局配置。",
+                        "description_en": "Per-node Codex --model override; it does not modify global configuration.",
+                    }
+                },
+                "request_mapping": {
+                    "prompt": "stdin",
+                    "system_prompt": "prompt_prefix",
+                    "reference_image": "--image",
+                    **({} if follows_current else {"model": "--model"}),
+                },
+                "output": {"media_type": "text", "min": 1, "max": 1, "async": False},
+                "platform": {"transport": "local_cli", "command": "codex"},
+                "note": "模型是否对当前账号或 API Provider 可用，由 Codex CLI 在运行时校验。",
+            }
         if provider_id == "runninghub" and node_type == "text_generation":
             return runninghub_profile_from_registry_item({
                 "name_en": model_id,
@@ -2381,6 +2612,14 @@ class ModelCapabilityRegistry:
             if counts.get(media_type, 0) < limit["min"]:
                 label = labels.get(media_type, media_type)
                 raise ModelCapabilityError(f"模型 {model_id} 至少需要 {limit['min']} 个{label}输入")
+        requires_any_media = [
+            str(media_type or "").strip().lower()
+            for media_type in (profile.get("requires_any_media") or [])
+            if str(media_type or "").strip()
+        ]
+        if requires_any_media and not any(counts.get(media_type, 0) > 0 for media_type in requires_any_media):
+            readable = "、".join(labels.get(media_type, media_type) for media_type in requires_any_media)
+            raise ModelCapabilityError(f"模型 {model_id} 至少需要一个{readable}参考素材")
 
         normalized_roles: Dict[str, int] = {}
         for raw_role, value in (input_roles or {}).items():

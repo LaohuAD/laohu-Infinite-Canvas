@@ -3,7 +3,8 @@ uvicorn
 requests
 pydantic
 python-multipart
-httpx[socks]
+httpx[socks]>=0.28,<0.29
+httpcore>=1.0,<1.1
 pillow
 qrcode
 websockets

@@ -5,7 +5,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function(){
     'use strict';
 
-    const SCHEMA_VERSION = 5;
+    const SCHEMA_VERSION = 6;
     const EXECUTION_NODE_SIZE = Object.freeze({width:316, height:194});
     const NODE_TYPES = Object.freeze({
         material:'smart-material',
@@ -17,6 +17,7 @@
         aiApp:'smart-ai-app',
         comfyWorkflow:'smart-comfy-workflow',
         angleControl:'smart-angle-control',
+        imageCompare:'smart-image-compare',
         resultGroup:'smart-result-group'
     });
     const EXECUTION_TYPES = new Set([
@@ -28,7 +29,7 @@
         NODE_TYPES.aiApp,
         NODE_TYPES.comfyWorkflow
     ]);
-    const TOOL_TYPES = new Set([NODE_TYPES.angleControl]);
+    const TOOL_TYPES = new Set([NODE_TYPES.angleControl, NODE_TYPES.imageCompare]);
     const ANGLE_HORIZONTAL_LABELS = Object.freeze([
         [0, 'front view'],
         [45, 'front-right quarter view'],
@@ -155,12 +156,35 @@
             return isExecutionNode(toNode) || ['smart-prompt', 'smart-loop', 'smart-minimax'].includes(toType);
         }
         if(isExecutionNode(fromNode)) return isMaterialNode(toNode);
-        if(isToolNode(fromNode)) return isMaterialNode(toNode) && Boolean(textContentForNode(toNode) || !toNode.images?.length);
+        if(isToolNode(fromNode)){
+            if(fromType === NODE_TYPES.imageCompare) return false;
+            return isMaterialNode(toNode) && Boolean(textContentForNode(toNode) || !toNode.images?.length);
+        }
         if(isResultGroupNode(fromNode)) return isExecutionNode(toNode) || toType === 'smart-loop';
         if(fromType === 'smart-prompt') return isExecutionNode(toNode) || toType === 'smart-loop';
         if(fromType === 'smart-loop') return isExecutionNode(toNode) || isMaterialNode(toNode);
         if(fromType === 'smart-group') return isExecutionNode(toNode) || toType === 'smart-loop';
         return false;
+    }
+    function imageCompareTargetSlot(connections, targetId, preferred=''){
+        const slots = ['left', 'right'];
+        const requested = String(preferred || '').trim().toLowerCase();
+        const incoming = (connections || []).filter(connection => !targetId || connection?.to === targetId);
+        const occupied = new Set(incoming
+            .map(connection => String(connection?.targetFieldKey || connection?.target_field_key || '').trim().toLowerCase())
+            .filter(slot => slots.includes(slot)));
+        let unassigned = incoming.filter(connection => {
+            const slot = String(connection?.targetFieldKey || connection?.target_field_key || '').trim().toLowerCase();
+            return !slots.includes(slot);
+        }).length;
+        slots.forEach(slot => {
+            if(!occupied.has(slot) && unassigned > 0){
+                occupied.add(slot);
+                unassigned -= 1;
+            }
+        });
+        if(slots.includes(requested)) return occupied.has(requested) ? '' : requested;
+        return slots.find(slot => !occupied.has(slot)) || '';
     }
     function nearestAngleLabel(value, labels){
         const number = Number(value);
@@ -989,6 +1013,7 @@
         if(type === NODE_TYPES.musicGenerator) return '音乐生成';
         if(type === NODE_TYPES.aiApp) return 'RunningHub ComfyUI';
         if(type === NODE_TYPES.comfyWorkflow) return '本地 ComfyUI';
+        if(type === NODE_TYPES.imageCompare) return '图像对比';
         if(type === NODE_TYPES.resultGroup) return '结果组';
         return '素材';
     }
@@ -1134,6 +1159,7 @@
         isWorkflowConnection,
         isOutputLayoutConnection,
         connectionKindForNodes,
+        imageCompareTargetSlot,
         anglePromptFor,
         normalizeExecutionSettings,
         normalizeExecutionNode,

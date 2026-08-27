@@ -1,10 +1,26 @@
 {
-  "version": "2026.08.17",
-  "updated_at": "2026-08-17T00:00:00+08:00",
+  "version": "2026.08.28",
+  "updated_at": "2026-08-28T00:00:00+08:00",
   "items": [
     {
       "type": "feature",
-      "text": "重要更新：智能画布继续统一素材节点、执行节点、模型能力档案、参数映射和结果任务；项目主页与在线更新源已迁移到 LaohuAD/laohu-Infinite-Canvas。"
+      "text": "视频模型适配扩展：即梦 CLI 新增 Seedance 2.5 及完整运行模式，AI MONEY 新增 Wan 3.0 Prime 四个模型和 FlowMusic 能力档案。"
+    },
+    {
+      "type": "feature",
+      "text": "智能画布新增图像对比工具节点，并完善空格键拖动画布、视频中央播放控件和对比分割线交互。"
+    },
+    {
+      "type": "improvement",
+      "text": "GPT CLI 现在跟随当前 Codex 登录和模型配置，并保留用户主动管理的画布模型白名单。"
+    },
+    {
+      "type": "fix",
+      "text": "静态资源版本改为响应时动态生成，刷新后可立即获取新脚本，启动服务不再改写项目 HTML 文件。"
+    },
+    {
+      "type": "security",
+      "text": "FlowMusic 分轨文件下载增加公网地址校验、DNS 绑定、ZIP 格式校验和下载大小上限。"
     }
   ]
 }

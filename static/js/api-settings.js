@@ -252,7 +252,7 @@ const JIMENG_DEFAULT_VIDEO_MODELS = ['seedance2.0fast_vip', 'seedance2.0_vip', '
 const JIMENG_LEGACY_IMAGE_MODELS = new Set(['jimeng-image-2k', 'jimeng-image-4k']);
 const JIMENG_LEGACY_VIDEO_MODELS = new Set(['jimeng-video-720p', 'jimeng-video-1080p']);
 const CODEX_DEFAULT_IMAGE_MODELS = [];
-const CODEX_DEFAULT_CHAT_MODELS = ['gpt-5.5'];
+const CODEX_DEFAULT_CHAT_MODELS = ['auto', 'gpt-5.5'];
 const GEMINI_CLI_DEFAULT_IMAGE_MODELS = ['auto'];
 const GEMINI_CLI_DEFAULT_CHAT_MODELS = ['auto'];
 const CLI_PROTOCOLS = new Set(['jimeng', 'codex', 'gemini-cli']);
@@ -1414,6 +1414,7 @@ async function removeRhEntry(kind, index){
     ensureRunningHubLists(item);
     const entry = item[listKey][index];
     if(!entry) return;
+    const previousEntries = JSON.parse(JSON.stringify(item[listKey] || []));
     const entryId = String((kind === 'workflow' ? (entry.workflowId || entry.id) : (entry.appId || entry.id)) || '').trim();
     if(isStaticRunningHubEntry(kind, entry)){
         item[listKey][index] = {
@@ -1426,13 +1427,35 @@ async function removeRhEntry(kind, index){
     }
     renderRunningHubCards();
     setStatus('已删除，正在保存...');
+    let workflowBodyDeleted = false;
     if(kind === 'workflow' && entryId){
         try {
-            await fetch(`/api/runninghub/workflows/${encodeURIComponent(entryId)}`, {method:'DELETE'});
-        } catch(_) {}
+            const response = await fetch(`/api/runninghub/workflows/${encodeURIComponent(entryId)}`, {method:'DELETE'});
+            if(!response.ok) throw new Error('工作流主体删除失败');
+            workflowBodyDeleted = true;
+        } catch(error) {
+            item[listKey] = previousEntries;
+            persistActiveRunningHubRegion(item);
+            renderRunningHubCards();
+            setStatus(error.message || '删除失败');
+            return;
+        }
     }
     const ok = await saveProviders();
-    setStatus(ok ? '已删除并保存' : '已删除，但自动保存失败');
+    if(ok){
+        setStatus('已删除并保存');
+    } else {
+        if(workflowBodyDeleted){
+            persistActiveRunningHubRegion(item);
+            renderRunningHubCards();
+            setStatus('工作流主体已删除，但平台目录保存失败；请再次点击保存同步列表');
+            return;
+        }
+        item[listKey] = previousEntries;
+        persistActiveRunningHubRegion(item);
+        renderRunningHubCards();
+        setStatus('删除未保存，已恢复原列表');
+    }
 }
 function readFileAsDataUrl(file){
     return new Promise((resolve, reject) => {
@@ -1881,7 +1904,7 @@ async function saveRhWorkflowEditor(){
                 entry.fields = (config.fields || []).map(normalizeRhWorkflowField);
                 entry.raw = config.raw || {};
                 renderRunningHubCards();
-                await saveProviders();
+                if(!await saveProviders()) throw new Error('应用参数已经修改，但保存到平台配置失败，请重试');
             }
             setStatus('应用参数配置已保存');
             setRhWorkflowSaveButtonState('saved', '已保存');
@@ -1917,7 +1940,7 @@ async function saveRhWorkflowEditor(){
             entry.raw = state.config.raw || {};
             entry.updatedAt = Number(data.workflow?.updatedAt || Date.now());
             renderRunningHubCards();
-            await saveProviders();
+            if(!await saveProviders()) throw new Error('工作流主体已保存，但平台目录同步失败，请重试保存');
         }
         setStatus('工作流配置已保存');
         setRhWorkflowSaveButtonState('saved', '已保存');
@@ -2866,6 +2889,9 @@ function recommendedProviderForApi(api){
 async function addRecommendedApi(index){
     const api = RECOMMENDED_APIS[index];
     if(!api) return;
+    syncEditor();
+    const previousProviders = JSON.parse(JSON.stringify(providers));
+    const previousSelectedId = selectedId;
     const item = recommendedProviderForApi(api);
     selectedId = item.id;
     recommendInlineOpen = false;
@@ -2877,6 +2903,11 @@ async function addRecommendedApi(index){
         selectedId = item.id;
         renderEditor();
         setStatus(trf('api.recommendAdded', {name:api.name}));
+    } else {
+        providers = previousProviders;
+        selectedId = previousSelectedId;
+        renderProviderList();
+        renderEditor();
     }
 }
 async function saveRecommendedApi(index){
@@ -2885,6 +2916,9 @@ async function saveRecommendedApi(index){
     const input = recommendPanel?.querySelector(`[data-recommend-key="${index}"]`);
     const key = input?.value.trim() || '';
     if(!key){ alert(tr('api.enterApiKey')); return; }
+    syncEditor();
+    const previousProviders = JSON.parse(JSON.stringify(providers));
+    const previousSelectedId = selectedId;
     const item = recommendedProviderForApi(api);
     selectedId = item.id;
     recommendInlineOpen = false;
@@ -2903,6 +2937,12 @@ async function saveRecommendedApi(index){
     syncEditor();
     const ok = await saveProviders();
     if(ok) setStatus(trf('api.recommendSaved', {name:api.name}));
+    else {
+        providers = previousProviders;
+        selectedId = previousSelectedId;
+        renderProviderList();
+        renderEditor();
+    }
 }
 function sortedProviders(){
     const order = ['modelscope', 'runninghub', 'volcengine', 'ai-money', 'agnes'];
@@ -3016,7 +3056,7 @@ function handleProviderDragOver(event, id){
     providerList?.querySelectorAll('.provider-card-drop-target').forEach(el => el.classList.remove('provider-card-drop-target'));
     event.currentTarget.classList.add('provider-card-drop-target');
 }
-function handleProviderDrop(event, targetId){
+async function handleProviderDrop(event, targetId){
     event.preventDefault();
     providerList?.querySelectorAll('.provider-card-drop-target').forEach(el => el.classList.remove('provider-card-drop-target'));
     const sourceId = providerDragId || event.dataTransfer.getData('text/plain');
@@ -3025,11 +3065,16 @@ function handleProviderDrop(event, targetId){
     const sourceIndex = providers.findIndex(item => item.id === sourceId);
     const targetIndex = providers.findIndex(item => item.id === targetId);
     if(sourceIndex < 0 || targetIndex < 0) return;
+    const previousProviders = [...providers];
     const [moved] = providers.splice(sourceIndex, 1);
     const adjustedTargetIndex = providers.findIndex(item => item.id === targetId);
     providers.splice(adjustedTargetIndex, 0, moved);
     renderProviderList();
-    saveProviders();
+    if(!await saveProviders()){
+        providers = previousProviders;
+        renderProviderList();
+        renderEditor();
+    }
 }
 function handleProviderDragEnd(){
     providerDragId = '';
@@ -3143,8 +3188,8 @@ function renderEditor(){
     }
     if(isCodex){
         applyCliProtocolDefaults(item, 'codex');
-        keyInput.placeholder = 'OpenAI CLI 使用本机 codex login，无需 API Key';
-        keyHint.textContent = 'GPT CLI 只支持文本生成，请先安装 OpenAI Codex CLI，并执行 codex 登录';
+        keyInput.placeholder = 'GPT CLI 自动跟随当前 Codex 登录，无需在此填写 API Key';
+        keyHint.textContent = 'GPT CLI 只支持文本生成；auto 跟随当前 Codex 默认模型，具体模型只覆盖当前节点的本次调用，不修改桌面端或其他节点；画布不保存、恢复或覆盖登录凭据';
     }
     if(isGeminiCli){
         applyCliProtocolDefaults(item, 'gemini-cli');
@@ -3762,13 +3807,7 @@ async function testConnection(){
             // "验证地址" only checks reachability. Protocol and image-interface
             // selection are intentionally left untouched for this action.
             // 存入 picker 状态并启用「选择模型」按钮，但不自动弹出
-            lastFetchedAll = data.all || [];
-            lastFetchedSuggestion = {
-                image: new Set(data.image_models || []),
-                chat: new Set(data.chat_models || []),
-                video: new Set(data.video_models || []),
-                audio: new Set(data.audio_models || []),
-            };
+            setFetchedModelState(data);
             const openBtn = document.getElementById('openPickerBtn');
             if(openBtn){ openBtn.disabled = false; openBtn.style.opacity = '1'; }
             const isRunningHubNow = runninghubContext || detectedProtocol === 'runninghub';
@@ -3869,11 +3908,18 @@ function runningHubReadableModelName(model, item){
     return raw;
 }
 function modelDisplayName(model, item){
-    return isRunningHubLike(item) ? runningHubReadableModelName(model, item) : String(model || '');
+    const raw = String(model || '').trim();
+    if(!raw) return '';
+    if(isRunningHubLike(item)) return runningHubReadableModelName(raw, item);
+    const saved = item?.model_names && typeof item.model_names === 'object' ? item.model_names[raw] : '';
+    const fetched = lastFetchedModelNames?.[raw];
+    return saved || fetched || raw;
 }
 function providerModelBadge(model, label){
     const text = `${model || ''} ${label || ''}`.toLowerCase();
     if(text.includes('gpt-image')) return 'G';
+    if(String(model || '').toLowerCase() === 'auto' || text.includes('codex')) return 'C';
+    if(text.includes('gpt-')) return 'GPT';
     if(text.includes('nano')) return 'N';
     if(text.includes('qwen')) return 'Q';
     if(text.includes('seedream')) return 'S';
@@ -4059,7 +4105,7 @@ function selectPickerCat(cat){
     document.querySelectorAll('.picker-cat-tab').forEach(t => t.classList.toggle('active', t.dataset.cat === cat));
     renderModelPicker();
 }
-function applyModelPicker(){
+async function applyModelPicker(){
     const item = provider(); if(!item) return;
     const image = [], chat = [], video = [], audio = [];
     const modelNames = {};
@@ -4073,6 +4119,13 @@ function applyModelPicker(){
         const label = modelDisplayName(id, item);
         if(label && label !== id) modelNames[id] = label;
     });
+    const previousModels = {
+        image_models:[...(item.image_models || [])],
+        chat_models:[...(item.chat_models || [])],
+        video_models:[...(item.video_models || [])],
+        audio_models:[...(item.audio_models || [])],
+        model_names:{...((item.model_names && typeof item.model_names === 'object') ? item.model_names : {})}
+    };
     item.image_models = image;
     item.chat_models = chat;
     item.video_models = video;
@@ -4080,8 +4133,16 @@ function applyModelPicker(){
     item.model_names = modelNames;
     renderModels('image'); renderModels('chat'); renderModels('video'); renderModels('audio');
     renderMsLoras();
-    setStatus(`已应用 · 生图 ${image.length} / LLM ${chat.length} / 视频 ${video.length} / 音频 ${audio.length}，点保存生效`);
-    closeModelPicker();
+    setStatus(`正在保存 · 生图 ${image.length} / LLM ${chat.length} / 视频 ${video.length} / 音频 ${audio.length}`);
+    const saved = await saveProviders();
+    if(saved){
+        closeModelPicker();
+        setStatus(`已应用并保存 · 生图 ${image.length} / LLM ${chat.length} / 视频 ${video.length} / 音频 ${audio.length}`);
+    } else {
+        Object.assign(item, previousModels);
+        renderModels('image'); renderModels('chat'); renderModels('video'); renderModels('audio');
+        renderMsLoras();
+    }
 }
 async function saveKeyOnly(){
     const item = provider();
@@ -4098,10 +4159,16 @@ async function clearKeyOnly(){
     if(!item) return;
     if(!item.has_key && !keyInput.value){ return; }
     if(!confirm(tr('api.confirmClearKey') || '确认清除当前 Key？')) return;
+    const previousEnabled = item.enabled;
+    const previousClearKey = item._clearKey;
     if(item.id === 'agnes') item.enabled = false;
     item._clearKey = true;
     const ok = await saveProviders();
     if(ok) keyInput.value = '';
+    else {
+        item.enabled = previousEnabled;
+        item._clearKey = previousClearKey;
+    }
 }
 const FIXED_PROTOCOL_PROVIDER_IDS = new Set(['modelscope', 'volcengine', 'runninghub', 'ai-money', 'agnes']);
 function providerSupportsModelProtocol(item){
@@ -4327,6 +4394,8 @@ async function addCliProvider(kind){
     syncRecommendView();
     renderRecommendApi();
     syncEditor();
+    const previousProviders = JSON.parse(JSON.stringify(providers));
+    const previousSelectedId = selectedId;
     let item = providers.find(provider => provider.id === preset.id);
     if(!item) item = providers.find(provider => String(provider.protocol || '').toLowerCase() === preset.protocol);
     let created = false;
@@ -4368,17 +4437,32 @@ async function addCliProvider(kind){
         renderEditor();
         if(protocolInput) protocolInput.value = preset.protocol;
         setStatus(`${preset.name} 已添加，使用本机登录态，无需填写 API Key。`);
+    } else {
+        providers = previousProviders;
+        selectedId = previousSelectedId;
+        renderProviderList();
+        renderEditor();
     }
 }
-function deleteProvider(){
+async function deleteProvider(){
     const item = provider();
     if(!item) return;
     if(isFixedProvider(item)){ alert(tr('api.defaultNoDelete') || '默认平台不能删除'); return; }
     if(providers.length <= 1){ alert(tr('api.keepOne')); return; }
+    if(!confirm(`确认删除平台「${item.name || item.id}」？`)) return;
+    syncEditor();
+    const previousProviders = providers;
+    const previousSelectedId = selectedId;
     providers = providers.filter(p => p.id !== item.id);
     selectedId = providers[0]?.id || '';
+    renderProviderList();
     renderEditor();
-    saveProviders();
+    if(!await saveProviders()){
+        providers = previousProviders;
+        selectedId = previousSelectedId;
+        renderProviderList();
+        renderEditor();
+    }
 }
 async function saveRhKeyOnly(kind){
     const item = provider();
@@ -4395,12 +4479,17 @@ async function clearRhKeyOnly(kind){
     if(!item || item.id !== 'runninghub') return;
     if(!confirm(tr('api.confirmClearKey') || '确认清除当前 Key？')) return;
     const region = runningHubRegionFromItem(item);
+    const previousApiClears = [...(item._clearRhApiKeys || [])];
+    const previousWalletClears = [...(item._clearRhWalletKeys || [])];
     if(kind === 'wallet') item._clearRhWalletKeys = [...new Set([...(item._clearRhWalletKeys || []), region])];
     else item._clearRhApiKeys = [...new Set([...(item._clearRhApiKeys || []), region])];
     const ok = await saveProviders();
     if(ok){
         if(kind === 'wallet' && rhWalletKeyInput) rhWalletKeyInput.value = '';
         if(kind !== 'wallet' && rhFreeKeyInput) rhFreeKeyInput.value = '';
+    } else {
+        item._clearRhApiKeys = previousApiClears;
+        item._clearRhWalletKeys = previousWalletClears;
     }
 }
 async function saveVolcengineAssetKeys(){
@@ -4420,12 +4509,17 @@ async function clearVolcengineAssetKeys(){
     const item = provider();
     if(!item || item.id !== 'volcengine') return;
     if(!confirm('确认清除火山素材库 AK/SK？')) return;
+    const previousAccessClear = item._clearVolcengineAccessKey;
+    const previousSecretClear = item._clearVolcengineSecretKey;
     item._clearVolcengineAccessKey = true;
     item._clearVolcengineSecretKey = true;
     const ok = await saveProviders();
     if(ok){
         if(volcAkInput) volcAkInput.value = '';
         if(volcSkInput) volcSkInput.value = '';
+    } else {
+        item._clearVolcengineAccessKey = previousAccessClear;
+        item._clearVolcengineSecretKey = previousSecretClear;
     }
 }
 function addModel(kind){

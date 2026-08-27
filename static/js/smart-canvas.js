@@ -18,6 +18,7 @@ const apiKindToggle = document.getElementById('apiKindToggle');
 const inputThumbsRow = document.getElementById('inputThumbsRow');
 const SMART_UPLOAD_MAX = 20;
 const SMART_REFERENCE_IMAGE_MAX = 20;
+const SPACE_PAN_CLICK_GUARD_MS = 320;
 // Keep these limits aligned with ComfyUI's MiniMaxH3ReferenceToVideo schema.
 const SMART_MINIMAX_REF_IMAGE_MAX = 9;
 const SMART_MINIMAX_REF_VIDEO_MAX = 3;
@@ -101,6 +102,9 @@ let dragState = null;
 let loopInsertPreview = null;
 let selectionState = null;
 let isRKeyDown = false;
+let isSpacePanKeyDown = false;
+let spacePanClickGuard = false;
+let spacePanGestureToken = 0;
 let selectionJustFinished = false;
 let resizeState = null;
 let llmInstructionResizeState = null;
@@ -318,6 +322,7 @@ let previewZoom = 1.0;
 let previewPan = {x:0, y:0};
 let previewPanDrag = null;
 let previewCompareDrag = false;
+let previewCompareGrabOffset = 0;
 let previewComparePos = 50;
 let imageEditPanDrag = null;
 let previewNavState = {nodeId:'', index:0, count:0};
@@ -626,31 +631,60 @@ function smartActivateVideoPreview(target){
     return true;
 }
 function bindSmartInlineVideoControls(video, image=null){
-    if(!video || video.dataset.smartInlineControlsBound === '1') return video;
-    video.dataset.smartInlineControlsBound = '1';
-    const card = video.closest('.media-video-card,.video-thumb') || video.parentElement;
-    const button = card?.querySelector('.smart-video-play');
-    const sync = () => {
+    if(!video) return video;
+    if(image) video.__smartInlineImage = image;
+    const currentCard = () => video.closest('.media-video-card,.video-thumb') || video.parentElement;
+    const sync = video.__smartInlineControlSync || (() => {
+        const card = currentCard();
+        const button = card?.querySelector('.smart-video-play');
         const playing = !video.paused && !video.ended;
+        if(!playing){
+            video.__smartInlineControlSuppressed = false;
+            video.__smartInlinePointerLeftSincePlay = false;
+        }
         card?.classList.toggle('is-playing', playing);
+        card?.classList.toggle('is-control-suppressed', playing && Boolean(video.__smartInlineControlSuppressed));
         button?.classList.toggle('is-playing', playing);
         if(button){
             button.title = playing ? '暂停' : '播放';
             button.setAttribute('aria-label', playing ? '暂停' : '播放');
         }
-        if(image) image._inlineVideoActive = true;
+        if(video.__smartInlineImage) video.__smartInlineImage._inlineVideoActive = true;
         video.dataset.inlineVideoActive = '1';
-    };
-    video.addEventListener('play', sync);
-    video.addEventListener('playing', sync);
-    video.addEventListener('pause', sync);
-    video.addEventListener('ended', sync);
-    video.addEventListener('error', () => {
-        sync();
-        toast('视频结果无法播放，请检查生成结果是否已保存');
     });
-    video.addEventListener('mouseenter', sync);
-    video.addEventListener('mouseleave', sync);
+    video.__smartInlineControlSync = sync;
+    if(video.dataset.smartInlineControlsBound !== '1'){
+        video.dataset.smartInlineControlsBound = '1';
+        video.addEventListener('play', () => {
+            video.__smartInlineControlSuppressed = true;
+            video.__smartInlinePointerLeftSincePlay = false;
+            sync();
+        });
+        video.addEventListener('playing', sync);
+        video.addEventListener('pause', sync);
+        video.addEventListener('ended', sync);
+        video.addEventListener('error', () => {
+            sync();
+            toast('视频结果无法播放，请检查生成结果是否已保存');
+        });
+    }
+    const card = currentCard();
+    if(card && card.dataset.smartInlineHoverBound !== '1'){
+        card.dataset.smartInlineHoverBound = '1';
+        card.addEventListener('mouseenter', () => {
+            if(!video.paused && !video.ended && video.__smartInlinePointerLeftSincePlay){
+                video.__smartInlineControlSuppressed = false;
+            }
+            sync();
+        });
+        card.addEventListener('mouseleave', () => {
+            if(!video.paused && !video.ended){
+                video.__smartInlinePointerLeftSincePlay = true;
+                video.__smartInlineControlSuppressed = true;
+            }
+            sync();
+        });
+    }
     sync();
     return video;
 }
@@ -1846,6 +1880,130 @@ function createAngleControlNode(point, options={}){
     scheduleSave();
     return node;
 }
+function createImageCompareNode(point, options={}){
+    if(!options.skipUndo) pushUndo();
+    const node = {
+        id:uid('compare'),
+        type:SMART_NODE_TYPES.imageCompare,
+        x:Number(point?.x || 0) - 280,
+        y:Number(point?.y || 0) - 190,
+        w:560,
+        h:380,
+        title:tr('smart.createImageCompare') || '图像对比',
+        comparePosition:50,
+        created_at:Date.now()
+    };
+    nodes.push(node);
+    if(options.select !== false) selectedId = node.id;
+    render();
+    scheduleSave();
+    return node;
+}
+function imageCompareInputs(node){
+    const inputs = {left:null, right:null};
+    if(!node) return inputs;
+    upstreamConnectionsForKinds(node, ['input', 'flow']).forEach(connection => {
+        let slot = connectionTargetFieldKey(connection).toLowerCase();
+        if(!['left','right'].includes(slot)) slot = inputs.left ? 'right' : 'left';
+        if(inputs[slot]) return;
+        const image = outputImagesForConnection(connection)
+            .find(item => mediaKindForItem(item) === 'image' && item?.url);
+        if(image) inputs[slot] = imageForDisplay(image);
+    });
+    return inputs;
+}
+function imageCompareLayerHtml(image, side, label){
+    if(image){
+        const original = smartOriginalMediaUrl(image);
+        const src = displayMediaUrl({...image, url:original}, image.name || label);
+        return `<div class="image-compare-layer image-compare-${side}">
+            <img src="${escapeAttr(src)}" data-image-compare-original="1" data-original-src="${escapeAttr(original)}" draggable="false" decoding="async" alt="${escapeAttr(label)}">
+            <span class="image-compare-label">${escapeHtml(label)}</span>
+        </div>`;
+    }
+    return `<div class="image-compare-layer image-compare-${side} is-empty">
+        <div class="image-compare-empty"><i data-lucide="image-plus"></i><span>${escapeHtml(label)}</span></div>
+        <span class="image-compare-label">${escapeHtml(label)}</span>
+    </div>`;
+}
+function imageCompareBodyHtml(node){
+    const inputs = imageCompareInputs(node);
+    const position = Math.max(0, Math.min(100, Number(node?.comparePosition ?? 50)));
+    const leftLabel = tr('smart.compareLeft') || '左侧';
+    const rightLabel = tr('smart.compareRight') || '右侧';
+    const leftName = inputs.left?.name || leftLabel;
+    const rightName = inputs.right?.name || rightLabel;
+    return `<div class="image-compare-body">
+        <div class="image-compare-heading">
+            <span class="image-compare-kicker"><i data-lucide="columns-2"></i>${escapeHtml(tr('smart.createImageCompare') || '图像对比')}</span>
+            <span>${escapeHtml(tr('smart.compareDragDivider'))}</span>
+        </div>
+        <div class="image-compare-stage" data-image-compare-stage="1" style="--image-compare-position:${position}%">
+            ${imageCompareLayerHtml(inputs.right, 'right', rightLabel)}
+            ${imageCompareLayerHtml(inputs.left, 'left', leftLabel)}
+            <button type="button" class="image-compare-handle" data-image-compare-handle="1" role="slider" aria-label="${escapeAttr(tr('smart.compareDragDivider'))}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${position}">
+                <span class="image-compare-line"></span>
+            </button>
+        </div>
+        <div class="image-compare-slots">
+            <span title="${escapeAttr(leftName)}"><b>${escapeHtml(leftLabel)}</b><em>${escapeHtml(leftName)}</em></span>
+            <span title="${escapeAttr(rightName)}"><b>${escapeHtml(rightLabel)}</b><em>${escapeHtml(rightName)}</em></span>
+        </div>
+    </div>`;
+}
+function bindImageCompare(nodeEl, node){
+    if(!nodeEl || !node) return;
+    const stage = nodeEl.querySelector('[data-image-compare-stage]');
+    const handle = nodeEl.querySelector('[data-image-compare-handle]');
+    if(!stage || !handle) return;
+    const update = value => {
+        const position = Math.max(0, Math.min(100, Number(value)));
+        if(!Number.isFinite(position)) return;
+        node.comparePosition = Math.round(position * 10) / 10;
+        stage.style.setProperty('--image-compare-position', `${node.comparePosition}%`);
+        handle.setAttribute('aria-valuenow', String(node.comparePosition));
+    };
+    const updateFromPointer = event => {
+        const rect = stage.getBoundingClientRect();
+        if(rect.width > 0) update(((event.clientX - rect.left) / rect.width) * 100);
+    };
+    stage.addEventListener('mousedown', event => {
+        if(event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+    });
+    stage.addEventListener('pointerdown', event => {
+        if(event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        stage.setPointerCapture?.(event.pointerId);
+        stage.__imageCompareDragging = true;
+        updateFromPointer(event);
+    });
+    stage.addEventListener('pointermove', event => {
+        if(!stage.__imageCompareDragging) return;
+        event.preventDefault();
+        event.stopPropagation();
+        updateFromPointer(event);
+    });
+    const stop = event => {
+        if(!stage.__imageCompareDragging) return;
+        stage.__imageCompareDragging = false;
+        stage.releasePointerCapture?.(event.pointerId);
+        scheduleSave();
+    };
+    stage.addEventListener('pointerup', stop);
+    stage.addEventListener('pointercancel', stop);
+    handle.addEventListener('keydown', event => {
+        if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if(event.key === 'Home') update(0);
+        else if(event.key === 'End') update(100);
+        else update(Number(node.comparePosition ?? 50) + (event.key === 'ArrowLeft' ? -1 : 1) * (event.shiftKey ? 5 : 1));
+        scheduleSave();
+    });
+}
 function angleControlInputImage(node){
     if(!node) return null;
     const incoming = (canvas?.connections || [])
@@ -2460,6 +2618,16 @@ function imageLayout(images, scale=1, node=null){
     if(node?.type === 'smart-minimax') return {cols:1, rows:1, ...smartMinimaxLayoutSize(node), thumb:96, single:true};
     if(node?.type === SMART_NODE_TYPES.angleControl){
         return {cols:1, rows:1, width:540, height:284, thumb:96, single:true};
+    }
+    if(node?.type === SMART_NODE_TYPES.imageCompare){
+        return {
+            cols:1,
+            rows:1,
+            width:Math.max(360, Math.round(Number(node.w) || 560)),
+            height:Math.max(260, Math.round(Number(node.h) || 380)),
+            thumb:96,
+            single:true
+        };
     }
     if(node?.type === 'smart-loop'){
         const explicitW = Number(node.w);
@@ -5157,9 +5325,25 @@ function advanceRunningHubConnectionQueue(){
     queue.index += 1;
     advanceRunningHubConnectionQueue();
 }
+function connectImageCompareInput(fromId, toId, options={}){
+    const from = nodes.find(node => node.id === fromId);
+    const to = nodes.find(node => node.id === toId);
+    if(!from || !to || to.type !== SMART_NODE_TYPES.imageCompare) return false;
+    let refs = runningHubSourceRefs(from, options);
+    if(!refs.length) refs = imagesForNode(from);
+    if(!refs.some(item => mediaKindForItem(item) === 'image' && item?.url)) return false;
+    const preferred = String(options?.targetFieldKey || '').trim().toLowerCase();
+    const slot = SMART_NODE_CONTRACT.imageCompareTargetSlot(canvas?.connections || [], toId, preferred);
+    if(!slot){
+        toast(tr('smart.compareInputFull'));
+        return false;
+    }
+    return connectInputNode(fromId, toId, {...options, targetFieldKey:slot, imageCompareResolved:true});
+}
 function connectInputNodeWithTargetField(fromId, toId, options={}, event=null){
     const from = nodes.find(node => node.id === fromId);
     const to = nodes.find(node => node.id === toId);
+    if(to?.type === SMART_NODE_TYPES.imageCompare) return connectImageCompareInput(fromId, toId, options);
     if(!from || !to || to.type !== SMART_NODE_TYPES.aiApp) return connectInputNode(fromId, toId, options);
     const fields = rhActiveFields(smartSettingsForNode(to));
     const sourceRefs = runningHubSourceRefs(from, options);
@@ -10315,6 +10499,13 @@ function resultMediaUrls(result){
         return url && !seen.has(url) && seen.add(url);
     });
 }
+function resultMediaKind(result, fallback='image'){
+    if(result?.videos?.length) return 'video';
+    if(result?.texts?.length) return 'text';
+    if(result?.files?.length) return 'file';
+    if(result?.audios?.length) return 'audio';
+    return mediaKindForUrls(resultMediaUrls(result), fallback);
+}
 function mediaKindForUrls(urls, fallback='image'){
     const items = (urls || []).map(item => typeof item === 'string' ? {url:item} : (item || {}));
     if(fallback && fallback !== 'image') return fallback;
@@ -11242,6 +11433,23 @@ function formatPriceRecord(record, nodeType){
     if(fallback) return priceUiText(fallback[0], fallback[1]);
     return priceUiText(`待同步 · ${priceUnitLabel(record?.unit || priceUnitForNodeType(nodeType))}`, `Pending · ${priceUnitLabel(record?.unit || priceUnitForNodeType(nodeType))}`);
 }
+function renderImageReferencePriceTable(query=''){
+    const config = modelPricingCatalog.image_reference_prices || {};
+    const normalizedQuery = String(query || '').trim().toLowerCase();
+    const rows = (Array.isArray(config.rows) ? config.rows : []).filter(row => {
+        if(!normalizedQuery) return true;
+        return `${row.name_zh || ''} ${row.name_en || ''} ${row.id || ''}`.toLowerCase().includes(normalizedQuery);
+    });
+    if(!rows.length) return `<div class="price-comparison-empty">${escapeHtml(priceUiText('没有匹配的图片参考价格','No image reference prices match the filter'))}</div>`;
+    const cell = (record, label) => {
+        const detail = priceUiText(record?.details_zh || config.note_zh || '', record?.details_en || config.note_en || '');
+        const status = record?.status || 'estimate';
+        return `<td data-provider-label="${escapeAttr(label)}"><div class="price-cell" title="${escapeAttr(detail)}"><span class="price-value ${escapeAttr(status)}">${escapeHtml(priceUiText(record?.label_zh || '待同步', record?.label_en || 'Pending'))}</span></div></td>`;
+    };
+    const header = `<thead><tr><th>${escapeHtml(priceUiText('模型','Model'))}</th><th>${escapeHtml(priceUiText('文生图','Text-to-image'))}</th><th>${escapeHtml(priceUiText('图生图','Image-to-image'))}</th></tr></thead>`;
+    const body = rows.map(row => `<tr data-price-row-key="${escapeAttr(`image-reference:${row.id}`)}"><td><div class="price-model-cell"><span class="price-model-name">${escapeHtml(priceUiText(row.name_zh, row.name_en))}</span><span class="price-model-meta">${escapeHtml(priceUiText(config.source_label_zh || '参考价格', config.source_label_en || 'Reference price'))}</span></div></td>${cell(row.text_to_image, priceUiText('文生图','Text-to-image'))}${cell(row.image_to_image, priceUiText('图生图','Image-to-image'))}</tr>`).join('');
+    return `<div class="price-reference-caption">${escapeHtml(priceUiText(config.note_zh || '', config.note_en || ''))}</div><table class="price-comparison-table price-reference-table">${header}<tbody>${body}</tbody></table>`;
+}
 function renderPriceComparisonTable(){
     if(!smartPriceComparisonBody) return;
     const query = String(smartPriceComparisonSearch?.value || '').trim().toLowerCase();
@@ -11252,6 +11460,18 @@ function renderPriceComparisonTable(){
         if(!query) return true;
         return `${row.label} ${row.nodeType} ${row.variants.map(item => `${priceProviderName(providers.find(p => p.id === item.providerId))} ${item.modelId}`).join(' ')}`.toLowerCase().includes(query);
     });
+    if(kind === 'image_generation' && modelPricingCatalog.image_reference_prices?.rows?.length){
+        if(smartPriceComparisonNote){
+            smartPriceComparisonNote.classList.remove('pending');
+            smartPriceComparisonNote.textContent = priceUiText(
+                modelPricingCatalog.image_reference_prices.note_zh || '图片价格为参考估算，请以平台实际价格为准。',
+                modelPricingCatalog.image_reference_prices.note_en || 'Image prices are estimates; check the provider for actual billing.'
+            );
+        }
+        if(smartPriceComparisonSub) smartPriceComparisonSub.textContent = priceUiText(`${modelPricingCatalog.image_reference_prices.rows.length} 个图片模型参考价`, `${modelPricingCatalog.image_reference_prices.rows.length} image model reference prices`);
+        smartPriceComparisonBody.innerHTML = renderImageReferencePriceTable(query);
+        return;
+    }
     const priceRecords = rows.flatMap(row => row.variants.map(item => item.record));
     const statusCount = status => priceRecords.filter(record => record.status === status).length;
     const fixedCount = statusCount('confirmed') + statusCount('free') + statusCount('tiered');
@@ -11295,7 +11515,7 @@ function openSmartPriceComparison(target={}){
         smartPriceHighlightModelId = String(target.modelId);
         smartPriceHighlightProviderId = String(target.providerId);
         if(smartPriceComparisonSearch) smartPriceComparisonSearch.value = '';
-        if(smartPriceComparisonKind) smartPriceComparisonKind.value = 'all';
+        if(smartPriceComparisonKind) smartPriceComparisonKind.value = SMART_PRICE_NODE_TYPES.some(type => type.key === target.nodeType) ? target.nodeType : 'all';
     }
     renderPriceComparisonTable();
     smartPriceComparisonPanel?.classList.add('open');
@@ -12176,6 +12396,7 @@ function smartMinimaxBodyHtml(node){
 function nodeBodyHtml(node, layout){
     if(node.type === 'smart-minimax') return smartMinimaxBodyHtml(node);
     if(node.type === SMART_NODE_TYPES.angleControl) return angleControlBodyHtml(node);
+    if(node.type === SMART_NODE_TYPES.imageCompare) return imageCompareBodyHtml(node);
     if(node.type === 'smart-group') return smartGroupBodyHtml(node);
     if(isSmartResultGroupNode(node)){
         const refs = resultGroupMediaItems(node);
@@ -13454,13 +13675,14 @@ function render(){
         .sort((a, b) => (isSmartGroupNode(a) ? 0 : 1) - (isSmartGroupNode(b) ? 0 : 1))
         .map(node => {
         const imgs = node.images || [];
-        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : isSmartResultGroupNode(node) ? (node.title || '结果组') : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : node.type === 'smart-minimax' ? 'MiniMax H3' : node.type === SMART_NODE_TYPES.angleControl ? (tr('smart.createAngleControl') || '角度控制') : isSmartExecutionNode(node) ? SMART_NODE_CONTRACT.titleForType(node.type) : (imgs.length > 1 ? '素材组' : imgs[0]?.name || escapeHtml(tr('smart.createMaterial') || '素材'));
+        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : isSmartResultGroupNode(node) ? (node.title || '结果组') : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : node.type === 'smart-minimax' ? 'MiniMax H3' : node.type === SMART_NODE_TYPES.angleControl ? (tr('smart.createAngleControl') || '角度控制') : node.type === SMART_NODE_TYPES.imageCompare ? (tr('smart.createImageCompare') || '图像对比') : isSmartExecutionNode(node) ? SMART_NODE_CONTRACT.titleForType(node.type) : (imgs.length > 1 ? '素材组' : imgs[0]?.name || escapeHtml(tr('smart.createMaterial') || '素材'));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
         const isLoop = node.type === 'smart-loop';
         const isMinimax = node.type === 'smart-minimax';
         const isAngleControl = node.type === SMART_NODE_TYPES.angleControl;
+        const isImageCompare = node.type === SMART_NODE_TYPES.imageCompare;
         const isSmartGroup = node.type === 'smart-group';
         const isResultGroup = isSmartResultGroupNode(node);
         const isExecution = isSmartExecutionNode(node);
@@ -13479,7 +13701,7 @@ function render(){
         const deleteBtn = (isGroup || isMinimax) ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
         const hint = isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isMinimax ? 'Timeline editing' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
         const hasResultVersions = smartGenerationVersions(node).length > 1;
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup || isResultGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${isAngleControl ? 'angle-control-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartGroup && openSmartGroupArrangeMenuId === node.id ? 'arrange-menu-open' : ''} ${isResultGroup ? 'smart-result-group-node' : ''} ${isExecution ? 'smart-execution-node' : ''} ${failedRunPlaceholder ? 'node-run-failed' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${hasResultVersions ? 'has-result-versions' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup || isResultGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${isAngleControl ? 'angle-control-node' : ''} ${isImageCompare ? 'image-compare-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartGroup && openSmartGroupArrangeMenuId === node.id ? 'arrange-menu-open' : ''} ${isResultGroup ? 'smart-result-group-node' : ''} ${isExecution ? 'smart-execution-node' : ''} ${failedRunPlaceholder ? 'node-run-failed' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${hasResultVersions ? 'has-result-versions' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
 
             ${executionFailureBadge}
             <div class="node-head"><div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div></div>
@@ -13490,10 +13712,10 @@ function render(){
             <div class="node-body">${body}</div>
             ${generationRerunOverlayHtml(node)}
             ${isCompactMember && (isPrompt || isLoop) ? '<div class="smart-group-member-grab" title="拖动移出分组"></div>' : ''}
-            <div class="node-hint">${isResultGroup ? escapeHtml(tr('smart.resultGroupHint')) : isAngleControl ? escapeHtml(tr('smart.angleHint')) : hint}</div>
-            ${isSmartGroup ? '<div class="node-resize-handle" data-resize="1" data-resize-corner="nw"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="ne"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="sw"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="se"></div>' : canResize && (imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isMinimax) ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
+            <div class="node-hint">${isResultGroup ? escapeHtml(tr('smart.resultGroupHint')) : isAngleControl ? escapeHtml(tr('smart.angleHint')) : isImageCompare ? escapeHtml(tr('smart.compareConnectImages')) : hint}</div>
+            ${isSmartGroup ? '<div class="node-resize-handle" data-resize="1" data-resize-corner="nw"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="ne"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="sw"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="se"></div>' : canResize && (imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isMinimax || isImageCompare) ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
             <div class="node-port port-in" data-port="in" title="input"></div>
-            <div class="node-port port-out" data-port="out" title="${isResultGroup ? escapeAttr(tr('smart.resultGroupConnectAll')) : 'output'}"></div>
+            ${isImageCompare ? '' : `<div class="node-port port-out" data-port="out" title="${isResultGroup ? escapeAttr(tr('smart.resultGroupConnectAll')) : 'output'}"></div>`}
         </div>`;
         return {node, html};
     });
@@ -14854,6 +15076,7 @@ function bindNodeEvents(){
         if(nodeForControls?.type === 'smart-loop') bindLoopNodeControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-minimax') bindMinimaxNodeControls(el, nodeForControls);
         if(nodeForControls?.type === SMART_NODE_TYPES.angleControl) bindAngleControl(el, nodeForControls);
+        if(nodeForControls?.type === SMART_NODE_TYPES.imageCompare) bindImageCompare(el, nodeForControls);
         if(nodeForControls?.type === 'smart-group') el.ondblclick = e => { e.preventDefault(); e.stopPropagation(); };
         el.onclick = e => {
             if(e.target.closest?.('.media-text-inline-editor')) return;
@@ -18370,7 +18593,7 @@ function closeImageEditor(){
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
     cropAspectPreset = 'free'; cropAspectRatio = null; syncCropRatioButtons();
     disposePanoramaPreview();
-    previewPanDrag = null; previewCompareDrag = false; imageEditPanDrag = null; resetPreviewTransform();
+    previewPanDrag = null; previewCompareDrag = false; previewCompareGrabOffset = 0; imageEditPanDrag = null; resetPreviewTransform();
     document.getElementById('imageEditStage')?.classList.remove('overflow-x', 'overflow-y', 'preview-mode');
     const cropCanvasEl = document.getElementById('cropCanvas');
     cropCanvasEl?.classList.remove('grid-custom-h', 'grid-custom-v', 'outpaint-mode', 'outpaint-warning', 'dragging-image', 'text-mode', 'resize-mode');
@@ -19921,6 +20144,7 @@ function connectInputNode(fromId, toId, options={}){
     const from = nodes.find(n => n.id === fromId);
     const to = nodes.find(n => n.id === toId);
     if(!from || !to || from.id === to.id) return false;
+    if(to.type === SMART_NODE_TYPES.imageCompare && !options?.imageCompareResolved) return connectImageCompareInput(fromId, toId, options);
     if(!SMART_NODE_CONTRACT.canConnectNodes(from, to)) return false;
     if(to.type === 'smart-loop'){
         const groupImages = isSmartGroupNode(from) || isSmartResultGroupNode(from) ? imagesForNode(from).filter(img => img?.url) : [];
@@ -21162,7 +21386,7 @@ function finalizePendingNode(pendingNode, urls, meta, kind='image'){
     throwIfCanvasRunCancelled(pendingNode);
     pendingNode = liveSmartNode(pendingNode);
     throwIfCanvasRunCancelled(pendingNode);
-    const ext = kind === 'video' ? 'mp4' : kind === 'audio' ? 'mp3' : kind === 'text' ? 'txt' : 'png';
+    const ext = kind === 'video' ? 'mp4' : kind === 'audio' ? 'mp3' : kind === 'text' ? 'txt' : kind === 'file' ? 'zip' : 'png';
     const imgs = cleanHistoryImages(urls.map((item, i) => {
         const url = typeof item === 'string' ? item : item?.url || '';
         const itemKind = (typeof item === 'object' && item.kind) || kind;
@@ -21173,7 +21397,7 @@ function finalizePendingNode(pendingNode, urls, meta, kind='image'){
     markSmartNodeComplete(pendingNode, meta);
     bindExecutionResultMetadata(pendingNode);
     pendingNode.outputKind = kind;
-    if(imgs.length > 1) pendingNode.title = kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : 'Group';
+    if(imgs.length > 1) pendingNode.title = kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : kind === 'file' ? 'Files' : 'Group';
     else pendingNode.title = kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : kind === 'text' ? 'Text' : kind === 'file' ? 'File' : 'Image';
     pendingNode.scale = mediaNodeDefaultScale(pendingNode);
     delete pendingNode.w;
@@ -21552,7 +21776,7 @@ function pushRightSideNodes(sourceNode, delta){
     });
 }
 function cascadeOutputTitle(kind='image', count=1){
-    if(Number(count) > 1) return kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : 'Group';
+    if(Number(count) > 1) return kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : kind === 'file' ? 'Files' : 'Group';
     return kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : kind === 'text' ? 'Text' : kind === 'file' ? 'File' : 'Image';
 }
 function nonPreviewOutputImages(images=[]){
@@ -21678,7 +21902,7 @@ function appendOutputsToNode(node, additions, kind='image', options={}){
     node.images = [...existing, ...next];
     markSmartNodeComplete(node);
     node.outputKind = kind;
-    node.title = node.images.length > 1 ? (kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : 'Group') : (kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : kind === 'text' ? 'Text' : kind === 'file' ? 'File' : 'Image');
+    node.title = node.images.length > 1 ? (kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : kind === 'file' ? 'Files' : 'Group') : (kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : kind === 'text' ? 'Text' : kind === 'file' ? 'File' : 'Image');
     delete node.w;
     delete node.h;
     const afterRight = (Number(node.x) || 0) + nodeRect(node).width;
@@ -21814,10 +22038,12 @@ async function generateUrlsForCurrentSettings(node, prompt, refs, runSettings=se
         return {urls:await runApiVideoGeneration(prompt, refs, activeSettings, node), kind:'video'};
     }
     if(isApiLikeEngine(activeSettings.engine) && activeSettings.apiKind === 'audio'){
-        return {urls:await runApiAudioGeneration(prompt, refs, activeSettings, node), kind:'audio'};
+        const result = await runApiAudioGeneration(prompt, refs, activeSettings, node);
+        return {urls:result.urls, kind:result.kind};
     }
     if(isApiLikeEngine(activeSettings.engine) && activeSettings.apiKind === 'music'){
-        return {urls:await runApiMusicGeneration(prompt, refs, activeSettings, node), kind:'audio'};
+        const result = await runApiMusicGeneration(prompt, refs, activeSettings, node);
+        return {urls:result.urls, kind:result.kind};
     }
     if(isApiLikeEngine(activeSettings.engine)){
         const taskResult = await runApiGeneration(prompt, refs, activeSettings, node);
@@ -22552,9 +22778,10 @@ async function runGeneration(){
             return;
         }
         if(isApiLikeEngine(settings.engine) && settings.apiKind === 'audio'){
-            const outAudios = await runApiAudioGeneration(prompt, refs, settings, pendingNode, clientOperationId);
+            const mediaResult = await runApiAudioGeneration(prompt, refs, settings, pendingNode, clientOperationId);
+            const outAudios = mediaResult.urls || [];
             if(!outAudios.length) throw new Error(tr('smart.errNoOutAudios'));
-            finalizePendingNode(pendingNode, outAudios, pendingMeta, 'audio');
+            finalizePendingNode(pendingNode, outAudios, pendingMeta, mediaResult.kind || 'audio');
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             addSmartGenerationLog({run:runLog, outputs:outAudios, runMs:nowMs() - runLogStart});
             clearPromptInput({preserveDraft:true});
@@ -22563,9 +22790,10 @@ async function runGeneration(){
             return;
         }
         if(isApiLikeEngine(settings.engine) && settings.apiKind === 'music'){
-            const outMusic = await runApiMusicGeneration(prompt, refs, settings, pendingNode, clientOperationId);
+            const mediaResult = await runApiMusicGeneration(prompt, refs, settings, pendingNode, clientOperationId);
+            const outMusic = mediaResult.urls || [];
             if(!outMusic.length) throw new Error(tr('smart.errNoOutAudios'));
-            finalizePendingNode(pendingNode, outMusic, pendingMeta, 'audio');
+            finalizePendingNode(pendingNode, outMusic, pendingMeta, mediaResult.kind || 'audio');
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             addSmartGenerationLog({run:runLog, outputs:outMusic, runMs:nowMs() - runLogStart});
             clearPromptInput({preserveDraft:true});
@@ -23365,10 +23593,11 @@ async function runApiAudioMediaGeneration(prompt, refs, runSettings=settings, ru
         return response.json();
     });
     const urls = resultMediaUrls(result);
+    const outputKind = resultMediaKind(result, 'audio');
     await submitCanvasRun(activeRunNode, result?.task_id || '');
     await processCanvasRun(activeRunNode);
     await finishCanvasRun(activeRunNode, urls);
-    return urls;
+    return {urls, kind:outputKind};
 }
 async function runApiAudioGeneration(prompt, refs, runSettings=settings, runNode=null, clientOperationId=''){
     return runApiAudioMediaGeneration(prompt, refs, runSettings, runNode, clientOperationId, 'audio');
@@ -24523,6 +24752,7 @@ function createNodeFromMenu(type){
     let created = null;
     if(type === 'prompt') created = createExecutionNode(p.x - 158, p.y - 97, SMART_NODE_TYPES.textGenerator, createOptions);
     else if(type === 'angle-control') created = createAngleControlNode(p, createOptions);
+    else if(type === 'image-compare') created = createImageCompareNode(p, createOptions);
     else if(type === 'loop') created = createLoopNode(p.x - 135, p.y - 95, createOptions);
     else if(type === 'minimax') created = createMinimaxNode(p.x - 520, p.y - 320, createOptions);
     else if(type === 'image-generator') created = createExecutionNode(p.x - 158, p.y - 97, SMART_NODE_TYPES.imageGenerator, createOptions);
@@ -24573,6 +24803,94 @@ function createNodeFromMenu(type){
     }
     return created;
 }
+function setSpaceCanvasPanReady(ready){
+    isSpacePanKeyDown = Boolean(ready);
+    shell.classList.toggle('space-pan-ready', isSpacePanKeyDown && !panState?.spacePan);
+}
+function isSpaceCanvasPanTarget(target){
+    const element = target?.nodeType === 1 ? target : target?.parentElement;
+    return Boolean(element && document.body.contains(element));
+}
+function beginSpaceCanvasPan(event){
+    if(!isSpacePanKeyDown || event.button !== 0 || !isSpaceCanvasPanTarget(event.target)) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+    if(panState?.spacePan) return true;
+    didPan = false;
+    panState = {
+        button:0,
+        startX:event.clientX,
+        startY:event.clientY,
+        ox:viewport.x,
+        oy:viewport.y,
+        spacePan:true
+    };
+    spacePanClickGuard = true;
+    spacePanGestureToken += 1;
+    shell.classList.remove('space-pan-ready');
+    shell.classList.add('panning', 'space-panning');
+    return true;
+}
+function moveSpaceCanvasPan(event){
+    if(!panState?.spacePan) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+    const dx = event.clientX - panState.startX;
+    const dy = event.clientY - panState.startY;
+    if(Math.abs(dx) + Math.abs(dy) > 3) didPan = true;
+    viewport.x = panState.ox + dx;
+    viewport.y = panState.oy + dy;
+    applyViewport();
+    return true;
+}
+function scheduleSpacePanClickGuardRelease(){
+    const gestureToken = spacePanGestureToken;
+    setTimeout(() => {
+        if(spacePanGestureToken === gestureToken) spacePanClickGuard = false;
+    }, SPACE_PAN_CLICK_GUARD_MS);
+}
+function finishSpaceCanvasPan(event){
+    if(!panState?.spacePan){
+        if(!spacePanClickGuard || event.type !== 'mouseup') return false;
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        scheduleSpacePanClickGuardRelease();
+        return true;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+    panState = null;
+    shell.classList.remove('panning', 'space-panning');
+    if(event.type === 'pointercancel'){
+        spacePanClickGuard = false;
+    } else {
+        if(isSpacePanKeyDown) shell.classList.add('space-pan-ready');
+        scheduleSpacePanClickGuardRelease();
+    }
+    scheduleSave();
+    setTimeout(() => { didPan = false; }, 0);
+    return true;
+}
+function suppressSpaceCanvasPanClick(event){
+    if(!spacePanClickGuard || !isSpaceCanvasPanTarget(event.target)) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+    spacePanClickGuard = false;
+    return true;
+}
+window.addEventListener('pointerdown', beginSpaceCanvasPan, true);
+window.addEventListener('mousedown', beginSpaceCanvasPan, true);
+window.addEventListener('pointermove', moveSpaceCanvasPan, true);
+window.addEventListener('mousemove', moveSpaceCanvasPan, true);
+window.addEventListener('pointerup', finishSpaceCanvasPan, true);
+window.addEventListener('pointercancel', finishSpaceCanvasPan, true);
+window.addEventListener('mouseup', finishSpaceCanvasPan, true);
+window.addEventListener('click', suppressSpaceCanvasPanClick, true);
 shell.addEventListener('mousedown', e => {
     if(!zoomPreviewState) return;
     if(e.button !== 0) return;
@@ -24783,7 +25101,7 @@ window.onmousemove = e => {
     }
     if(previewCompareDrag){
         e.preventDefault();
-        setPreviewComparePos(e.clientX);
+        setPreviewComparePos(e.clientX - previewCompareGrabOffset);
         return;
     }
     if(panoramaState.drag){
@@ -24836,8 +25154,8 @@ window.onmousemove = e => {
         if(!node) return;
         const dx = (e.clientX - resizeState.startX) / viewport.scale;
         const dy = (e.clientY - resizeState.startY) / viewport.scale;
-        const minW = node.type === 'smart-prompt' ? 260 : node.type === 'smart-loop' ? 252 : node.type === 'smart-group' ? SMART_GROUP_MIN_WIDTH : 48;
-        const minH = node.type === 'smart-prompt' ? 170 : node.type === 'smart-loop' ? 132 : node.type === 'smart-group' ? SMART_GROUP_MIN_HEIGHT : 48;
+        const minW = node.type === 'smart-prompt' ? 260 : node.type === 'smart-loop' ? 252 : node.type === 'smart-group' ? SMART_GROUP_MIN_WIDTH : node.type === SMART_NODE_TYPES.imageCompare ? 360 : 48;
+        const minH = node.type === 'smart-prompt' ? 170 : node.type === 'smart-loop' ? 132 : node.type === 'smart-group' ? SMART_GROUP_MIN_HEIGHT : node.type === SMART_NODE_TYPES.imageCompare ? 260 : 48;
         if(node.type === 'smart-group'){
             const corner = resizeState.corner || 'se';
             const left = corner.includes('w');
@@ -24985,6 +25303,7 @@ window.onmouseup = e => {
     if(promptResizeState){ promptResizeState = null; scheduleSave(); }
     if(selectionState) finishSelection(e);
     if(previewCompareDrag) previewCompareDrag = false;
+    previewCompareGrabOffset = 0;
     if(panoramaState.drag){
         panoramaState.drag = null;
         document.getElementById('previewStage')?.classList.remove('panning');
@@ -25032,8 +25351,10 @@ window.onmouseup = e => {
         thumbDragState = null;
     }
     if(panState) {
+        const wasSpacePan = Boolean(panState.spacePan);
         panState = null;
-        shell.classList.remove('panning');
+        shell.classList.remove('panning', 'space-panning');
+        if(wasSpacePan && isSpacePanKeyDown) shell.classList.add('space-pan-ready');
         scheduleSave();
         setTimeout(() => { didPan = false; }, 0);
     }
@@ -25227,17 +25548,10 @@ window.addEventListener('paste', e => {
 });
 window.addEventListener('keydown', e => {
     const key = String(e.key || '').toLowerCase();
-    if((e.code === 'Space' || e.key === ' ') && !e.ctrlKey && !e.metaKey && !e.altKey && !isEditableTarget(e.target)){
-        const active = selectedNode();
-        if(active?.type === 'smart-minimax'){
-            const nodeEl = [...(world?.querySelectorAll?.('.image-node') || [])].find(item => item.dataset.id === active.id);
-            const playBtn = nodeEl?.querySelector?.('[data-minimax-play-timeline]');
-            if(playBtn){
-                e.preventDefault();
-                playBtn.click();
-                return;
-            }
-        }
+    if((e.code === 'Space' || e.key === ' ') && !e.ctrlKey && !e.metaKey && !e.altKey && !canvasTextEditableForTarget(e.target)){
+        e.preventDefault();
+        setSpaceCanvasPanReady(true);
+        return;
     }
     if(key === 'r' && !isEditableTarget(e.target)) isRKeyDown = true;
     if(imageEditModal.classList.contains('open') && imageEditMode === 'preview' && !isEditableTarget(e.target)){
@@ -25312,10 +25626,20 @@ window.addEventListener('keydown', e => {
     }
 });
 window.addEventListener('keyup', e => {
+    if(e.code === 'Space' || e.key === ' '){
+        setSpaceCanvasPanReady(false);
+        return;
+    }
     if(String(e.key || '').toLowerCase() === 'r') isRKeyDown = false;
 });
 window.addEventListener('blur', () => {
     isRKeyDown = false;
+    setSpaceCanvasPanReady(false);
+    if(panState?.spacePan){
+        panState = null;
+        spacePanClickGuard = false;
+        shell.classList.remove('panning', 'space-panning');
+    }
     const state = captureCanvasEditableState(document.activeElement);
     if(state || canvasEditableWasActive){
         canvasFocusWasSuspended = true;
@@ -26051,7 +26375,8 @@ document.getElementById('previewCompareHandle').addEventListener('mousedown', ev
     event.stopPropagation();
     previewPanDrag = null;
     previewCompareDrag = true;
-    setPreviewComparePos(event.clientX);
+    const rect = event.currentTarget.getBoundingClientRect();
+    previewCompareGrabOffset = event.clientX - (rect.left + rect.width / 2);
 });
 document.getElementById('previewCompareHandle').addEventListener('pointerdown', event => {
     if(imageEditMode !== 'preview' || !previewCompareOn || previewCompareIndex < 0) return;
@@ -26060,13 +26385,14 @@ document.getElementById('previewCompareHandle').addEventListener('pointerdown', 
     event.currentTarget.setPointerCapture?.(event.pointerId);
     previewPanDrag = null;
     previewCompareDrag = true;
-    setPreviewComparePos(event.clientX);
+    const rect = event.currentTarget.getBoundingClientRect();
+    previewCompareGrabOffset = event.clientX - (rect.left + rect.width / 2);
 });
 document.getElementById('previewCompareHandle').addEventListener('pointermove', event => {
     if(!previewCompareDrag) return;
     event.preventDefault();
     event.stopPropagation();
-    setPreviewComparePos(event.clientX);
+    setPreviewComparePos(event.clientX - previewCompareGrabOffset);
 });
 document.getElementById('previewCompareHandle').addEventListener('pointerup', event => {
     if(previewCompareDrag){
@@ -26074,10 +26400,12 @@ document.getElementById('previewCompareHandle').addEventListener('pointerup', ev
         event.stopPropagation();
     }
     previewCompareDrag = false;
+    previewCompareGrabOffset = 0;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
 });
 document.getElementById('previewCompareHandle').addEventListener('pointercancel', event => {
     previewCompareDrag = false;
+    previewCompareGrabOffset = 0;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
 });
 document.getElementById('editDrawCanvas').addEventListener('pointerdown', beginEditDraw);

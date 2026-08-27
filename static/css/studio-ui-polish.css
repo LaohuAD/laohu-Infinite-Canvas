@@ -36,7 +36,7 @@ textarea {
     transition:background-color .16s ease,border-color .16s ease,color .16s ease,box-shadow .16s ease,transform .16s ease;
 }
 
-button:active:not(:disabled),
+button:active:not(:disabled):not(.smart-video-play):not(.image-compare-handle):not(.preview-nav-btn):not(.node-port),
 a:active {
     transform:translateY(1px) scale(.985);
 }

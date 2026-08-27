@@ -531,9 +531,9 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("audio_models:api.empty_models_on_save ? []", script)
 
     def test_api_settings_script_cache_version_is_current(self):
-        html = (ROOT / "static/api-settings.html").read_text(encoding="utf-8")
+        html = main.versioned_static_html((ROOT / "static/api-settings.html").read_text(encoding="utf-8"))
         app_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-        asset_version = f"{app_version}.{int(os.path.getmtime(ROOT / 'static/js/api-settings.js'))}"
+        asset_version = f"{app_version}.{(ROOT / 'static/js/api-settings.js').stat().st_mtime_ns}"
 
         self.assertIn(f'/static/js/api-settings.js?v={asset_version}', html)
 
@@ -575,10 +575,111 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("hidden-audio-model", payload["audio_models"])
 
     def test_codex_cli_exposes_text_only(self):
+        with patch.object(main, "codex_models_cache_path", return_value=ROOT / "missing-models-cache.json", create=True):
+            payload = main.codex_models_payload()
+
         self.assertEqual(main.CODEX_DEFAULT_IMAGE_MODELS, [])
-        self.assertEqual(main.codex_models_payload()["image_models"], [])
-        self.assertEqual(main.codex_models_payload()["video_models"], [])
-        self.assertEqual(main.codex_models_payload()["chat_models"], main.CODEX_DEFAULT_CHAT_MODELS)
+        self.assertEqual(payload["image_models"], [])
+        self.assertEqual(payload["video_models"], [])
+        self.assertEqual(payload["chat_models"], main.CODEX_DEFAULT_CHAT_MODELS)
+        self.assertEqual(main.CODEX_DEFAULT_CHAT_MODELS[0], "auto")
+
+    def test_codex_models_payload_reads_current_visible_codex_model_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "models_cache.json"
+            cache_path.write_text(json.dumps({
+                "fetched_at": "2026-08-27T11:02:10Z",
+                "client_version": "0.148.0",
+                "models": [
+                    {"slug": "gpt-visible-a", "display_name": "GPT Visible A", "visibility": "list"},
+                    {"slug": "gpt-hidden", "display_name": "GPT Hidden", "visibility": "hide"},
+                    {"slug": "gpt-visible-b", "display_name": "GPT Visible B", "visibility": "list"},
+                ],
+            }), encoding="utf-8")
+
+            with patch.dict(main.os.environ, {"CODEX_HOME": temp_dir}, clear=False):
+                payload = main.codex_models_payload()
+
+        self.assertEqual(payload["chat_models"], ["auto", "gpt-visible-a", "gpt-visible-b"])
+        self.assertEqual(payload["model_count"], 3)
+        self.assertEqual(payload["source"], "codex_models_cache")
+        self.assertEqual(payload["fetched_at"], "2026-08-27T11:02:10Z")
+        self.assertEqual(payload["model_names"]["auto"], "Codex 当前配置")
+        self.assertEqual(payload["model_names"]["gpt-visible-b"], "GPT Visible B")
+        self.assertNotIn("gpt-hidden", payload["all"])
+
+    def test_model_picker_uses_codex_catalog_display_names(self):
+        script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
+
+        self.assertIn("const fetched = lastFetchedModelNames?.[raw];", script)
+        self.assertIn("return saved || fetched || raw;", script)
+
+    def test_applying_model_picker_persists_provider_models_immediately(self):
+        script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
+
+        self.assertIn("async function applyModelPicker(){", script)
+        apply_block = script.split("async function applyModelPicker(){", 1)[1].split("async function saveKeyOnly(){", 1)[0]
+        self.assertIn("const saved = await saveProviders();", apply_block)
+        self.assertNotIn("点保存生效", apply_block)
+
+    def test_model_picker_waits_for_persistence_before_closing(self):
+        script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
+        apply_block = script.split("async function applyModelPicker(){", 1)[1].split("async function saveKeyOnly(){", 1)[0]
+
+        self.assertLess(apply_block.index("const saved = await saveProviders();"), apply_block.index("closeModelPicker();"))
+        self.assertIn("if(saved){", apply_block)
+        self.assertIn("Object.assign(item, previousModels);", apply_block)
+
+    def test_connection_check_keeps_complete_fetched_model_metadata(self):
+        script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
+        connection_block = script.split("async function testConnection(){", 1)[1].split("let lastFetchedAll", 1)[0]
+
+        self.assertIn("setFetchedModelState(data);", connection_block)
+        self.assertNotIn("lastFetchedAll = data.all || [];", connection_block)
+
+    def test_runninghub_editor_checks_both_provider_persistence_results(self):
+        script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
+        save_block = script.split("async function saveRhWorkflowEditor(){", 1)[1].split("function renderRhWorkflowEditor(){", 1)[0]
+
+        self.assertGreaterEqual(save_block.count("if(!await saveProviders())"), 2)
+
+    def test_destructive_provider_actions_rollback_after_failed_save(self):
+        script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
+        delete_block = script.split("async function deleteProvider(){", 1)[1].split("async function saveRhKeyOnly", 1)[0]
+        clear_key_block = script.split("async function clearKeyOnly(){", 1)[1].split("const FIXED_PROTOCOL_PROVIDER_IDS", 1)[0]
+        clear_rh_block = script.split("async function clearRhKeyOnly(kind){", 1)[1].split("async function saveVolcengineAssetKeys", 1)[0]
+        clear_volc_block = script.split("async function clearVolcengineAssetKeys(){", 1)[1].split("function addModel", 1)[0]
+        remove_rh_block = script.split("async function removeRhEntry(kind, index){", 1)[1].split("function readFileAsDataUrl", 1)[0]
+        add_recommended_block = script.split("async function addRecommendedApi(index){", 1)[1].split("async function saveRecommendedApi", 1)[0]
+        save_recommended_block = script.split("async function saveRecommendedApi(index){", 1)[1].split("function sortedProviders", 1)[0]
+        add_cli_block = script.split("async function addCliProvider(kind){", 1)[1].split("async function deleteProvider", 1)[0]
+
+        self.assertIn("providers = previousProviders;", delete_block)
+        self.assertIn("item._clearKey = previousClearKey;", clear_key_block)
+        self.assertIn("item._clearRhApiKeys = previousApiClears;", clear_rh_block)
+        self.assertIn("item._clearRhWalletKeys = previousWalletClears;", clear_rh_block)
+        self.assertIn("item._clearVolcengineAccessKey = previousAccessClear;", clear_volc_block)
+        self.assertIn("item._clearVolcengineSecretKey = previousSecretClear;", clear_volc_block)
+        self.assertIn("item[listKey] = previousEntries;", remove_rh_block)
+        self.assertIn("if(!response.ok)", remove_rh_block)
+        workflow_deleted_block = remove_rh_block.split("if(workflowBodyDeleted){", 1)[1].split("item[listKey] = previousEntries;", 1)[0]
+        self.assertNotIn("previousEntries", workflow_deleted_block)
+        self.assertIn("请再次点击保存同步列表", workflow_deleted_block)
+        self.assertIn("providers = previousProviders;", add_recommended_block)
+        self.assertIn("providers = previousProviders;", save_recommended_block)
+        self.assertIn("providers = previousProviders;", add_cli_block)
+
+    def test_comfyui_saved_state_is_not_reversed_by_broadcast_failure(self):
+        script = (ROOT / "static/js/comfyui-settings.js").read_text(encoding="utf-8")
+
+        self.assertIn("function broadcastComfyUiChange(type){", script)
+        self.assertGreaterEqual(script.count("broadcastComfyUiChange('workflows-changed');"), 3)
+        self.assertIn("await selectWorkflow(result.name);", script)
+
+    def test_codex_auto_model_follows_current_codex_configuration(self):
+        self.assertEqual(main.codex_model_for_exec("auto"), "")
+        self.assertEqual(main.codex_model_for_exec(""), "")
+        self.assertEqual(main.codex_model_for_exec("gpt-5.5"), "gpt-5.5")
 
     async def test_codex_image_generation_is_rejected(self):
         with self.assertRaises(main.HTTPException) as context:
@@ -640,13 +741,51 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
         login_proc.communicate = AsyncMock(return_value=(b"Logged in using an API key - sk-***\n", b""))
         login_proc.returncode = 0
 
-        with patch.object(main, "codex_cli_executable", return_value="/tmp/codex"), patch.object(main.asyncio, "create_subprocess_exec", new=AsyncMock(side_effect=[version_proc, login_proc])):
+        create_process = AsyncMock(side_effect=[version_proc, login_proc])
+        with patch.object(main, "codex_cli_executable", return_value="/tmp/codex"), patch.object(main, "codex_cli_env", return_value={"CODEX_HOME": "/tmp/shared-codex"}), patch.object(main.asyncio, "create_subprocess_exec", new=create_process):
             status = await main.codex_status()
 
         self.assertTrue(status["installed"])
         self.assertTrue(status["logged_in"])
         self.assertEqual(status["state"], "ready")
         self.assertNotIn("sk-***", status["message"])
+        self.assertEqual(create_process.await_count, 2)
+        for call in create_process.await_args_list:
+            self.assertEqual(call.kwargs["env"]["CODEX_HOME"], "/tmp/shared-codex")
+
+    def test_codex_cli_env_follows_current_codex_auth_configuration(self):
+        with patch.dict(main.os.environ, {"CODEX_HOME": "/Users/test/.codex", "CODEX_CLI_HOME": "/tmp/obsolete-project-auth"}, clear=False):
+            env = main.codex_cli_env()
+
+        self.assertEqual(env["CODEX_HOME"], "/Users/test/.codex")
+        self.assertNotIn("CODEX_CLI_HOME", env)
+
+    async def test_run_codex_cli_uses_current_shared_auth_environment(self):
+        process = MagicMock()
+        process.communicate = AsyncMock(return_value=("当前凭据已跟随\n".encode("utf-8"), b""))
+        process.returncode = 0
+        create_process = AsyncMock(return_value=process)
+
+        with patch.object(main, "codex_cli_executable", return_value="/tmp/codex"), patch.object(main, "codex_cli_env", return_value={"CODEX_HOME": "/tmp/shared-codex"}), patch.object(main.asyncio, "create_subprocess_exec", new=create_process):
+            result = await main.run_codex_cli("测试", output_last_message=False)
+
+        self.assertEqual(result["text"], "当前凭据已跟随")
+        self.assertEqual(create_process.await_args.kwargs["env"]["CODEX_HOME"], "/tmp/shared-codex")
+
+    async def test_run_codex_cli_explicit_model_override_is_process_scoped(self):
+        process = MagicMock()
+        process.communicate = AsyncMock(return_value=(b"MODEL_OK\n", b""))
+        process.returncode = 0
+        create_process = AsyncMock(return_value=process)
+
+        with patch.object(main, "codex_cli_executable", return_value="/tmp/codex"), patch.object(main, "codex_cli_env", return_value={"CODEX_HOME": "/tmp/shared-codex"}), patch.object(main.asyncio, "create_subprocess_exec", new=create_process):
+            result = await main.run_codex_cli("测试", model="gpt-5.6-luna", output_last_message=False)
+
+        command = create_process.await_args.args
+        self.assertEqual(result["text"], "MODEL_OK")
+        self.assertIn("--model", command)
+        self.assertEqual(command[command.index("--model") + 1], "gpt-5.6-luna")
+        self.assertNotIn("login", command)
 
     def test_api_settings_does_not_register_codex_image_models(self):
         script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
@@ -667,6 +806,11 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
             script = path.read_text(encoding="utf-8")
             self.assertNotIn("gpt-image-2-skill", script, path.as_posix())
             self.assertIn("仅接入 OpenAI Codex CLI 的文本能力", script, path.as_posix())
+            self.assertNotIn("API/codex-home", script, path.as_posix())
+            self.assertNotIn("API\\codex-home", script, path.as_posix())
+
+        windows_launcher = (ROOT / "CLI/windows/openai/2-start_openai_codex_cli.bat").read_text(encoding="utf-8")
+        self.assertNotIn("CODEX_HOME", windows_launcher)
 
     def test_codex_missing_cli_message_is_cross_platform(self):
         source = (ROOT / "main.py").read_text(encoding="utf-8")
@@ -711,6 +855,20 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(jimeng["image_models"], ["5.0Pro"])
         self.assertEqual(jimeng["video_models"], [])
         self.assertEqual(codex["chat_models"], [])
+
+    def test_existing_codex_provider_does_not_restore_deleted_auto_choice(self):
+        providers = main.merge_default_api_providers([{
+            "id": "codex",
+            "name": "GPT CLI",
+            "protocol": "codex",
+            "image_models": [],
+            "chat_models": ["gpt-5.5"],
+            "video_models": [],
+            "audio_models": [],
+        }], inject_missing=False)
+
+        codex = next(item for item in providers if item["id"] == "codex")
+        self.assertEqual(codex["chat_models"], ["gpt-5.5"])
 
     def test_api_settings_only_seeds_cli_models_on_explicit_setup(self):
         script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")

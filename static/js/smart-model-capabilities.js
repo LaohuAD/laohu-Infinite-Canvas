@@ -82,6 +82,11 @@
     function modelSupportsExecutionMode(model, executionMode){
         const requested = String(executionMode || '').trim();
         if(!requested || model?.node_type !== 'video_generation') return true;
+        const commands = (model?.platform?.commands || [])
+            .map(command => String(command || '').trim())
+            .filter(Boolean);
+        // 本地 CLI 可能用一个聚合 operation 表示多条真实命令；命令白名单是更精确的运行依据。
+        if(commands.length) return commands.includes(requested);
         const declared = modelExecutionMode(model);
         return !declared || declared === requested;
     }

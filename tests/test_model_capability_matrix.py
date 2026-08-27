@@ -11,7 +11,7 @@ NODE_OUTPUT_TYPES = {
     "image_generation": "image",
     "video_generation": "video",
     "audio_generation": {"audio", "text"},
-    "music_generation": "audio",
+    "music_generation": {"audio", "text", "video", "file"},
 }
 
 
@@ -58,6 +58,22 @@ def _profile_fixture(profile):
             inputs[key] = "asset://dry-run-video"
         elif media_type == "audio":
             inputs[key] = "asset://dry-run-audio"
+    required_media = {
+        str(media_type or "").strip().lower()
+        for media_type in (profile.get("requires_any_media") or [])
+        if str(media_type or "").strip()
+    }
+    if required_media and not any(
+        input_counts.get(key, 0) > 0 and str(spec.get("media_type") or "").strip().lower() in required_media
+        for key, spec in (profile.get("inputs") or {}).items()
+    ):
+        for key, spec in (profile.get("inputs") or {}).items():
+            if str(spec.get("media_type") or "").strip().lower() not in required_media:
+                continue
+            input_counts[key] = 1
+            role = str(spec.get("role") or key)
+            input_roles[role] = input_roles.get(role, 0) + 1
+            break
     parameters = {
         key: _sample_value(spec)
         for key, spec in (profile.get("parameters") or {}).items()
@@ -122,6 +138,65 @@ class ConfiguredModelCapabilityMatrixTests(unittest.TestCase):
         )
         self.assertEqual(dry_run["platform_request"]["--model"], "gpt-5.5")
         self.assertEqual(dry_run["platform_request"]["--image"], ["asset://reference-image"])
+
+    def test_codex_auto_profile_leaves_model_selection_to_current_codex_config(self):
+        providers = [provider for provider in main.load_api_providers() if provider.get("id") == "codex"]
+        profile = main.MODEL_CAPABILITY_REGISTRY.validate_request(
+            providers,
+            "codex",
+            "auto",
+            "text_generation",
+            input_counts={"text": 1, "image": 0, "video": 0, "audio": 0},
+            input_roles={"prompt": 1},
+            parameters={},
+        )
+        dry_run = main.MODEL_CAPABILITY_REGISTRY.build_dry_run(
+            profile,
+            inputs={"prompt": "跟随当前 Codex 模型"},
+            parameters={},
+            input_roles={"prompt": 1},
+        )
+
+        self.assertEqual(profile["model_id"], "auto")
+        self.assertNotIn("--model", dry_run["platform_request"])
+
+    def test_configured_codex_models_are_independent_runnable_node_choices(self):
+        providers = [{
+            "id": "codex",
+            "name": "GPT CLI",
+            "protocol": "codex",
+            "enabled": True,
+            "chat_models": ["auto", "gpt-5.6-sol", "gpt-5.6-luna"],
+            "image_models": [],
+            "video_models": [],
+            "audio_models": [],
+        }]
+
+        catalog = main.MODEL_CAPABILITY_REGISTRY.build_catalog(providers)
+        models = {
+            item["model_id"]: item
+            for item in catalog["providers"][0]["models"]
+            if item.get("node_type") == "text_generation"
+        }
+        self.assertEqual(set(models), {"auto", "gpt-5.6-sol", "gpt-5.6-luna"})
+        self.assertTrue(all(model["runnable"] for model in models.values()))
+
+        profile = main.MODEL_CAPABILITY_REGISTRY.validate_request(
+            providers,
+            "codex",
+            "gpt-5.6-luna",
+            "text_generation",
+            input_counts={"text": 1, "image": 0, "video": 0, "audio": 0},
+            input_roles={"prompt": 1},
+            parameters={},
+        )
+        dry_run = main.MODEL_CAPABILITY_REGISTRY.build_dry_run(
+            profile,
+            inputs={"prompt": "仅当前节点使用 Luna"},
+            input_roles={"prompt": 1},
+            parameters={},
+        )
+        self.assertEqual(dry_run["platform_request"]["--model"], "gpt-5.6-luna")
 
     def test_every_configured_ready_model_builds_a_no_network_request(self):
         providers = [provider for provider in main.load_api_providers() if provider.get("enabled") is not False]

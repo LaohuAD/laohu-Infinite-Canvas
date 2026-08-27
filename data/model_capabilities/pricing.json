@@ -79,6 +79,77 @@
       "label_en": "Uses Antigravity account plan or usage"
     }
   },
+  "image_reference_prices": {
+    "source_label_zh": "图片参考价格（用户整理）",
+    "source_label_en": "Image reference prices (user-provided)",
+    "note_zh": "以下是整理出来的约价范围，仅作成本参考；具体价格、计费规则和最终扣费请以对应平台官方页面为准。",
+    "note_en": "These approximate prices are for cost reference only. Check each provider's official page for current pricing, billing rules, and final charges.",
+    "rows": [
+      {
+        "id": "gpt-image-2",
+        "name_zh": "GPT Image 2",
+        "name_en": "GPT Image 2",
+        "text_to_image": {"status": "estimate", "label_zh": "≈¥0.05", "label_en": "≈¥0.05"},
+        "image_to_image": {"status": "estimate", "label_zh": "≈¥0.05", "label_en": "≈¥0.05"}
+      },
+      {
+        "id": "grok-2",
+        "name_zh": "Grok 2",
+        "name_en": "Grok 2",
+        "text_to_image": {"status": "estimate", "label_zh": "≈¥0.16", "label_en": "≈¥0.16"},
+        "image_to_image": {"status": "estimate", "label_zh": "≈¥0.59", "label_en": "≈¥0.59"}
+      },
+      {
+        "id": "nano-banana-flash",
+        "name_zh": "Nano Banana Flash",
+        "name_en": "Nano Banana Flash",
+        "text_to_image": {"status": "estimate", "label_zh": "≈¥0.08", "label_en": "≈¥0.08"},
+        "image_to_image": {"status": "estimate", "label_zh": "≈¥0.08", "label_en": "≈¥0.08"}
+      },
+      {
+        "id": "nano-banana-2-lite",
+        "name_zh": "Nano Banana 2 Lite",
+        "name_en": "Nano Banana 2 Lite",
+        "text_to_image": {"status": "estimate", "label_zh": "≈¥0.08", "label_en": "≈¥0.08"},
+        "image_to_image": {"status": "estimate", "label_zh": "≈¥0.08", "label_en": "≈¥0.08"}
+      },
+      {
+        "id": "nano-banana-2",
+        "name_zh": "Nano Banana 2",
+        "name_en": "Nano Banana 2",
+        "text_to_image": {"status": "estimate", "label_zh": "≈¥0.19", "label_en": "≈¥0.19"},
+        "image_to_image": {"status": "estimate", "label_zh": "≈¥0.19", "label_en": "≈¥0.19"}
+      },
+      {
+        "id": "nano-banana-pro",
+        "name_zh": "Nano Banana Pro",
+        "name_en": "Nano Banana Pro",
+        "text_to_image": {"status": "estimate", "label_zh": "≈¥0.28", "label_en": "≈¥0.28"},
+        "image_to_image": {"status": "estimate", "label_zh": "≈¥0.28", "label_en": "≈¥0.28"}
+      },
+      {
+        "id": "seedream-5-pro",
+        "name_zh": "Seedream 5 Pro",
+        "name_en": "Seedream 5 Pro",
+        "text_to_image": {"status": "estimate", "label_zh": "≈¥0.31", "label_en": "≈¥0.31"},
+        "image_to_image": {"status": "estimate", "label_zh": "≈¥0.33", "label_en": "≈¥0.33"}
+      },
+      {
+        "id": "seedream-5-pro-wide-moderation",
+        "name_zh": "Seedream 5 Pro 宽审核",
+        "name_en": "Seedream 5 Pro Wide Moderation",
+        "text_to_image": {"status": "estimate", "label_zh": "≈¥0.37", "label_en": "≈¥0.37"},
+        "image_to_image": {"status": "estimate", "label_zh": "≈¥0.40", "label_en": "≈¥0.40"}
+      },
+      {
+        "id": "mj-8-2",
+        "name_zh": "MJ 8.2",
+        "name_en": "MJ 8.2",
+        "text_to_image": {"status": "estimate", "label_zh": "≈¥0.47", "label_en": "≈¥0.47"},
+        "image_to_image": {"status": "unsupported", "label_zh": "不支持图生图", "label_en": "Image-to-image unavailable"}
+      }
+    ]
+  },
   "rules": [
     {
       "provider_id": "ai-money",
@@ -147,6 +218,32 @@
         "unit": "video_second",
         "label_zh": "¥23 / 百万 Token + 超分",
         "label_en": "¥23 / 1M tokens + upscaling",
+        "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
+      }
+    },
+    {
+      "provider_id": "ai-money",
+      "model_id_pattern": "^wan-3\\.0-prime-(?:i2v|r2v)$",
+      "record": {
+        "status": "confirmed",
+        "unit": "video_second",
+        "label_zh": "¥0.43–1.71 / 秒",
+        "label_en": "¥0.43–1.71 / sec",
+        "details_zh": "国内 Prime：480P ¥0.43、720P ¥0.86、1080P ¥1.71，每秒计费。",
+        "details_en": "Domestic Prime per second: 480P ¥0.43, 720P ¥0.86, 1080P ¥1.71.",
+        "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
+      }
+    },
+    {
+      "provider_id": "ai-money",
+      "model_id_pattern": "^wan-3\\.0-global-prime-(?:i2v|r2v)$",
+      "record": {
+        "status": "confirmed",
+        "unit": "video_second",
+        "label_zh": "$0.06–0.27 / 秒（按汇率折算）",
+        "label_en": "$0.06–0.27 / sec (converted by exchange rate)",
+        "details_zh": "海外 Prime：480P $0.06、720P $0.13、1080P $0.27，每秒计费并按汇率折算。",
+        "details_en": "Global Prime per second: 480P $0.06, 720P $0.13, 1080P $0.27, converted by exchange rate.",
         "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
       }
     },
