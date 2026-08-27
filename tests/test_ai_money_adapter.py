@@ -10,6 +10,38 @@ import main
 
 
 class AiMoneyAdapterTests(unittest.IsolatedAsyncioTestCase):
+    def test_remote_archive_download_rejects_private_network_addresses(self):
+        with patch.object(main.socket, "getaddrinfo", return_value=[
+            (main.socket.AF_INET, main.socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443)),
+        ]):
+            with self.assertRaises(HTTPException) as context:
+                main.validate_public_download_url("https://files.example.com/stems.zip")
+
+        self.assertEqual(context.exception.status_code, 502)
+        self.assertIn("本机或内网", context.exception.detail)
+
+    def test_remote_archive_download_pins_the_validated_public_ip(self):
+        with patch.object(main.socket, "getaddrinfo", return_value=[
+            (main.socket.AF_INET, main.socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443)),
+        ]):
+            target = main.public_download_target("https://files.example.com:8443/stems.zip?task=1")
+
+        self.assertEqual(target["pinned_url"], "https://93.184.216.34:8443/stems.zip?task=1")
+        self.assertEqual(target["host_header"], "files.example.com:8443")
+        self.assertEqual(target["sni_hostname"], "files.example.com")
+
+    def test_remote_archive_download_only_writes_bounded_zip_files(self):
+        source = Path(main.__file__).resolve().read_text(encoding="utf-8")
+        block = source.split("async def save_remote_zip_to_output", 1)[1].split("def parse_size_pair", 1)[0]
+
+        self.assertIn('filename = f"{stem}.zip"', block)
+        self.assertIn("follow_redirects=False", block)
+        self.assertIn("max_keepalive_connections=0", block)
+        self.assertIn('target["pinned_url"]', block)
+        self.assertIn('extensions={"sni_hostname": target["sni_hostname"]}', block)
+        self.assertIn("REMOTE_ARCHIVE_MAX_BYTES", block)
+        self.assertIn('b"PK\\x03\\x04"', block)
+
     def test_image_request_body_merges_capability_parameter_mapping(self):
         body = main.ai_money_image_request_body(
             "画一只猫",
@@ -37,6 +69,19 @@ class AiMoneyAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(body["size"], "16:9")
         self.assertEqual(body["metadata"], {"resolution": "1k"})
+
+    def test_grok_image_edit_request_body_uses_official_top_level_fields(self):
+        body = main.ai_money_image_request_body(
+            "把产品图改成水彩海报",
+            "laohuaimoney-image-gk-v2-edit",
+            reference_urls=["https://cdn.example.com/product.png", "https://cdn.example.com/style.png"],
+            capability_parameters={"resolution": "1k", "aspect_ratio": "auto", "n": 1, "nsfw_check": False},
+        )
+
+        self.assertEqual(body["images"], ["https://cdn.example.com/product.png", "https://cdn.example.com/style.png"])
+        self.assertEqual(body["resolution"], "1k")
+        self.assertEqual(body["aspect_ratio"], "auto")
+        self.assertFalse(body["nsfw_check"])
 
     def test_canvas_image_size_prefers_capability_ratio_over_stale_payload_size(self):
         self.assertEqual(
@@ -213,6 +258,48 @@ class AiMoneyAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(speech["metadata"]["channel"], 2)
         self.assertEqual(clone["metadata"]["audio_url"], "https://cdn.example.com/reference.mp3")
         self.assertEqual(clone["metadata"]["custom_voice_id"], "CanvasVoice01")
+
+    def test_flowmusic_request_body_uses_lyria_version_and_action_fields(self):
+        generation = main.ai_money_audio_request_body(
+            "flowmusic-generation",
+            "电影感的钢琴配乐",
+            capability_parameters={"lyrics": "夜色里的灯", "length": 60, "bpm": 120},
+        )
+        extend = main.ai_money_audio_request_body(
+            "flowmusic-extend",
+            "继续加入弦乐",
+            capability_parameters={"clip_id": "clip-1", "extend_from_s": 30, "extend_s": 60, "instruction": "继续加入弦乐"},
+        )
+        video = main.ai_money_audio_request_body(
+            "flowmusic-video-clip",
+            "unused",
+            capability_parameters={"clip_id": "clip-1", "preset": "modern"},
+        )
+
+        self.assertEqual(generation["model"], "flowmusic")
+        self.assertEqual(generation["version"], "lyria-3.5")
+        self.assertEqual(generation["sound_prompt"], "电影感的钢琴配乐")
+        self.assertEqual(extend["clip_id"], "clip-1")
+        self.assertEqual(extend["version"], "lyria-3.5")
+        self.assertEqual(video["preset"], "modern")
+
+    def test_flowmusic_result_separates_text_video_file_and_audio_outputs(self):
+        self.assertEqual(
+            main.ai_money_flowmusic_result({"data": {"result": {"lyrics": [{"title": "Song", "lyrics": "[Verse] hello"}]}}}, "lyrics"),
+            {"texts": [("[Verse] hello", "Song")]},
+        )
+        self.assertEqual(
+            main.ai_money_flowmusic_result({"data": {"result": {"music": [{"video_url": "https://cdn.example.com/a.mp4"}]}}}, "video-clip"),
+            {"videos": ["https://cdn.example.com/a.mp4"]},
+        )
+        self.assertEqual(
+            main.ai_money_flowmusic_result({"data": {"result": {"music": [{"file_url": "https://cdn.example.com/a.zip"}]}}}, "stems"),
+            {"files": ["https://cdn.example.com/a.zip"]},
+        )
+        self.assertEqual(
+            main.ai_money_flowmusic_result({"data": {"result": {"music": [{"lyrics": "[Verse] hello", "audio_url": "https://cdn.example.com/a.m4a"}]}}}, "generation"),
+            {"audios": ["https://cdn.example.com/a.m4a"]},
+        )
 
     def test_ai_money_special_task_roots_use_provider_base_url(self):
         provider = {"id": "ai-money", "base_url": "https://api.laohuaimoney.com", "protocol": "openai"}
@@ -450,6 +537,61 @@ class AiMoneyAdapterTests(unittest.IsolatedAsyncioTestCase):
             {"type": "video_url", "video_url": {"url": "https://cdn.example.com/source.mp4"}},
             {"type": "audio_url", "audio_url": {"url": "https://cdn.example.com/voice.mp3"}},
         ])
+
+    def test_builds_wan_3_prime_reference_video_body_without_dropping_media(self):
+        body = main.ai_money_video_request_body(
+            model="wan-3.0-prime-r2v",
+            prompt="保持角色一致，生成连续镜头",
+            seconds=5,
+            image_urls=["https://cdn.example.com/person.png"],
+            video_urls=["https://cdn.example.com/motion.mp4"],
+            audio_urls=["https://cdn.example.com/voice.mp3"],
+            capability_parameters={
+                "seconds": -1,
+                "metadata": {
+                    "ratio": "adaptive",
+                    "resolution": "1080p",
+                    "generate_audio": True,
+                    "seed": 7,
+                },
+            },
+        )
+
+        self.assertEqual(body["seconds"], -1)
+        self.assertEqual(body["metadata"]["content"], [
+            {"type": "image_url", "image_url": {"url": "https://cdn.example.com/person.png"}},
+            {"type": "video_url", "video_url": {"url": "https://cdn.example.com/motion.mp4"}},
+            {"type": "audio_url", "audio_url": {"url": "https://cdn.example.com/voice.mp3"}},
+        ])
+        self.assertNotIn("images", body)
+
+    def test_wan_3_prime_reference_video_requires_at_least_one_media_input(self):
+        with self.assertRaises(HTTPException):
+            main.ai_money_video_request_body(
+                model="wan-3.0-global-prime-r2v",
+                prompt="生成参考视频",
+                seconds=5,
+                image_urls=[],
+                video_urls=[],
+                audio_urls=[],
+            )
+
+    def test_wan_3_prime_image_video_keeps_first_and_optional_last_frame(self):
+        body = main.ai_money_video_request_body(
+            model="wan-3.0-global-prime-i2v",
+            prompt="首尾帧之间自然过渡",
+            seconds=6,
+            image_urls=[
+                "https://cdn.example.com/first.png",
+                "https://cdn.example.com/last.png",
+            ],
+        )
+
+        self.assertEqual(body["images"], [
+            "https://cdn.example.com/first.png",
+            "https://cdn.example.com/last.png",
+        ])
+        self.assertNotIn("content", body.get("metadata", {}))
 
     def test_ai_money_video_routes_follow_documented_paths(self):
         provider = {"id": "ai-money", "base_url": "https://api.laohuaimoney.com"}

@@ -325,6 +325,14 @@ console.log(JSON.stringify({
         self.assertIn("runninghub", pricing["provider_defaults"])
         self.assertIn("ai-money", pricing["provider_defaults"])
         self.assertTrue(any(rule.get("record", {}).get("status") == "formula" for rule in pricing["rules"]))
+        image_prices = pricing["image_reference_prices"]
+        self.assertEqual(len(image_prices["rows"]), 9)
+        self.assertEqual(image_prices["rows"][0]["text_to_image"]["label_zh"], "≈¥0.05")
+        self.assertEqual(image_prices["rows"][1]["image_to_image"]["label_zh"], "≈¥0.59")
+        self.assertEqual(image_prices["rows"][-1]["image_to_image"]["status"], "unsupported")
+        self.assertIn("renderImageReferencePriceTable", source)
+        self.assertIn("Text-to-image", source)
+        self.assertIn("Image-to-image", source)
 
     def test_execution_parameter_controls_are_stable_and_optional_values_can_be_omitted(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
@@ -421,7 +429,9 @@ console.log(JSON.stringify({
         self.assertIn("决定一次运行返回多少个结果", source)
         self.assertIn("限制模型最多生成多少文本", source)
         self.assertNotIn("设置“${capabilityParameterLabel", source)
-        self.assertTrue(codex_profile["models"][0]["parameters"]["model"]["ui_hidden"])
+        codex_models = {model["model_id"]: model for model in codex_profile["models"]}
+        self.assertEqual(codex_models["auto"]["parameters"], {})
+        self.assertTrue(codex_models["gpt-5.5"]["parameters"]["model"]["ui_hidden"])
         self.assertIn("spec?.ui_hidden !== true", source)
 
     def test_execution_parameter_values_reorder_without_a_layout_mode_button(self):
@@ -897,8 +907,9 @@ console.log(JSON.stringify(request));
             if item.get("node_type") == "text_generation" and item.get("runnable") is not False
         }
 
-        self.assertEqual(codex["chat_models"], ["gpt-5.5"])
-        self.assertIn("gpt-5.5", codex_text_models)
+        self.assertEqual(codex["chat_models"][0], "auto")
+        self.assertIn("gpt-5.5", codex["chat_models"])
+        self.assertTrue(codex_text_models.issubset(set(codex["chat_models"])))
 
     def test_text_generator_lists_only_providers_compatible_with_current_inputs(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
@@ -985,6 +996,46 @@ console.log(JSON.stringify(request));
         self.assertIn("translate3d", viewport)
         self.assertIn("applyViewport()", pan)
         self.assertNotIn("render()", pan)
+
+    def test_space_left_drag_temporarily_pans_over_every_canvas_control_without_clicking_it(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        css = (ROOT / "static/css/smart-canvas.css").read_text(encoding="utf-8")
+        html = (ROOT / "static/smart-canvas.html").read_text(encoding="utf-8")
+        i18n = (ROOT / "static/js/i18n/smart-canvas.js").read_text(encoding="utf-8")
+
+        self.assertIn("function beginSpaceCanvasPan", source)
+        start = source.index("function beginSpaceCanvasPan")
+        end = source.index("shell.addEventListener('mousedown'", start)
+        behavior = source[start:end]
+        keydown = source[source.index("window.addEventListener('keydown'"):source.index("window.addEventListener('keyup'")]
+
+        self.assertIn("event.button !== 0", behavior)
+        self.assertIn("isSpacePanKeyDown", behavior)
+        self.assertIn("event.preventDefault()", behavior)
+        self.assertIn("event.stopImmediatePropagation", behavior)
+        self.assertIn("spacePan:true", behavior)
+        self.assertIn("function moveSpaceCanvasPan", behavior)
+        self.assertIn("function finishSpaceCanvasPan", behavior)
+        self.assertIn("function suppressSpaceCanvasPanClick", behavior)
+        self.assertIn("spacePanGestureToken", behavior)
+        self.assertIn("SPACE_PAN_CLICK_GUARD_MS", behavior)
+        self.assertNotIn("closeCreateMenu", behavior)
+        self.assertNotIn("clearSelection", behavior)
+        self.assertIn("window.addEventListener('pointerdown', beginSpaceCanvasPan, true)", source)
+        self.assertIn("window.addEventListener('mousedown', beginSpaceCanvasPan, true)", source)
+        self.assertIn("window.addEventListener('pointermove', moveSpaceCanvasPan, true)", source)
+        self.assertIn("window.addEventListener('mousemove', moveSpaceCanvasPan, true)", source)
+        self.assertIn("window.addEventListener('pointerup', finishSpaceCanvasPan, true)", source)
+        self.assertIn("window.addEventListener('pointercancel', finishSpaceCanvasPan, true)", source)
+        self.assertIn("window.addEventListener('click', suppressSpaceCanvasPanClick, true)", source)
+        self.assertIn("e.code === 'Space'", keydown)
+        self.assertIn("!canvasTextEditableForTarget(e.target)", keydown)
+        self.assertIn("setSpaceCanvasPanReady(true)", keydown)
+        self.assertNotIn("data-minimax-play-timeline", keydown)
+        self.assertIn(".shell.space-pan-ready", css)
+        self.assertIn(".shell.space-panning", css)
+        self.assertIn('data-i18n="smart.shortcutSpacePan"', html)
+        self.assertIn('"smart.shortcutSpacePan": { zh: "按住空格并拖动：从任意画布内容平移画布", en: "Hold Space and drag: pan from anywhere on the canvas" }', i18n)
 
     def test_files_dropped_on_text_material_replace_instead_of_append(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
@@ -1397,6 +1448,134 @@ console.log(JSON.stringify(c.migrateLegacyCanvas(nodes,[]).nodes));
 
         self.assertEqual([node["type"] for node in migrated], ["smart-prompt", "smart-loop", "smart-group", "smart-minimax"])
 
+    def test_image_compare_tool_assigns_stable_left_and_right_inputs(self):
+        script = """
+const c=require('./static/js/smart-node-contract.js');
+const material={id:'image',type:c.NODE_TYPES.material,images:[{kind:'image',url:'asset://image.png'}]};
+const compare={id:'compare',type:c.NODE_TYPES.imageCompare,comparePosition:37};
+const migrated=c.migrateLegacyCanvas([compare],[]);
+console.log(JSON.stringify({
+  type:c.NODE_TYPES.imageCompare,
+  tool:c.isToolNode(compare),
+  acceptsImage:c.canConnectNodes(material,compare),
+  hasOutput:c.canConnectNodes(compare,material),
+  slots:[
+    c.imageCompareTargetSlot([],compare.id),
+    c.imageCompareTargetSlot([{to:compare.id,targetFieldKey:'left'}],compare.id),
+    c.imageCompareTargetSlot([{to:compare.id,targetFieldKey:'left'},{to:compare.id,targetFieldKey:'right'}],compare.id)
+  ],
+  migrated:migrated.nodes[0]
+}));
+"""
+        data = run_node(script)
+
+        self.assertEqual(data["type"], "smart-image-compare")
+        self.assertTrue(data["tool"])
+        self.assertTrue(data["acceptsImage"])
+        self.assertFalse(data["hasOutput"])
+        self.assertEqual(data["slots"], ["left", "right", ""])
+        self.assertEqual(data["migrated"]["comparePosition"], 37)
+
+    def test_image_compare_node_is_available_in_tool_menu_and_uses_left_right_labels(self):
+        html = (ROOT / "static" / "smart-canvas.html").read_text(encoding="utf-8")
+        source = (ROOT / "static" / "js" / "smart-canvas.js").read_text(encoding="utf-8")
+        css = (ROOT / "static" / "css" / "smart-canvas.css").read_text(encoding="utf-8")
+        i18n = (ROOT / "static" / "js" / "i18n" / "smart-canvas.js").read_text(encoding="utf-8")
+        compare_layer = source[source.index("function imageCompareLayerHtml"):source.index("function imageCompareBodyHtml")]
+        compare_body = source[source.index("function imageCompareBodyHtml"):source.index("function bindImageCompare")]
+
+        tools_menu = html[html.index('<div class="create-menu-heading">工具节点</div>'):html.index('</div>\n            </div>\n        </div>\n        <input id="fileInput"')]
+        self.assertIn('data-create-type="image-compare"', tools_menu)
+        self.assertIn('data-i18n="smart.createImageCompare"', tools_menu)
+        self.assertIn("function createImageCompareNode", source)
+        self.assertIn("function imageCompareInputs", source)
+        self.assertIn("function bindImageCompare", source)
+        self.assertIn("data-image-compare-handle", source)
+        self.assertIn("data-image-compare-original", compare_layer)
+        self.assertIn("displayMediaUrl", compare_layer)
+        self.assertNotIn("smartPreviewImgHtml", compare_layer)
+        self.assertIn("stage.addEventListener('pointerdown'", source)
+        self.assertIn("targetFieldKey:slot", source)
+        self.assertIn(".image-compare-node", css)
+        self.assertIn(".image-compare-handle", css)
+        self.assertIn("background:rgba(255,255,255,.28)", css)
+        self.assertNotIn("image-compare-grip", compare_body)
+        self.assertNotIn(".image-compare-grip", css)
+        self.assertIn(".preview-compare-handle::after { content:none;", css)
+        self.assertIn("previewCompareGrabOffset", source)
+        self.assertIn('"smart.compareLeft": { zh: "左侧", en: "Left" }', i18n)
+        self.assertIn('"smart.compareRight": { zh: "右侧", en: "Right" }', i18n)
+        self.assertNotIn("图一", compare_body)
+        self.assertNotIn("图二", compare_body)
+
+    def test_image_compare_stage_clicks_to_position_and_drags_from_anywhere(self):
+        script = r"""
+const fs=require('fs');
+const source=fs.readFileSync('./static/js/smart-canvas.js','utf8');
+const start=source.indexOf('function bindImageCompare');
+const end=source.indexOf('function angleControlInputImage', start);
+let saves=0;
+global.scheduleSave=()=>{ saves += 1; };
+eval(source.slice(start,end));
+
+class FakeTarget {
+  constructor(){
+    this.listeners={};
+    this.attrs={};
+    this.style={values:{},setProperty:(name,value)=>{this.style.values[name]=value;}};
+    this.capture=null;
+  }
+  addEventListener(type,listener){ (this.listeners[type] ||= []).push(listener); }
+  dispatch(type,extra={}){
+    const event={
+      button:0, clientX:100, pointerId:7, key:'', shiftKey:false,
+      currentTarget:this, target:this,
+      preventDefault(){}, stopPropagation(){},
+      ...extra
+    };
+    for(const listener of this.listeners[type] || []) listener(event);
+  }
+  getBoundingClientRect(){ return {left:100,width:400}; }
+  setPointerCapture(id){ this.capture=id; }
+  releasePointerCapture(id){ if(this.capture===id) this.capture=null; }
+  setAttribute(name,value){ this.attrs[name]=value; }
+}
+const stage=new FakeTarget();
+const handle=new FakeTarget();
+const node={comparePosition:50};
+const nodeEl={querySelector:selector=>selector.includes('stage') ? stage : handle};
+bindImageCompare(nodeEl,node);
+stage.dispatch('pointerdown',{clientX:200});
+const afterClick=node.comparePosition;
+stage.dispatch('pointermove',{clientX:420});
+const afterDrag=node.comparePosition;
+stage.dispatch('pointerup',{clientX:420});
+console.log(JSON.stringify({
+  afterClick,
+  afterDrag,
+  aria:handle.attrs['aria-valuenow'],
+  css:stage.style.values['--image-compare-position'],
+  capture:stage.capture,
+  saves
+}));
+"""
+        data = run_node(script)
+
+        self.assertEqual(data, {
+            "afterClick": 25,
+            "afterDrag": 80,
+            "aria": "80",
+            "css": "80%",
+            "capture": None,
+            "saves": 1,
+        })
+
+    def test_canvas_list_uses_a_fresh_url_when_opening_smart_canvas(self):
+        source = (ROOT / "static" / "js" / "canvas-list.js").read_text(encoding="utf-8")
+
+        self.assertIn("v=${Date.now()}", source)
+        self.assertNotIn("v=2026.07.03.4", source)
+
     def test_smart_canvas_loads_contract_before_main_script_and_exposes_new_menu(self):
         html = (ROOT / "static/smart-canvas.html").read_text(encoding="utf-8")
 
@@ -1789,9 +1968,10 @@ console.log(JSON.stringify(c.migrateLegacyCanvas(nodes,[]).nodes));
         video = source[source.index("function openImageEditor"):source.index("function closeImageEditor")]
         self.assertIn("loadSmartMediaToolCapabilities().then", video)
 
-    def test_inline_video_control_hides_during_playback_and_shows_pause_on_hover(self):
+    def test_inline_video_control_hides_after_play_then_shows_pause_on_fresh_hover(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
         css = (ROOT / "static/css/smart-canvas.css").read_text(encoding="utf-8")
+        polish = (ROOT / "static/css/studio-ui-polish.css").read_text(encoding="utf-8")
 
         self.assertIn("function bindSmartInlineVideoControls", source)
         self.assertIn("function toggleSmartInlineVideoPlayback", source)
@@ -1799,11 +1979,107 @@ console.log(JSON.stringify(c.migrateLegacyCanvas(nodes,[]).nodes));
         self.assertIn("btn.dataset.smartVideoPlayBound", source)
         self.assertIn("video.addEventListener('play'", source)
         self.assertIn("video.addEventListener('pause'", source)
-        self.assertIn("video.addEventListener('mouseenter'", source)
+        self.assertIn("card.addEventListener('mouseenter'", source)
+        self.assertIn("card.addEventListener('mouseleave'", source)
+        self.assertIn("is-control-suppressed", source)
         self.assertIn("video[data-inline-video-active=\"1\"]", source)
         self.assertIn("smartVideoPlayerHtml", source)
-        self.assertIn(".media-video-card.is-playing:not(:hover) .smart-video-play", css)
+        self.assertIn(".media-video-card.is-playing.is-control-suppressed .smart-video-play", css)
+        self.assertIn(".media-video-card.is-playing:not(.is-control-suppressed):hover .smart-video-play", css)
         self.assertIn(".smart-video-play.is-playing::before", css)
+        self.assertIn(":not(.smart-video-play)", polish)
+        self.assertIn(":not(.image-compare-handle)", polish)
+        self.assertIn(":not(.preview-nav-btn)", polish)
+        self.assertIn(":not(.node-port)", polish)
+
+    def test_inline_video_controls_rebind_after_media_dom_transplant(self):
+        script = r"""
+const fs=require('fs');
+const source=fs.readFileSync('./static/js/smart-canvas.js','utf8');
+const start=source.indexOf('function bindSmartInlineVideoControls');
+const end=source.indexOf('function toggleSmartInlineVideoPlayback', start);
+eval(source.slice(start,end));
+
+class FakeClassList {
+  constructor(){ this.values=new Set(); }
+  toggle(name,on){ if(on) this.values.add(name); else this.values.delete(name); }
+  add(name){ this.values.add(name); }
+  remove(name){ this.values.delete(name); }
+  contains(name){ return this.values.has(name); }
+}
+class FakeTarget {
+  constructor(){ this.dataset={}; this.classList=new FakeClassList(); this.listeners={}; }
+  addEventListener(type,listener){ (this.listeners[type] ||= []).push(listener); }
+  dispatch(type){ for(const listener of this.listeners[type] || []) listener({currentTarget:this}); }
+}
+function makeCard(){
+  const card=new FakeTarget();
+  const button=new FakeTarget();
+  button.setAttribute=(name,value)=>{ button[name]=value; };
+  card.button=button;
+  card.querySelector=selector=>selector === '.smart-video-play' ? button : null;
+  return card;
+}
+const oldCard=makeCard();
+const newCard=makeCard();
+let currentCard=oldCard;
+const video=new FakeTarget();
+video.paused=true;
+video.ended=false;
+video.closest=()=>currentCard;
+video.parentElement=currentCard;
+global.toast=()=>{};
+
+bindSmartInlineVideoControls(video,null);
+video.paused=false;
+video.dispatch('play');
+currentCard=newCard;
+video.parentElement=newCard;
+bindSmartInlineVideoControls(video,null);
+const suppressedImmediatelyAfterTransplant=newCard.classList.contains('is-control-suppressed');
+newCard.dispatch('mouseenter');
+const suppressedAfterTransplantEnter=newCard.classList.contains('is-control-suppressed');
+newCard.dispatch('mouseleave');
+const suppressedAfterRealLeave=newCard.classList.contains('is-control-suppressed');
+newCard.dispatch('mouseenter');
+const playingAfterTransplant={
+  card:newCard.classList.contains('is-playing'),
+  button:newCard.button.classList.contains('is-playing'),
+  suppressed:newCard.classList.contains('is-control-suppressed'),
+  hoverBound:newCard.dataset.smartInlineHoverBound === '1'
+};
+video.paused=true;
+video.dispatch('pause');
+console.log(JSON.stringify({
+  suppressedImmediatelyAfterTransplant,
+  suppressedAfterTransplantEnter,
+  suppressedAfterRealLeave,
+  playingAfterTransplant,
+  pausedAfterTransplant:{
+    card:newCard.classList.contains('is-playing'),
+    button:newCard.button.classList.contains('is-playing'),
+    suppressed:newCard.classList.contains('is-control-suppressed'),
+    title:newCard.button.title
+  }
+}));
+"""
+        data = run_node(script)
+
+        self.assertTrue(data["suppressedImmediatelyAfterTransplant"])
+        self.assertTrue(data["suppressedAfterTransplantEnter"])
+        self.assertTrue(data["suppressedAfterRealLeave"])
+        self.assertEqual(data["playingAfterTransplant"], {
+            "card": True,
+            "button": True,
+            "suppressed": False,
+            "hoverBound": True,
+        })
+        self.assertEqual(data["pausedAfterTransplant"], {
+            "card": False,
+            "button": False,
+            "suppressed": False,
+            "title": "播放",
+        })
 
     def test_group_renders_four_corner_resize_handles(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
@@ -2038,7 +2314,7 @@ console.log(JSON.stringify(c.migrateLegacyCanvas(nodes,[]).nodes));
     def test_new_smart_canvases_start_on_the_current_node_schema(self):
         source = (ROOT / "main.py").read_text(encoding="utf-8")
 
-        self.assertIn("SMART_CANVAS_NODE_SCHEMA_VERSION = 5", source)
+        self.assertIn("SMART_CANVAS_NODE_SCHEMA_VERSION = 6", source)
         self.assertIn('canvas["node_schema_version"] = SMART_CANVAS_NODE_SCHEMA_VERSION', source)
 
     def test_media_references_preserve_audio_video_text_and_image_types(self):

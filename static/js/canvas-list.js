@@ -465,7 +465,7 @@ function openCanvas(c){
     const enc = encodeURIComponent(c.id);
     const project = encodeURIComponent(c.project || currentProjectId || 'default');
     rememberProjectId(c.project || currentProjectId || 'default');
-    window.location.href = `/static/smart-canvas.html?id=${enc}&project=${project}&v=2026.07.03.4`;
+    window.location.href = `/static/smart-canvas.html?id=${enc}&project=${project}&v=${Date.now()}`;
 }
 
 /* ===== Card create flow ===== */

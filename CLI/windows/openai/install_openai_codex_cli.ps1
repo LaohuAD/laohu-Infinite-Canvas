@@ -88,7 +88,8 @@ try {
         Write-Host "Could not read Codex version in this session. Open a new PowerShell and run: codex --version"
     }
     Write-Host ""
-    Write-Host "安装完成。请在 PowerShell 运行 'codex' 登录；本项目仅接入 OpenAI Codex CLI 的文本能力。"
+    Write-Host "安装完成。画布会自动跟随当前 Codex 登录，不保存独立凭据。"
+    Write-Host "如需切换 API Key 或 ChatGPT 账号，请在 Codex 桌面端或官方 CLI 中操作；本项目仅接入 OpenAI Codex CLI 的文本能力。"
     Write-Host "You can also double-click CLI\windows\openai\start_openai_codex_cli.bat."
     Pause-End
 } catch {

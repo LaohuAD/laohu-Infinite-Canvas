@@ -1,5 +1,4 @@
 import unittest
-import os
 from pathlib import Path
 
 
@@ -20,13 +19,10 @@ class AiMoneyUiTests(unittest.TestCase):
 
     def test_api_settings_i18n_cache_versions_are_kept_in_sync(self):
         html = (ROOT / "static/api-settings.html").read_text(encoding="utf-8")
-        loader = (ROOT / "static/js/i18n.js").read_text(encoding="utf-8")
-        app_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-        asset_version = f"{app_version}.{int(os.path.getmtime(ROOT / 'static/js/i18n.js'))}"
-        loader_version = "2026.08.18.release.1"
-
-        self.assertIn(f'/static/js/i18n.js?v={asset_version}', html)
-        self.assertIn(f"const VERSION = '{loader_version}';", loader)
+        for relative_path in ("static/js/i18n-core.js", "static/js/i18n/api-settings.js"):
+            public_path = "/" + relative_path
+            self.assertIn(f'{public_path}?v=', html)
+        self.assertNotIn('/static/js/i18n.js?v=', html)
 
     def test_api_settings_contains_ai_money_entry_and_links(self):
         script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")

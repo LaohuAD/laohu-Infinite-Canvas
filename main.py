@@ -26,6 +26,8 @@ import math
 import shlex
 import functools
 import html
+import ipaddress
+import socket
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
@@ -169,7 +171,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 GLOBAL_LOOP = None
-APP_VERSION = "2026.08.17"
+APP_VERSION = "2026.08.28"
 GITHUB_REPO_URL = "https://github.com/LaohuAD/laohu-Infinite-Canvas"
 GITHUB_VERSION_URL = "https://raw.githubusercontent.com/LaohuAD/laohu-Infinite-Canvas/main/VERSION"
 GITHUB_TREE_URL = "https://api.github.com/repos/LaohuAD/laohu-Infinite-Canvas/git/trees/main?recursive=1"
@@ -194,7 +196,6 @@ async def startup_event():
             print(f"已将 {len(recovered_tasks)} 个未完成画布任务标记为待恢复，未自动重新提交")
     except Exception as exc:
         print(f"恢复画布任务记录失败: {exc}")
-    sync_static_html_versions()
     # 启动时整理资产库：给所有图片分组（含默认角色/场景）建好文件夹，并把根目录里的旧素材归整进去。
     try:
         await asyncio.to_thread(migrate_asset_library_into_dirs)
@@ -259,7 +260,7 @@ RUNNINGHUB_WORKFLOW_STORE_FILE = os.path.join(DATA_DIR, "runninghub_workflows.js
 SHARED_FOLDERS_FILE = os.path.join(DATA_DIR, "shared_folders.json")
 GLOBAL_CONFIG_FILE = str(PROJECT_STORAGE.config_dir / "global.json")
 CANVAS_TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
-SMART_CANVAS_NODE_SCHEMA_VERSION = 5
+SMART_CANVAS_NODE_SCHEMA_VERSION = 6
 LOCAL_IMAGE_IMPORT_MAX_BYTES = int(os.getenv("LOCAL_IMAGE_IMPORT_MAX_BYTES", str(50 * 1024 * 1024)))
 LOCAL_IMAGE_IMPORT_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 RUNNINGHUB_THUMBNAIL_EXTS = (".jpg",)
@@ -375,6 +376,7 @@ JIMENG_DEFAULT_IMAGE_MODELS = [
     "3.0",
 ]
 JIMENG_DEFAULT_VIDEO_MODELS = [
+    "seedance2.5",
     "seedance2.0_vip",
     "seedance2.0fast_vip",
     "seedance2.0",
@@ -382,7 +384,7 @@ JIMENG_DEFAULT_VIDEO_MODELS = [
     "seedance2.0mini",
 ]
 CODEX_DEFAULT_IMAGE_MODELS = []
-CODEX_DEFAULT_CHAT_MODELS = ["gpt-5.5"]
+CODEX_DEFAULT_CHAT_MODELS = ["auto", "gpt-5.5"]
 GEMINI_CLI_DEFAULT_IMAGE_MODELS = ["auto"]
 GEMINI_CLI_DEFAULT_CHAT_MODELS = ["auto"]
 try:
@@ -641,6 +643,8 @@ TUDOU_ASYNC_IMAGE_INITIAL_POLL_DELAY = float(os.getenv("TUDOU_ASYNC_IMAGE_INITIA
 VIDEO_POLL_TIMEOUT = float(os.getenv("VIDEO_POLL_TIMEOUT", "1800"))
 ONLINE_IMAGE_PROMPT_MAX_LENGTH = int(os.getenv("ONLINE_IMAGE_PROMPT_MAX_LENGTH", "20000"))
 VIDEO_PROMPT_MAX_LENGTH = int(os.getenv("VIDEO_PROMPT_MAX_LENGTH", "4000"))
+VIDEO_PROMPT_REQUEST_MAX_LENGTH = int(os.getenv("VIDEO_PROMPT_REQUEST_MAX_LENGTH", "20000"))
+REMOTE_ARCHIVE_MAX_BYTES = int(os.getenv("REMOTE_ARCHIVE_MAX_BYTES", str(512 * 1024 * 1024)))
 LLM_MESSAGE_MAX_LENGTH = int(os.getenv("LLM_MESSAGE_MAX_LENGTH", "20000"))
 CHAT_ATTACHMENT_MAX = int(os.getenv("CHAT_ATTACHMENT_MAX", "20"))
 ONLINE_IMAGE_REFERENCE_MAX = int(os.getenv("ONLINE_IMAGE_REFERENCE_MAX", "20"))
@@ -2110,6 +2114,16 @@ os.makedirs(WORKFLOW_DIR, exist_ok=True)
 os.makedirs(CONVERSATION_DIR, exist_ok=True)
 os.makedirs(CANVAS_DIR, exist_ok=True)
 
+@app.get("/static/{page_name}.html", include_in_schema=False)
+async def versioned_static_page(page_name: str):
+    """根级静态页面每次响应时重算资源版本，避免刷新后继续命中旧脚本。"""
+    if not re.fullmatch(r"[0-9A-Za-z_-]+", str(page_name or "")):
+        raise HTTPException(status_code=404, detail="页面不存在")
+    filename = f"{page_name}.html"
+    if not os.path.isfile(os.path.join(STATIC_DIR, filename)):
+        raise HTTPException(status_code=404, detail="页面不存在")
+    return static_html_response(filename)
+
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
@@ -2246,7 +2260,7 @@ def versioned_static_html(html: str) -> str:
             path = os.path.abspath(os.path.join(STATIC_DIR, rel))
             static_root = os.path.abspath(STATIC_DIR)
             if path.startswith(static_root + os.sep) and os.path.isfile(path):
-                cache_version = f"{safe_version}.{int(os.path.getmtime(path))}"
+                cache_version = f"{safe_version}.{os.stat(path).st_mtime_ns}"
         except Exception:
             pass
         query = str(match.group("query") or "")
@@ -2254,35 +2268,6 @@ def versioned_static_html(html: str) -> str:
         query_parts.append(f"v={cache_version}")
         return f"{match.group('prefix')}{url}?{'&'.join(query_parts)}"
     return pattern.sub(replace, html)
-
-def sync_static_html_versions():
-    version = current_app_version()
-    if not version:
-        return
-    safe_version = urllib.parse.quote(version, safe="._-")
-    try:
-        for name in os.listdir(STATIC_DIR):
-            # 跳过 macOS 在外置硬盘(ExFAT/NTFS)生成的 ._* Apple Double 元数据文件，
-            # 这些是二进制文件，按 UTF-8 读取会抛 UnicodeDecodeError。
-            if name.startswith("._"):
-                continue
-            if not name.lower().endswith(".html"):
-                continue
-            path = os.path.join(STATIC_DIR, name)
-            if not os.path.isfile(path):
-                continue
-            # 单文件容错：某个文件读写失败不应中断整批同步。
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    old = f.read()
-                new = versioned_static_html(re.sub(r'([?&]v=)[^"\'`\s<>)]*', rf'\g<1>{safe_version}', old))
-                if new != old:
-                    with open(path, "w", encoding="utf-8", newline="") as f:
-                        f.write(new)
-            except Exception as e:
-                print(f"同步静态页面版本号失败({name}): {e}")
-    except Exception as e:
-        print(f"同步静态页面版本号失败: {e}")
 
 def static_html_response(filename: str):
     path = os.path.join(STATIC_DIR, filename)
@@ -3403,7 +3388,7 @@ CANVAS_TASK_HANDLES: Dict[str, asyncio.Task] = {}
 CANVAS_TASK_LOCK = Lock()
 
 class CanvasVideoRequest(BaseModel):
-    prompt: str = Field(min_length=1, max_length=VIDEO_PROMPT_MAX_LENGTH)
+    prompt: str = Field(min_length=1, max_length=VIDEO_PROMPT_REQUEST_MAX_LENGTH)
     provider_id: str = "comfly"
     model: str = "veo3-fast"
     family_id: str = ""
@@ -3462,6 +3447,17 @@ def canvas_video_capability_parameters(payload: CanvasVideoRequest) -> Dict[str,
     }
     values.update(payload.parameters or {})
     return values
+
+def validate_canvas_video_prompt(profile: Dict[str, Any], prompt: str) -> None:
+    prompt_spec = ((profile or {}).get("inputs") or {}).get("prompt") or {}
+    max_chars = int(prompt_spec.get("max_chars") or VIDEO_PROMPT_MAX_LENGTH)
+    characters = len(str(prompt or ""))
+    if characters > max_chars:
+        model_id = str((profile or {}).get("model_id") or "当前模型")
+        raise HTTPException(
+            status_code=400,
+            detail=f"模型 {model_id} 的提示词当前 {characters} 个字符，最多允许 {max_chars} 个字符",
+        )
 
 def canvas_audio_capability_parameters(payload: CanvasAudioRequest) -> Dict[str, Any]:
     fields = explicit_request_fields(payload)
@@ -4926,7 +4922,7 @@ def resolve_chat_provider(provider: str, model: str, ms_model: str):
         return base, hdrs, mdl
     api_provider = get_api_provider(provider or "")
     if is_codex_provider(api_provider):
-        raise HTTPException(status_code=400, detail="OpenAI CLI 使用本机 codex 登录态，不需要 API Key。请使用画布/聊天里的 OpenAI CLI 专用通道。")
+        raise HTTPException(status_code=400, detail="OpenAI CLI 自动跟随当前 Codex 登录，不需要在 API 卡片中填写 Key。请使用画布/聊天里的 OpenAI CLI 专用通道。")
     if is_gemini_cli_provider(api_provider):
         raise HTTPException(status_code=400, detail="Antigravity CLI 使用本机 agy 登录态，不需要 API Key。请使用画布/聊天里的 Antigravity CLI 专用通道。")
     base_root = (api_provider.get("base_url") or AI_BASE_URL).rstrip("/")
@@ -5911,6 +5907,56 @@ def is_gemini_cli_provider(provider):
 def codex_env_value(key):
     return os.getenv(key, "") or read_api_env_value(key)
 
+def codex_cli_env():
+    env = os.environ.copy()
+    # GPT CLI 只跟随当前 Codex 环境。项目不持有第二份认证，
+    # 也不允许历史项目变量覆盖当前 CODEX_HOME。
+    env.pop("CODEX_CLI_HOME", None)
+    return env
+
+def codex_models_cache_path():
+    """Return the model catalog maintained by the current Codex environment."""
+    codex_home = str(codex_cli_env().get("CODEX_HOME") or "").strip()
+    if codex_home:
+        return Path(os.path.expanduser(codex_home)) / "models_cache.json"
+    return Path.home() / ".codex" / "models_cache.json"
+
+def codex_cached_model_catalog():
+    """Read public model choices from Codex's cache without touching auth data."""
+    cache_path = codex_models_cache_path()
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
+        return None
+
+    models = []
+    model_names = {"auto": "Codex 当前配置"}
+    seen = {"auto"}
+    for item in payload["models"]:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("visibility") or "list").strip().lower() != "list":
+            continue
+        slug = str(item.get("slug") or "").strip()
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        models.append(slug)
+        display_name = str(item.get("display_name") or "").strip()
+        if display_name:
+            model_names[slug] = display_name
+
+    if not models:
+        return None
+    return {
+        "chat_models": ["auto", *models],
+        "model_names": model_names,
+        "fetched_at": str(payload.get("fetched_at") or "").strip(),
+        "client_version": str(payload.get("client_version") or "").strip(),
+    }
+
 def codex_cli_candidates():
     configured = str(codex_env_value("CODEX_BIN") or "").strip()
     candidates = []
@@ -5968,7 +6014,7 @@ def codex_timeout(default=CODEX_DEFAULT_TIMEOUT):
 def codex_model_for_exec(model="", fallback=""):
     value = str(model or fallback or "").strip()
     low = value.lower()
-    if not value or low.startswith("$imagegen") or low.startswith("gpt-image"):
+    if not value or low == "auto" or low.startswith("$imagegen") or low.startswith("gpt-image"):
         return ""
     return value
 
@@ -5980,7 +6026,7 @@ def codex_decode_output(stdout, stderr):
 async def run_codex_cli(prompt, model="", image_paths=None, timeout=None, output_last_message=True):
     exe = codex_cli_executable()
     if not exe:
-        raise HTTPException(status_code=400, detail="未找到 OpenAI Codex CLI。请先在 API 设置的 GPT CLI 卡片中安装或更新，并完成 codex 登录。")
+        raise HTTPException(status_code=400, detail="未找到 OpenAI Codex CLI。请先在 API 设置的 GPT CLI 卡片中安装或更新，并在 Codex 桌面端或官方 CLI 中完成登录。")
     image_paths = [str(path) for path in (image_paths or []) if path and os.path.isfile(str(path))]
     last_path = ""
     args = [
@@ -6007,6 +6053,7 @@ async def run_codex_cli(prompt, model="", image_paths=None, timeout=None, output
         proc = await asyncio.create_subprocess_exec(
             *args,
             cwd=BASE_DIR,
+            env=codex_cli_env(),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -6144,19 +6191,38 @@ async def codex_reference_paths(reference_images=None):
         raise
 
 def codex_models_payload(raw=None):
-    all_models = [*CODEX_DEFAULT_IMAGE_MODELS, *CODEX_DEFAULT_CHAT_MODELS]
+    catalog = codex_cached_model_catalog()
+    if catalog:
+        chat_models = catalog["chat_models"]
+        model_names = catalog["model_names"]
+        source = "codex_models_cache"
+        fetched_at = catalog["fetched_at"]
+        client_version = catalog["client_version"]
+        message = "模型列表来自当前 Codex 的本机模型缓存；具体模型能否使用，仍以该节点实际运行结果为准。"
+    else:
+        chat_models = list(CODEX_DEFAULT_CHAT_MODELS)
+        model_names = {"auto": "Codex 当前配置", "gpt-5.5": "GPT 5.5"}
+        source = "fallback_defaults"
+        fetched_at = ""
+        client_version = ""
+        message = "暂未读取到当前 Codex 的模型缓存，已显示保底选项；也可以手动添加模型 ID。"
+    all_models = [*CODEX_DEFAULT_IMAGE_MODELS, *chat_models]
     return {
         "ok": True,
         "protocol": "codex",
         "status": 200,
-        "message": "OpenAI Codex CLI 可用，模型列表来自本机 CLI 默认配置。",
+        "message": message,
         "model_count": len(all_models),
         "total": len(all_models),
         "image_models": CODEX_DEFAULT_IMAGE_MODELS,
-        "chat_models": CODEX_DEFAULT_CHAT_MODELS,
+        "chat_models": chat_models,
         "video_models": [],
         "audio_models": [],
         "all": all_models,
+        "model_names": model_names,
+        "source": source,
+        "fetched_at": fetched_at,
+        "client_version": client_version,
         "raw": raw or {},
     }
 
@@ -7141,16 +7207,15 @@ def jimeng_image_resolution(model, size, mode="text2image"):
         return "2k"
     return options[0]
 
-JIMENG_VIDEO_HIGH_RES_MODELS = {"seedance2.0_vip"}
 JIMENG_VIDEO_MODEL_VERSIONS = {
     "seedance1.0fast", "seedance1.5pro", "seedance2.0", "seedance2.0fast",
-    "seedance2.0_vip", "seedance2.0fast_vip", "seedance2.0mini",
+    "seedance2.0_vip", "seedance2.0fast_vip", "seedance2.0mini", "seedance2.5",
 }
 JIMENG_VIDEO_MODELS_BY_COMMAND = {
-    "text2video": {"seedance2.0", "seedance2.0fast", "seedance2.0_vip", "seedance2.0fast_vip", "seedance2.0mini"},
-    "image2video": {"seedance1.0fast", "seedance1.5pro", "seedance2.0", "seedance2.0fast", "seedance2.0_vip", "seedance2.0fast_vip", "seedance2.0mini"},
-    "multimodal2video": {"seedance2.0", "seedance2.0fast", "seedance2.0_vip", "seedance2.0fast_vip", "seedance2.0mini"},
-    "frames2video": {"seedance1.5pro", "seedance2.0", "seedance2.0fast", "seedance2.0_vip", "seedance2.0fast_vip", "seedance2.0mini"},
+    "text2video": {"seedance2.0", "seedance2.0fast", "seedance2.0_vip", "seedance2.0fast_vip", "seedance2.0mini", "seedance2.5"},
+    "image2video": {"seedance1.0fast", "seedance1.5pro", "seedance2.0", "seedance2.0fast", "seedance2.0_vip", "seedance2.0fast_vip", "seedance2.0mini", "seedance2.5"},
+    "multimodal2video": {"seedance2.0", "seedance2.0fast", "seedance2.0_vip", "seedance2.0fast_vip", "seedance2.0mini", "seedance2.5"},
+    "frames2video": {"seedance1.5pro", "seedance2.0", "seedance2.0fast", "seedance2.0_vip", "seedance2.0fast_vip", "seedance2.0mini", "seedance2.5"},
 }
 
 def jimeng_video_resolution(model, resolution):
@@ -7164,17 +7229,20 @@ def jimeng_video_resolution(model, resolution):
         requested = "1080p"
     elif requested in {"720p", "720"}:
         requested = "720p"
+    elif requested in {"480p", "480"}:
+        requested = "480p"
     else:
-        raise HTTPException(status_code=400, detail="即梦视频只支持 720p；seedance2.0_vip 额外支持 1080p 和 4k。")
-    if version not in JIMENG_VIDEO_HIGH_RES_MODELS:
-        if requested != "720p":
-            raise HTTPException(status_code=400, detail=f"即梦模型 {version or model} 只支持 720p。")
-        return requested
+        raise HTTPException(status_code=400, detail="即梦视频分辨率无效：Seedance 2.5 支持 480p、720p；Seedance 2.0 VIP 支持 720p、1080p、4k；其他模型支持 720p。")
+    allowed = ["480p", "720p"] if version == "seedance2.5" else (["720p", "1080p", "4k"] if version == "seedance2.0_vip" else ["720p"])
+    if requested not in allowed:
+        raise HTTPException(status_code=400, detail=f"即梦模型 {version or model} 只支持 {'、'.join(allowed)}。")
     return requested
 
 # 各模型支持的时长区间（秒）：3.0 系列 3-10，3.5pro 4-12，seedance 4-15
 def jimeng_video_duration_range(model, command=""):
     version = jimeng_video_model_version(model)
+    if version == "seedance2.5":
+        return 4, 30
     if command in {"image2video", "frames2video"} and version == "seedance1.5pro":
         return 5, 12
     if command == "image2video" and version == "seedance1.0fast":
@@ -7216,6 +7284,7 @@ def jimeng_video_model_version(model):
     value = str(model or "").strip()
     low = value.lower()
     aliases = {
+        "seedance2.5": "seedance2.5",
         "seedance1.0fast": "seedance1.0fast",
         "seedance1.5pro": "seedance1.5pro",
         "seedance2.0fast_vip": "seedance2.0fast_vip",
@@ -7534,26 +7603,27 @@ async def generate_jimeng_video(payload: CanvasVideoRequest, provider, capabilit
     payload_resolution = video_parameters["resolution"]
     image_refs = [ref for ref in (payload.images or []) if jimeng_video_ref_url(ref)]
     video_refs = [url for url in (payload.videos or []) if str(url or "").strip()]
-    audio_refs = [url for url in (payload.audios or []) if str(url or "").strip()][:3]
+    audio_refs = [url for url in (payload.audios or []) if str(url or "").strip()]
+    is_seedance_25 = jimeng_video_model_version(payload.model) == "seedance2.5"
     temp_paths = []
     try:
         if jimeng_video_requires_multimodal(payload, capability_parameters):
-            if not image_refs and not video_refs:
+            if not image_refs and not video_refs and not (is_seedance_25 and audio_refs):
                 raise HTTPException(status_code=400, detail="即梦全能参考至少需要一张图片或一个视频，音频不能单独生成视频。")
             model_version = jimeng_video_model_for_command(payload.model, "multimodal2video")
             duration = jimeng_video_duration(payload_duration, model_version, "multimodal2video")
             image_paths = []
             video_paths = []
             audio_paths = []
-            for ref in image_refs[:9]:
+            for ref in image_refs[:30 if is_seedance_25 else 9]:
                 image_path, created = await jimeng_prepare_local_media(jimeng_video_ref_url(ref), "image")
                 temp_paths.extend(created)
                 image_paths.append(image_path)
-            for ref_url in video_refs[:3]:
+            for ref_url in video_refs[:10 if is_seedance_25 else 3]:
                 video_path, created = await jimeng_prepare_local_media(ref_url, "video")
                 temp_paths.extend(created)
                 video_paths.append(video_path)
-            for ref_url in audio_refs:
+            for ref_url in audio_refs[:10 if is_seedance_25 else 3]:
                 audio_path, created = await jimeng_prepare_local_media(ref_url, "audio")
                 temp_paths.extend(created)
                 audio_paths.append(audio_path)
@@ -7708,8 +7778,11 @@ def ai_money_video_request_body(model, prompt, seconds, aspect_ratio="", resolut
     images = [str(url or "").strip() for url in (image_urls or []) if str(url or "").strip()]
     videos = [str(url or "").strip() for url in (video_urls or []) if str(url or "").strip()]
     audios = [str(url or "").strip() for url in (audio_urls or []) if str(url or "").strip()]
+    is_wan_3_reference = bool(re.fullmatch(r"wan-3\.0-(?:global-)?prime-r2v", lower_model))
     if lower_model.endswith("-i2v") and not images:
         raise HTTPException(status_code=400, detail="AI MONEY 图生视频模型需要至少一张参考图片。")
+    if is_wan_3_reference and not (images or videos or audios):
+        raise HTTPException(status_code=400, detail="AI MONEY Wan 3.0 参考生视频模型需要至少一个图片、视频或音频参考素材。")
     body = {
         "model": model_name,
         "prompt": str(prompt or ""),
@@ -7726,7 +7799,7 @@ def ai_money_video_request_body(model, prompt, seconds, aspect_ratio="", resolut
         metadata["return_last_frame"] = True
     if capability_parameters is None and seed is not None:
         metadata["seed"] = seed
-    if lower_model.endswith("-multi"):
+    if lower_model.endswith("-multi") or is_wan_3_reference:
         content = []
         for url in images:
             content.append({"type": "image_url", "image_url": {"url": url}})
@@ -7779,8 +7852,29 @@ def ai_money_suno_request_body(model, prompt, capability_parameters=None):
         body["prompt"] = prompt_text
     return merge_request_body(body, capability_parameters)
 
+def ai_money_flowmusic_request_body(model, prompt, reference_audio_url="", capability_parameters=None):
+    model_name = str(model or "").strip().lower()
+    if not model_name.startswith("flowmusic-"):
+        raise HTTPException(status_code=400, detail=f"不是 FlowMusic 模型：{model}")
+    action = model_name.removeprefix("flowmusic-")
+    parameters = dict(capability_parameters or {})
+    body = {"model": "flowmusic"}
+    if action == "generation":
+        body["sound_prompt"] = str(prompt or "").strip()
+    elif action == "lyrics":
+        body["prompt"] = str(prompt or "").strip()
+    reference_url = str(reference_audio_url or "").strip()
+    if action == "upload-audio" and reference_url:
+        body["audio_url"] = reference_url
+    body = merge_request_body(body, parameters)
+    if action in {"generation", "extend", "replace", "cover"}:
+        body.setdefault("version", "lyria-3.5")
+    return body
+
 def ai_money_audio_request_body(model, prompt, reference_audio_url="", speaker="", audio_format="mp3", sample_rate=24000, speech_rate=0, loudness_rate=0, pitch_rate=0, capability_parameters=None):
     model_name = selected_model(model, "doubao-seed-audio-1.0")
+    if model_name.lower().startswith("flowmusic-"):
+        return ai_money_flowmusic_request_body(model_name, prompt, reference_audio_url, capability_parameters)
     if model_name in {"mureka-v8-bgm", "mureka-v9-bgm"}:
         raw_parameters = capability_parameters or {}
         metadata = dict(raw_parameters.get("metadata") or {}) if isinstance(raw_parameters, dict) else {}
@@ -7889,6 +7983,29 @@ def ai_money_audio_result_text(raw):
         return ""
     return find(raw)
 
+def ai_money_flowmusic_result(raw, action):
+    action = str(action or "").strip().lower()
+    data = raw.get("data") if isinstance(raw, dict) and isinstance(raw.get("data"), dict) else raw
+    result = data.get("result") if isinstance(data, dict) and isinstance(data.get("result"), dict) else {}
+    music = result.get("music") if isinstance(result, dict) else None
+    first = music[0] if isinstance(music, list) and music and isinstance(music[0], dict) else {}
+    if action == "lyrics":
+        lyrics = result.get("lyrics") if isinstance(result, dict) else None
+        if isinstance(lyrics, list) and lyrics and isinstance(lyrics[0], dict):
+            text = str(lyrics[0].get("lyrics") or "").strip()
+            name = str(lyrics[0].get("title") or "flowmusic-lyrics.txt").strip()
+            if text:
+                return {"texts": [(text, name)]}
+        return {"texts": []}
+    if action == "video-clip":
+        url = str(first.get("video_url") or first.get("url") or "").strip()
+        return {"videos": [url] if url else []}
+    if action == "stems":
+        url = str(first.get("file_url") or first.get("url") or "").strip()
+        return {"files": [url] if url else []}
+    url = str(first.get("audio_url") or first.get("wav_url") or first.get("url") or "").strip()
+    return {"audios": [url] if url else []}
+
 async def wait_for_ai_money_audio_task(client, provider, task_id):
     base_url = str((provider or {}).get("base_url") or AI_MONEY_DEFAULT_BASE_URL).rstrip("/")
     task_url = f"{base_url}/v1/audio/generations/{urllib.parse.quote(str(task_id), safe='')}"
@@ -7946,6 +8063,33 @@ async def generate_ai_money_audio(provider, model, prompt, reference_audio_url="
         reference_url = str(reference_audio_url or "").strip()
         if reference_url:
             reference_url = await ai_money_upload_reference(client, provider, reference_url, "audio")
+        if str(model or "").strip().lower().startswith("flowmusic-"):
+            model_name = str(model or "").strip().lower()
+            action = model_name.removeprefix("flowmusic-")
+            body = ai_money_flowmusic_request_body(model_name, prompt, reference_url, capability_parameters)
+            response = await client.post(
+                ai_money_music_api_url(provider, "" if action == "generation" else action),
+                headers=api_headers(provider=provider, model=body["model"]),
+                json=body,
+            )
+            response.raise_for_status()
+            raw = response.json()
+            task_id = extract_task_id(raw) or midjourney_task_id(raw)
+            result = await wait_for_ai_money_music_task(client, provider, task_id) if task_id else raw
+            outputs = ai_money_flowmusic_result(result, action)
+            if outputs.get("texts"):
+                texts = [{"url": save_comfy_text_output(text, prefix="ai_money_flowmusic_", name=name), "kind": "text", "name": name} for text, name in outputs["texts"]]
+                return {"texts": texts, "task_id": task_id, "raw": result}
+            if outputs.get("videos"):
+                videos = [await save_remote_video_to_output(url, prefix="ai_money_flowmusic_") for url in outputs["videos"] if url]
+                return {"videos": [url for url in videos if url], "task_id": task_id, "raw": result}
+            if outputs.get("files"):
+                files = [await save_remote_zip_to_output(url, prefix="ai_money_flowmusic_") for url in outputs["files"] if url]
+                return {"files": [url for url in files if url], "task_id": task_id, "raw": result}
+            audios = [await save_remote_audio_to_output(url, prefix="ai_money_flowmusic_") for url in outputs.get("audios", []) if url]
+            if not audios:
+                raise HTTPException(status_code=502, detail=f"AI MONEY FlowMusic 任务没有返回音频地址：{str(result)[:500]}")
+            return {"audios": [url for url in audios if url], "task_id": task_id, "raw": result}
         if str(model or "").strip().lower().startswith("suno-"):
             action = str(model or "").strip().lower().removeprefix("suno-")
             action = "" if action == "generation" else action
@@ -11731,6 +11875,123 @@ async def save_remote_audio_to_output(url, prefix="audio_", category="output"):
         except Exception:
             pass
         return url
+
+def public_download_target(url: str) -> Dict[str, str]:
+    text = str(url or "").strip()
+    parsed = urllib.parse.urlparse(text)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+        raise HTTPException(status_code=502, detail="上游文件地址无效")
+    host = str(parsed.hostname).strip().rstrip(".")
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="上游文件端口无效") from exc
+    try:
+        addresses = {
+            ipaddress.ip_address(str(item[4][0]).split("%", 1)[0])
+            for item in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        }
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="无法解析上游文件地址") from exc
+    if not addresses or any(not address.is_global for address in addresses):
+        raise HTTPException(status_code=502, detail="上游文件地址不允许访问本机或内网")
+    address = sorted(addresses, key=lambda item: (item.version != 4, str(item)))[0]
+    pinned_host = f"[{address}]" if address.version == 6 else str(address)
+    explicit_port = parsed.port
+    pinned_netloc = pinned_host + (f":{explicit_port}" if explicit_port else "")
+    ascii_host = host.encode("idna").decode("ascii")
+    try:
+        original_ip = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        original_ip = None
+    host_header = f"[{ascii_host}]" if getattr(original_ip, "version", 0) == 6 else ascii_host
+    if explicit_port and explicit_port != (443 if parsed.scheme == "https" else 80):
+        host_header = f"{host_header}:{explicit_port}"
+    return {
+        "original_url": text,
+        "pinned_url": urllib.parse.urlunparse(parsed._replace(netloc=pinned_netloc)),
+        "host_header": host_header,
+        "sni_hostname": ascii_host,
+    }
+
+def validate_public_download_url(url: str) -> str:
+    return public_download_target(url)["original_url"]
+
+async def save_remote_zip_to_output(url, prefix="file_", category="output"):
+    if not url:
+        return ""
+    if is_local_media_reference(url):
+        return url
+    stem = f"{prefix}{uuid.uuid4().hex[:10]}"
+    filename = f"{stem}.zip"
+    path = output_path_for(filename, category)
+    current_url = str(url or "").strip()
+    allowed_types = {
+        "application/zip",
+        "application/x-zip-compressed",
+        "application/octet-stream",
+        "binary/octet-stream",
+    }
+    try:
+        timeout = httpx.Timeout(connect=20.0, read=VIDEO_POLL_TIMEOUT, write=60.0, pool=20.0)
+        headers = {"Accept": "application/zip,application/octet-stream;q=0.9"}
+        limits = httpx.Limits(max_keepalive_connections=0, max_connections=4)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False, limits=limits) as client:
+            for _ in range(6):
+                target = await asyncio.to_thread(public_download_target, current_url)
+                request_headers = {**headers, "Host": target["host_header"]}
+                async with client.stream(
+                    "GET",
+                    target["pinned_url"],
+                    headers=request_headers,
+                    extensions={"sni_hostname": target["sni_hostname"]},
+                ) as response:
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        location = str(response.headers.get("Location") or "").strip()
+                        if not location:
+                            raise HTTPException(status_code=502, detail="上游 ZIP 重定向缺少地址")
+                        current_url = urllib.parse.urljoin(current_url, location)
+                        continue
+                    response.raise_for_status()
+                    content_type = (response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+                    if content_type and content_type not in allowed_types:
+                        raise HTTPException(status_code=502, detail=f"上游分轨文件不是 ZIP：{content_type}")
+                    try:
+                        content_length = int(response.headers.get("Content-Length") or 0)
+                    except (TypeError, ValueError):
+                        content_length = 0
+                    if content_length > REMOTE_ARCHIVE_MAX_BYTES:
+                        raise HTTPException(status_code=413, detail="上游 ZIP 文件过大")
+                    total = 0
+                    signature = bytearray()
+                    with open(path, "wb") as file:
+                        async for chunk in response.aiter_bytes(256 * 1024):
+                            if not chunk:
+                                continue
+                            total += len(chunk)
+                            if total > REMOTE_ARCHIVE_MAX_BYTES:
+                                raise HTTPException(status_code=413, detail="上游 ZIP 文件过大")
+                            if len(signature) < 4:
+                                signature.extend(chunk[:4 - len(signature)])
+                            file.write(chunk)
+                    if total <= 0 or bytes(signature) not in {b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"}:
+                        raise HTTPException(status_code=502, detail="上游分轨文件不是有效 ZIP")
+                    return output_url_for(filename, category)
+            raise HTTPException(status_code=502, detail="上游 ZIP 重定向次数过多")
+    except HTTPException:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+        raise
+    except (httpx.HTTPError, OSError) as exc:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+        raise HTTPException(status_code=502, detail=f"保存上游 ZIP 失败：{exc}") from exc
 
 def parse_size_pair(size):
     match = re.fullmatch(r"\s*(\d+)\s*[xX*]\s*(\d+)\s*", str(size or ""))
@@ -15526,6 +15787,7 @@ async def codex_status():
             exe,
             "--version",
             cwd=BASE_DIR,
+            env=codex_cli_env(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -15541,6 +15803,7 @@ async def codex_status():
                     "login",
                     "status",
                     cwd=BASE_DIR,
+                    env=codex_cli_env(),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
@@ -15549,13 +15812,13 @@ async def codex_status():
                 login_text = f"{login_out}\n{login_err}".lower()
                 if re.search(r"not\s+(logged|authenticated)|未登录|未认证", login_text):
                     logged_in = False
-                    login_message = "已安装，但当前未登录。请执行 codex login。"
+                    login_message = "已安装，但当前 Codex 未登录。请在 Codex 桌面端或官方 CLI 中完成登录。"
                 elif login_proc.returncode == 0 and re.search(r"logged\s+in|authenticated|已登录|已认证", login_text):
                     logged_in = True
                     login_message = "已安装并已登录，可直接运行文本生成。"
                 elif login_proc.returncode != 0:
                     logged_in = False
-                    login_message = "已安装，但登录状态检查未通过。请执行 codex login。"
+                    login_message = "已安装，但当前 Codex 登录状态检查未通过。画布不会覆盖或恢复历史凭据。"
             except Exception:
                 logged_in = None
         state = "ready" if ok and logged_in is True else "not_logged_in" if ok and logged_in is False else "installed" if ok else "invalid"
@@ -15593,6 +15856,7 @@ async def codex_help(payload: CodexHelpRequest):
     proc = await asyncio.create_subprocess_exec(
         *args,
         cwd=BASE_DIR,
+        env=codex_cli_env(),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -18773,6 +19037,7 @@ async def canvas_video(payload: CanvasVideoRequest):
         },
         parameters=capability_parameters,
     )
+    validate_canvas_video_prompt(profile, payload.prompt)
     model = str(profile.get("model_id") or model)
     payload.model = model
     platform_parameters = MODEL_CAPABILITY_REGISTRY.platform_parameters(profile, capability_parameters)
