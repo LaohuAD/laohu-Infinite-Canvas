@@ -171,7 +171,6 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 GLOBAL_LOOP = None
-APP_VERSION = "2026.08.28"
 GITHUB_REPO_URL = "https://github.com/LaohuAD/laohu-Infinite-Canvas"
 GITHUB_VERSION_URL = "https://raw.githubusercontent.com/LaohuAD/laohu-Infinite-Canvas/main/VERSION"
 GITHUB_TREE_URL = "https://api.github.com/repos/LaohuAD/laohu-Infinite-Canvas/git/trees/main?recursive=1"
@@ -2132,6 +2131,7 @@ app.mount("/workflow-files", StaticFiles(directory=str(PROJECT_STORAGE.canvas_wo
 # --- Pydantic 模型 ---
 
 def current_app_version():
+    """读取唯一产品版本源；主页面左下角通过 /api/app-info 使用该值。"""
     version_file = os.path.join(BASE_DIR, "VERSION")
     try:
         if os.path.exists(version_file):

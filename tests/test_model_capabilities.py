@@ -3254,6 +3254,23 @@ console.log(JSON.stringify(Object.fromEntries(Object.entries(cases).map(([key,fa
         self.assertEqual(response.headers.get("cache-control"), "no-cache")
         self.assertIn(expected, response.text)
 
+    def test_release_metadata_and_sidebar_badge_share_root_version(self):
+        version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        notes = json.loads((ROOT / "static/update-notes.json").read_text(encoding="utf-8"))
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        index_html = (ROOT / "static/index.html").read_text(encoding="utf-8")
+
+        response = TestClient(main.app).get("/api/app-info")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(main.current_app_version(), version)
+        self.assertEqual(response.json().get("version"), version)
+        self.assertEqual(notes.get("version"), version)
+        self.assertIn(f"当前版本：`v{version}`", readme)
+        self.assertIn('id="project-version-badge"', index_html)
+        self.assertIn("fetch('/api/app-info', { cache:'no-store' })", index_html)
+        self.assertIn("setProjectVersionBadge(current);", index_html)
+
     def test_startup_does_not_rewrite_tracked_static_html_cache_versions(self):
         source = (ROOT / "main.py").read_text(encoding="utf-8")
         startup = source.split("async def startup_event():", 1)[1].split('@app.websocket("/ws/stats")', 1)[0]
