@@ -146,6 +146,29 @@ console.log(JSON.stringify({
         self.assertNotIn("current?.aspectRatio", handler)
         self.assertNotIn("current?.megapixels", handler)
 
+    def test_director_toolbar_and_workspace_follow_approved_layout(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        css = (ROOT / "static/css/smart-canvas.css").read_text(encoding="utf-8")
+        toolbar = source[
+            source.index('<div class="minimax-wb-toolbar">'):
+            source.index('<div class="minimax-wb-body"')
+        ]
+
+        self.assertIn("data-minimax-add-segment", toolbar)
+        self.assertIn("data-minimax-add-connection", toolbar)
+        self.assertIn("data-director-shortcuts", toolbar)
+        self.assertIn("下载当前 Clip", toolbar)
+        self.assertIn("Download selected Clip", toolbar)
+        self.assertNotIn("导出当前 Clip", toolbar)
+        self.assertNotIn("Export selected Clip", toolbar)
+        timeline = source[source.index('<div class="minimax-edit-timeline"'):source.index('<div class="minimax-current-panel"')]
+        self.assertNotIn("director-add-actions", timeline)
+        self.assertIn("director-clip-assets-column", source)
+        self.assertIn("director-prompt-column", source)
+        self.assertIn("director-settings-column", source)
+        self.assertIn(".director-clip-workspace", css)
+        self.assertIn(".director-shortcuts-popover", css)
+
     def test_runninghub_upload_source_covers_all_project_media_routes(self):
         script = """
 const c=require('./static/js/smart-node-contract.js');

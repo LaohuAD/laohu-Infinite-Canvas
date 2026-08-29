@@ -12751,8 +12751,18 @@ function smartMinimaxBodyHtml(node){
             </div>
             <div class="minimax-transport"></div>
             <div class="minimax-top-actions">
-                <button type="button" data-minimax-export-selected="1" ${selectedResult ? '' : 'disabled'} title="${escapeAttr(capabilityUiText('导出当前 Clip','Export selected Clip'))}"><i data-lucide="download"></i></button>
-                <button type="button" data-minimax-export-full="1" ${hasExportableClip ? '' : 'disabled'} title="${escapeAttr(hasExportableClip ? capabilityUiText('导出独立片段','Export clips') : capabilityUiText('还没有可导出的 Clip','No generated Clips to export'))}"><i data-lucide="file-down"></i></button>
+                <button type="button" class="director-toolbar-action" data-minimax-add-segment="1" title="${escapeAttr(tr('smart.directorAddClip'))}"><i data-lucide="plus"></i><span>${escapeHtml(tr('smart.directorAddClip'))}</span></button>
+                <button type="button" class="director-toolbar-action is-connection" data-minimax-add-connection="1" title="${escapeAttr(tr('smart.directorAddConnectionClip'))}"><i data-lucide="link-2"></i><span>${escapeHtml(tr('smart.directorAddConnectionClip'))}</span></button>
+                <div class="smart-control director-shortcuts-control" data-director-shortcuts="1">
+                    <button type="button" class="smart-pill" aria-haspopup="dialog" aria-expanded="false" title="${escapeAttr(capabilityUiText('导演台快捷键','Director shortcuts'))}"><i data-lucide="keyboard"></i></button>
+                    <div class="smart-popover director-shortcuts-popover" role="dialog" aria-label="${escapeAttr(capabilityUiText('导演台快捷键','Director shortcuts'))}">
+                        <div class="smart-popover-title">${escapeHtml(capabilityUiText('导演台快捷键','Director shortcuts'))}</div>
+                        <p>${escapeHtml(capabilityUiText('仅在选中导演台且鼠标位于时间轴内时生效','Active only when this Director is selected and the pointer is inside its timeline'))}</p>
+                        <dl><div><dt>Control + ${escapeHtml(capabilityUiText('滚轮','Wheel'))}</dt><dd>${escapeHtml(capabilityUiText('缩放时间轴','Zoom timeline'))}</dd></div><div><dt>${escapeHtml(capabilityUiText('滚轮','Wheel'))}</dt><dd>${escapeHtml(capabilityUiText('水平浏览时间轴','Scroll timeline horizontally'))}</dd></div><div><dt>${escapeHtml(capabilityUiText('拖动 Clip','Drag Clip'))}</dt><dd>${escapeHtml(capabilityUiText('移动时间位置','Move in time'))}</dd></div><div><dt>${escapeHtml(capabilityUiText('拖动边缘','Drag edge'))}</dt><dd>${escapeHtml(capabilityUiText('按秒调整时长','Resize in whole seconds'))}</dd></div></dl>
+                    </div>
+                </div>
+                <button type="button" data-minimax-export-selected="1" ${selectedResult ? '' : 'disabled'} title="${escapeAttr(capabilityUiText('下载当前 Clip','Download selected Clip'))}"><i data-lucide="download"></i></button>
+                <button type="button" data-minimax-export-full="1" ${hasExportableClip ? '' : 'disabled'} title="${escapeAttr(hasExportableClip ? capabilityUiText('下载独立片段','Download clips') : capabilityUiText('还没有可下载的 Clip','No generated Clips to download'))}"><i data-lucide="file-down"></i></button>
             </div>
         </div>
         <div class="minimax-wb-body" style="--minimax-library-w:${libraryW}px">
@@ -12772,7 +12782,6 @@ function smartMinimaxBodyHtml(node){
                         <button type="button" data-minimax-play-timeline="1" title="${escapeAttr(capabilityUiText('播放 / 暂停','Play / pause'))}"><i data-lucide="play"></i></button>
                         <button type="button" data-minimax-toggle-mute="1" title="${escapeAttr(node.minimaxMuted ? capabilityUiText('取消静音','Unmute') : capabilityUiText('静音','Mute'))}"><i data-lucide="${node.minimaxMuted ? 'volume-x' : 'volume-2'}"></i></button>
                     </div>
-                    <div class="minimax-add-gutter minimax-ruler-gutter"></div>
                     <div class="minimax-track-label minimax-video-label">${escapeHtml(tr('smart.directorTimeline'))}</div>
                     <div class="director-timeline-scroll" data-director-timeline-scroll="1" data-timeline-scroll-ms="${escapeAttr(node.timelineScrollMs || 0)}">
                         <div class="director-timeline-canvas" style="width:${timelineWidth}">
@@ -12780,10 +12789,6 @@ function smartMinimaxBodyHtml(node){
                             <div class="minimax-track minimax-video-track"><div class="minimax-track-content">${timeline}</div></div>
                             <span class="minimax-playhead" data-minimax-playhead="1" style="left:${playheadPct}%"></span>
                         </div>
-                    </div>
-                    <div class="director-add-actions">
-                        <button type="button" data-minimax-add-segment="1" title="${escapeAttr(tr('smart.directorAddClip'))}"><i data-lucide="plus"></i><span>${escapeHtml(tr('smart.directorAddClip'))}</span></button>
-                        <button type="button" data-minimax-add-connection="1" title="${escapeAttr(tr('smart.directorAddConnectionClip'))}"><i data-lucide="link-2"></i><span>${escapeHtml(tr('smart.directorAddConnectionClip'))}</span></button>
                     </div>
                 </div>
                 <div class="minimax-current-panel">
@@ -12793,18 +12798,21 @@ function smartMinimaxBodyHtml(node){
                             ${selectedRefSummary.length ? selectedRefSummary.map(item => `<span><i data-lucide="${smartMinimaxIconForKind(item.kind)}"></i>${item.count}</span>`).join('') : `<span>${escapeHtml(capabilityUiText('暂无参考','No refs'))}</span>`}
                         </div>
                     </div>
-                    ${connectionInputHtml}
-                    <label class="minimax-prompt-field">
-                        <span><i data-lucide="text-cursor-input"></i>${escapeHtml(capabilityUiText('提示词','Prompt'))}<b class="director-prompt-count ${directorPromptInvalid ? 'is-invalid' : ''}" data-director-prompt-count>${directorPromptState.characters}${directorPromptState.maxChars ? ` / ${directorPromptState.maxChars}` : ''}</b></span>
-                        <textarea data-minimax-prompt="1" ${directorPromptState.minChars ? `minlength="${directorPromptState.minChars}"` : ''} ${directorPromptState.maxChars ? `maxlength="${directorPromptState.maxChars}"` : ''} aria-invalid="${directorPromptInvalid ? 'true' : 'false'}" placeholder="${escapeAttr(capabilityUiText('当前 Clip 的提示词','Prompt for selected Clip'))}">${escapeHtml(selected?.prompt || '')}</textarea>
-                    </label>
-                    <div class="director-input-stack" data-minimax-ref-track="1" data-minimax-active-segment="${escapeAttr(selected?.id || '')}">
-                        <div class="minimax-section-label"><i data-lucide="paperclip"></i><span>${escapeHtml(tr('smart.directorClipInputs'))}</span></div>
-                        ${inputGroups}
-                    </div>
-                    <div class="minimax-clip-parameters">
-                        <div class="minimax-section-label"><i data-lucide="sliders-horizontal"></i><span>${escapeHtml(capabilityUiText('Clip 设置','Clip settings'))}</span></div>
-                        <div class="minimax-settings minimax-segment-fields">
+                    <div class="director-clip-workspace">
+                        <section class="director-clip-assets-column director-input-stack" data-minimax-ref-track="1" data-minimax-active-segment="${escapeAttr(selected?.id || '')}">
+                            <div class="minimax-section-label"><i data-lucide="paperclip"></i><span>${escapeHtml(tr('smart.directorClipInputs'))}</span></div>
+                            ${inputGroups}
+                        </section>
+                        <section class="director-prompt-column">
+                            ${connectionInputHtml}
+                            <label class="minimax-prompt-field">
+                                <span><i data-lucide="text-cursor-input"></i>${escapeHtml(capabilityUiText('提示词','Prompt'))}<b class="director-prompt-count ${directorPromptInvalid ? 'is-invalid' : ''}" data-director-prompt-count>${directorPromptState.characters}${directorPromptState.maxChars ? ` / ${directorPromptState.maxChars}` : ''}</b></span>
+                                <textarea data-minimax-prompt="1" ${directorPromptState.minChars ? `minlength="${directorPromptState.minChars}"` : ''} ${directorPromptState.maxChars ? `maxlength="${directorPromptState.maxChars}"` : ''} aria-invalid="${directorPromptInvalid ? 'true' : 'false'}" placeholder="${escapeAttr(capabilityUiText('当前 Clip 的提示词','Prompt for selected Clip'))}">${escapeHtml(selected?.prompt || '')}</textarea>
+                            </label>
+                        </section>
+                        <section class="director-settings-column minimax-clip-parameters">
+                            <div class="minimax-section-label"><i data-lucide="sliders-horizontal"></i><span>${escapeHtml(capabilityUiText('Clip 设置','Clip settings'))}</span></div>
+                            <div class="minimax-settings minimax-segment-fields">
                             ${isMiniMaxDirectorNode(node) ? `<label class="minimax-wide-setting minimax-engine-setting"><span>${escapeHtml(capabilityUiText('运行来源','Engine'))}</span><select class="minimax-engine-select" data-minimax-engine title="${escapeAttr(capabilityUiText('选择生成来源','Choose generation engine'))}">
                                 <option value="comfyui" ${minimaxEngine === 'comfyui' ? 'selected' : ''}>ComfyUI</option>
                                 <option value="runninghub" ${minimaxEngine === 'runninghub' ? 'selected' : ''}>RunningHub</option>
@@ -12813,7 +12821,8 @@ function smartMinimaxBodyHtml(node){
                             <label><span>${escapeHtml(capabilityUiText('百万像素','Megapixels'))}</span><input type="number" min="0.1" max="2" step="0.1" data-minimax-seg-number="megapixels" value="${escapeAttr(megapixels)}"><b>MP</b></label>
                             <label class="minimax-wide-setting"><span>${escapeHtml(capabilityUiText('画面比例','Aspect ratio'))}</span><select data-minimax-select="aspectRatio">${['16:9 (Widescreen)','9:16 (Portrait)','1:1 (Square)','4:3 (Standard)','3:4 (Portrait)','21:9 (Ultrawide)'].map(value => `<option value="${escapeAttr(value)}" ${value === aspectRatio ? 'selected' : ''}>${escapeHtml(value.split(' ')[0])}</option>`).join('')}</select></label>` : directorParameterHtml}
                             <button class="minimax-run ${selected?.running ? 'is-stop' : ''}" type="button" data-minimax-run="${escapeAttr(node.id)}" data-director-base-blocked="${directorRunBlocked && !directorPromptInvalid ? '1' : '0'}" ${directorRunBlocked ? 'disabled' : ''} title="${escapeAttr(directorRunTitle)}"><i data-lucide="${selected?.running ? 'loader-2' : 'sparkles'}"></i><span>${escapeHtml(selected?.running ? capabilityUiText('运行中','Running') : capabilityUiText('生成 Clip','Generate Clip'))}</span></button>
-                        </div>
+                            </div>
+                        </section>
                     </div>
                 </div>
             </div>
@@ -14879,6 +14888,20 @@ function bindMinimaxNodeControls(el, node){
             focusMinimaxNode();
             node.projectName = input.value.slice(0, 120);
             scheduleSave();
+        };
+    });
+    el.querySelectorAll('[data-director-shortcuts] > .smart-pill').forEach(trigger => {
+        trigger.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            focusMinimaxNode();
+            const control = trigger.closest('[data-director-shortcuts]');
+            const wasPinned = control?.classList.contains('pinned');
+            closeAllSmartPopovers();
+            if(!control || wasPinned) return;
+            control.classList.add('pinned');
+            trigger.setAttribute('aria-expanded', 'true');
+            requestAnimationFrame(() => positionPinnedSmartPopover(control));
         };
     });
     el.querySelectorAll('[data-minimax-segment]').forEach(btn => {
@@ -24983,10 +25006,10 @@ async function exportMinimaxTimeline(node, options={}){
             method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({project_name:node.projectName || capabilityUiText('导演台工程','Director project'), clips})
-        }).then(async r => { if(!r.ok) throw new Error(await smartResponseErrorMessage(r, capabilityUiText('导出失败','Export failed'))); return r.json(); });
+        }).then(async r => { if(!r.ok) throw new Error(await smartResponseErrorMessage(r, capabilityUiText('下载失败','Download failed'))); return r.json(); });
         if(result?.url) downloadPreviewFile({url:result.url, name:result.name || 'director-clips.zip', kind:'file'});
     } catch(e) {
-        toast((e.message || capabilityUiText('导出失败','Export failed')).slice(0, 220));
+        toast((e.message || capabilityUiText('下载失败','Download failed')).slice(0, 220));
     }
 }
 
