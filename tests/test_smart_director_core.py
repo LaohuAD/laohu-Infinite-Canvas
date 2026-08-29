@@ -257,6 +257,92 @@ console.log(JSON.stringify({director,labels:d.referenceLabels(director.clips[0])
         )
         self.assertEqual(data["labels"][1]["assetId"], "image-a")
 
+    def test_fresh_clip_is_selected_without_inheriting_previous_state(self):
+        data = run_node("""
+const d=require('./static/js/smart-director-core.js');
+const source=d.normalizeDirector({
+  clips:[{
+    id:'clip-a',startMs:0,durationMs:8000,prompt:'旧提示',
+    inputRefs:[{id:'image-a',kind:'image',url:'/image-a.png'}],
+    generation:{providerId:'provider-a',model:'model-a',mode:'image_to_video',params:{seed:1}},
+    results:[{id:'result-a',url:'/result-a.mp4'}],currentResultId:'result-a'
+  }],
+  selectedClipId:'clip-a'
+});
+const result=d.appendFreshOrdinaryClip(source,{id:'clip-b',durationMs:8000});
+console.log(JSON.stringify(result));
+""")
+
+        self.assertEqual(data["selectedClipId"], "clip-b")
+        self.assertEqual(data["clips"][1]["startMs"], 8000)
+        self.assertEqual(data["clips"][1]["durationMs"], 8000)
+        self.assertEqual(data["clips"][1]["prompt"], "")
+        self.assertEqual(data["clips"][1]["inputRefs"], [])
+        self.assertEqual(data["clips"][1]["generation"]["providerId"], "")
+        self.assertEqual(data["clips"][1]["generation"]["model"], "")
+        self.assertEqual(data["clips"][1]["generation"]["params"], {})
+        self.assertEqual(data["clips"][1]["results"], [])
+        self.assertEqual(data["clips"][0]["inputRefs"][0]["id"], "image-a")
+        self.assertEqual(data["clips"][0]["prompt"], "旧提示")
+
+    def test_resize_pushes_right_but_shrink_keeps_gap(self):
+        data = run_node("""
+const d=require('./static/js/smart-director-core.js');
+const clips=[
+  {id:'clip-a',type:'ordinary',startMs:0,durationMs:8000},
+  {id:'clip-b',type:'ordinary',startMs:8000,durationMs:8000}
+];
+const grown=d.resizeOrdinaryClip(clips,'clip-a',{edge:'right',timeMs:15000});
+const shrunk=d.resizeOrdinaryClip(grown,'clip-a',{edge:'right',timeMs:8000});
+console.log(JSON.stringify({
+  grown,
+  shrunk,
+  extent:d.timelineExtentMs(shrunk,{minimumMs:16000,viewportEndMs:30000,paddingMs:4000})
+}));
+""")
+
+        self.assertEqual(data["grown"][0]["durationMs"], 15000)
+        self.assertEqual(data["grown"][1]["startMs"], 15000)
+        self.assertEqual(data["shrunk"][0]["durationMs"], 8000)
+        self.assertEqual(data["shrunk"][1]["startMs"], 15000)
+        self.assertEqual(data["extent"], 30000)
+
+    def test_move_right_pushes_following_clips_and_move_left_clamps(self):
+        data = run_node("""
+const d=require('./static/js/smart-director-core.js');
+const clips=[
+  {id:'clip-a',type:'ordinary',startMs:0,durationMs:5000},
+  {id:'clip-b',type:'ordinary',startMs:7000,durationMs:5000},
+  {id:'clip-c',type:'ordinary',startMs:12000,durationMs:5000},
+  {id:'bridge',type:'connection',startMs:4500,durationMs:3000}
+];
+const movedRight=d.moveOrdinaryClip(clips,'clip-b',10000);
+const movedLeft=d.moveOrdinaryClip(clips,'clip-b',1000);
+console.log(JSON.stringify({movedRight,movedLeft}));
+""")
+
+        self.assertEqual(data["movedRight"][1]["startMs"], 10000)
+        self.assertEqual(data["movedRight"][2]["startMs"], 15000)
+        self.assertEqual(data["movedRight"][3]["startMs"], 4500)
+        self.assertEqual(data["movedLeft"][1]["startMs"], 5000)
+        self.assertEqual(data["movedLeft"][0]["startMs"], 0)
+
+    def test_duration_constraint_uses_supported_integer_seconds(self):
+        data = run_node("""
+const d=require('./static/js/smart-director-core.js');
+console.log(JSON.stringify({
+  choices:d.constrainDurationMs(7300,{optionsMs:[5000,8000,10000]}),
+  rangeLow:d.constrainDurationMs(2400,{minMs:3000,maxMs:12000,stepMs:1000}),
+  rangeStep:d.constrainDurationMs(7600,{minMs:3000,maxMs:12000,stepMs:1000}),
+  rangeHigh:d.constrainDurationMs(14000,{minMs:3000,maxMs:12000,stepMs:1000})
+}));
+""")
+
+        self.assertEqual(data["choices"], 8000)
+        self.assertEqual(data["rangeLow"], 3000)
+        self.assertEqual(data["rangeStep"], 8000)
+        self.assertEqual(data["rangeHigh"], 12000)
+
 
 if __name__ == "__main__":
     unittest.main()

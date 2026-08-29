@@ -165,6 +165,126 @@
         };
     }
 
+    function constrainDurationMs(value, constraint={}){
+        const source = constraint && typeof constraint === 'object' ? constraint : {};
+        const rawOptions = Array.isArray(source.optionsMs) ? source.optionsMs : [];
+        const minMs = Math.max(1000, nonNegativeMs(source.minMs, 1000));
+        const configuredMax = nonNegativeMs(source.maxMs);
+        const maxMs = configuredMax > 0 ? Math.max(minMs, configuredMax) : Number.MAX_SAFE_INTEGER;
+        const options = [...new Set(rawOptions.map(option => nonNegativeMs(option)).filter(option => option >= minMs && option <= maxMs))].sort((left, right) => left - right);
+        const requested = Math.max(minMs, Math.min(maxMs, nonNegativeMs(value, minMs)));
+        if(options.length){
+            return options.reduce((closest, option) => (
+                Math.abs(option - requested) < Math.abs(closest - requested) ? option : closest
+            ), options[0]);
+        }
+        const stepMs = Math.max(1000, nonNegativeMs(source.stepMs, 1000));
+        const snapped = minMs + Math.round((requested - minMs) / stepMs) * stepMs;
+        return Math.max(minMs, Math.min(maxMs, snapped));
+    }
+
+    function orderedOrdinaryIds(clips){
+        return (Array.isArray(clips) ? clips : [])
+            .map((clip, index) => ({clip:normalizeClip(clip, index), index}))
+            .filter(item => item.clip.type !== 'connection')
+            .sort((left, right) => (left.clip.startMs - right.clip.startMs) || (left.index - right.index))
+            .map(item => item.clip.id);
+    }
+
+    function pushFollowingOrdinaryClipsRight(clips, orderedIds, changedIndex){
+        const result = clips;
+        const byId = new Map(result.map(clip => [clip.id, clip]));
+        const changed = byId.get(orderedIds[changedIndex]);
+        if(!changed) return result;
+        let cursor = clipEndMs(changed);
+        orderedIds.slice(changedIndex + 1).forEach(id => {
+            const clip = byId.get(id);
+            if(!clip) return;
+            if(clip.startMs < cursor) clip.startMs = cursor;
+            cursor = clipEndMs(clip);
+        });
+        return result;
+    }
+
+    function moveOrdinaryClip(clips, clipId, targetStartMs){
+        const source = Array.isArray(clips) ? clips : [];
+        const result = source.map((clip, index) => normalizeClip(clip, index));
+        const orderedIds = orderedOrdinaryIds(source);
+        const changedIndex = orderedIds.indexOf(String(clipId || ''));
+        if(changedIndex < 0) return result;
+        const byId = new Map(result.map(clip => [clip.id, clip]));
+        const changed = byId.get(orderedIds[changedIndex]);
+        const previous = changedIndex > 0 ? byId.get(orderedIds[changedIndex - 1]) : null;
+        const previousEndMs = previous ? clipEndMs(previous) : 0;
+        changed.startMs = Math.max(previousEndMs, Math.round(nonNegativeMs(targetStartMs) / 1000) * 1000);
+        return pushFollowingOrdinaryClipsRight(result, orderedIds, changedIndex);
+    }
+
+    function resizeOrdinaryClip(clips, clipId, options={}){
+        const source = Array.isArray(clips) ? clips : [];
+        const result = source.map((clip, index) => normalizeClip(clip, index));
+        const orderedIds = orderedOrdinaryIds(source);
+        const changedIndex = orderedIds.indexOf(String(clipId || ''));
+        if(changedIndex < 0) return result;
+        const byId = new Map(result.map(clip => [clip.id, clip]));
+        const changed = byId.get(orderedIds[changedIndex]);
+        const edge = options.edge === 'left' ? 'left' : 'right';
+        const constraint = options.constraint && typeof options.constraint === 'object' ? options.constraint : {};
+        if(edge === 'left'){
+            const fixedEndMs = clipEndMs(changed);
+            const previous = changedIndex > 0 ? byId.get(orderedIds[changedIndex - 1]) : null;
+            const previousEndMs = previous ? clipEndMs(previous) : 0;
+            const desiredStartMs = Math.max(previousEndMs, Math.round(nonNegativeMs(options.timeMs) / 1000) * 1000);
+            const maximumDurationMs = Math.max(1000, fixedEndMs - previousEndMs);
+            const configuredMax = nonNegativeMs(constraint.maxMs);
+            const limitedConstraint = {
+                ...constraint,
+                maxMs:configuredMax > 0 ? Math.min(configuredMax, maximumDurationMs) : maximumDurationMs,
+                optionsMs:Array.isArray(constraint.optionsMs)
+                    ? constraint.optionsMs.filter(value => nonNegativeMs(value) <= maximumDurationMs)
+                    : undefined
+            };
+            changed.durationMs = constrainDurationMs(fixedEndMs - desiredStartMs, limitedConstraint);
+            changed.startMs = Math.max(previousEndMs, fixedEndMs - changed.durationMs);
+            return result;
+        }
+        changed.durationMs = constrainDurationMs(nonNegativeMs(options.timeMs) - changed.startMs, constraint);
+        return pushFollowingOrdinaryClipsRight(result, orderedIds, changedIndex);
+    }
+
+    function timelineExtentMs(clips, options={}){
+        const minimumMs = nonNegativeMs(options.minimumMs, 16000);
+        const viewportEndMs = nonNegativeMs(options.viewportEndMs);
+        const paddingMs = nonNegativeMs(options.paddingMs, 4000);
+        const rightEdgeMs = Math.max(0, ...(Array.isArray(clips) ? clips : []).map(clipEndMs));
+        return Math.max(minimumMs, viewportEndMs, rightEdgeMs + paddingMs);
+    }
+
+    function appendFreshOrdinaryClip(value, options={}){
+        const director = normalizeDirector(value);
+        const startMs = options.startMs === undefined
+            ? Math.max(0, ...director.clips.map(clipEndMs))
+            : nonNegativeMs(options.startMs);
+        const durationMs = constrainDurationMs(options.durationMs ?? 8000, options.durationConstraint || {});
+        const clip = normalizeClip({
+            id:String(options.id || ''),
+            type:'ordinary',
+            startMs,
+            durationMs,
+            createdAt:finiteNumber(options.createdAt, Date.now()),
+            prompt:'',
+            inputRefs:[],
+            disabledInputRefs:[],
+            timelineInputs:[],
+            generation:{providerId:'', model:'', mode:'', params:{}, parameterDrafts:{}},
+            results:[],
+            currentResultId:''
+        }, director.clips.length);
+        director.clips.push(clip);
+        director.selectedClipId = clip.id;
+        return director;
+    }
+
     function normalizeAsset(value, index=0){
         const source = value && typeof value === 'object' && !Array.isArray(value) ? clone(value) : {};
         return {
@@ -202,7 +322,10 @@
             projectName:String(source.projectName || source.project_name || ''),
             assets,
             clips:(Array.isArray(source.clips) ? source.clips : []).map(normalizeClip),
-            selectedClipId:String(source.selectedClipId || source.selected_clip_id || '')
+            selectedClipId:String(source.selectedClipId || source.selected_clip_id || ''),
+            timelineZoom:Math.max(0.5, Math.min(8, finiteNumber(source.timelineZoom ?? source.timeline_zoom, 1))),
+            timelineScrollMs:nonNegativeMs(source.timelineScrollMs ?? source.timeline_scroll_ms),
+            timelineMinViewMs:Math.max(8000, nonNegativeMs(source.timelineMinViewMs ?? source.timeline_min_view_ms, 16000))
         };
     }
 
@@ -517,6 +640,11 @@
         NODE_TYPES,
         normalizeClip,
         normalizeDirector,
+        constrainDurationMs,
+        moveOrdinaryClip,
+        resizeOrdinaryClip,
+        timelineExtentMs,
+        appendFreshOrdinaryClip,
         selectGenerationModel,
         isolatedVideoRunSettings,
         assetKey,
