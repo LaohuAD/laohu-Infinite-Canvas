@@ -117,6 +117,17 @@ console.log(JSON.stringify({
         self.assertIn("data-director-rendered-segment", source)
         self.assertIn("renderedSegmentId !== node.selectedSegmentId", source)
 
+    def test_duration_text_entry_commits_once_instead_of_pushing_on_intermediate_input(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        bind_start = source.index("function bindMinimaxNodeControls")
+        handler = source[
+            source.index("el.querySelectorAll('[data-minimax-seg-number]')", bind_start):
+            source.index("const prompt = el.querySelector('[data-minimax-prompt]')", bind_start)
+        ]
+
+        self.assertIn("if(key === 'duration') return;", handler)
+        self.assertIn("input.onchange = updateSegmentNumber", handler)
+
     def test_escape_is_safe_before_the_audio_preview_exists(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
         closer = source[

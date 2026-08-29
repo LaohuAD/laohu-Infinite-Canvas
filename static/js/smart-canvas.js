@@ -15402,7 +15402,7 @@ function bindMinimaxNodeControls(el, node){
     });
     el.querySelectorAll('[data-minimax-seg-number]').forEach(input => {
         const key = input.dataset.minimaxSegNumber;
-        input.oninput = input.onchange = e => {
+        const updateSegmentNumber = e => {
             e.stopPropagation();
             focusMinimaxNode();
             const seg = smartMinimaxSelectedSegment(node);
@@ -15436,6 +15436,14 @@ function bindMinimaxNodeControls(el, node){
             scheduleSave();
             if(e.type === 'change') render();
         };
+        input.oninput = e => {
+            e.stopPropagation();
+            focusMinimaxNode();
+            // 时长必须等本次编辑完成后一次提交，避免清空/逐字输入的中间值反复挤动后续 Clip。
+            if(key === 'duration') return;
+            updateSegmentNumber(e);
+        };
+        input.onchange = updateSegmentNumber;
     });
     const prompt = el.querySelector('[data-minimax-prompt]');
     if(prompt){
