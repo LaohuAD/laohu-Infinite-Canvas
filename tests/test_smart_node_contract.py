@@ -58,6 +58,23 @@ console.log(JSON.stringify({
         self.assertEqual(data["aiApp"], "smart-ai-app")
         self.assertEqual(data["comfyWorkflow"], "smart-comfy-workflow")
         self.assertEqual(data["resultGroup"], "smart-result-group")
+        self.assertEqual(data["videoDirector"], "smart-video-director")
+        self.assertEqual(data["minimaxDirector"], "smart-minimax-director")
+
+    def test_materials_connect_to_both_director_entries(self):
+        data = run_node("""
+const c=require('./static/js/smart-node-contract.js');
+const material={id:'asset',type:c.NODE_TYPES.material,images:[{kind:'video',url:'/api/materials/asset'}]};
+console.log(JSON.stringify({
+  generic:c.canConnectNodes(material,{id:'generic',type:c.NODE_TYPES.videoDirector}),
+  minimax:c.canConnectNodes(material,{id:'minimax',type:c.NODE_TYPES.minimaxDirector}),
+  legacy:c.canConnectNodes(material,{id:'legacy',type:'smart-minimax'})
+}));
+""")
+
+        self.assertTrue(data["generic"])
+        self.assertTrue(data["minimax"])
+        self.assertTrue(data["legacy"])
 
     def test_runninghub_upload_source_covers_all_project_media_routes(self):
         script = """

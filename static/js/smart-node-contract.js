@@ -16,6 +16,8 @@
         musicGenerator:'smart-music-generator',
         aiApp:'smart-ai-app',
         comfyWorkflow:'smart-comfy-workflow',
+        videoDirector:'smart-video-director',
+        minimaxDirector:'smart-minimax-director',
         angleControl:'smart-angle-control',
         imageCompare:'smart-image-compare',
         resultGroup:'smart-result-group'
@@ -153,7 +155,13 @@
         if(isMaterialNode(fromNode)){
             if(isToolNode(toNode)) return (fromNode.images || []).some(item => mediaKindForReference(item) === 'image' && (item.url || item.path || item.src || item.uri));
             if(isGeneratedMaterialNode(toNode)) return true;
-            return isExecutionNode(toNode) || ['smart-prompt', 'smart-loop', 'smart-minimax'].includes(toType);
+            return isExecutionNode(toNode) || [
+                'smart-prompt',
+                'smart-loop',
+                'smart-minimax',
+                NODE_TYPES.videoDirector,
+                NODE_TYPES.minimaxDirector
+            ].includes(toType);
         }
         if(isExecutionNode(fromNode)) return isMaterialNode(toNode);
         if(isToolNode(fromNode)){
