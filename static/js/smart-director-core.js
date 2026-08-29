@@ -35,6 +35,49 @@
         return nonNegativeMs(clip?.startMs) + Math.max(1, nonNegativeMs(clip?.durationMs, 5000)) / 2;
     }
 
+    function promptState(profile, value){
+        const inputs = profile?.inputs && typeof profile.inputs === 'object' ? profile.inputs : {};
+        const promptSpec = inputs.prompt || Object.values(inputs).find(spec => (
+            String(spec?.media_type || '').toLowerCase() === 'text'
+            && String(spec?.role || '').toLowerCase() === 'prompt'
+        )) || {};
+        const required = Math.max(0, Number(promptSpec.min) || 0) > 0;
+        const minChars = Math.max(0, Number(promptSpec.min_chars) || (required ? 1 : 0));
+        const maxChars = Math.max(0, Number(promptSpec.max_chars) || 0);
+        const characters = [...String(value || '')].length;
+        const tooShort = characters < minChars;
+        const tooLong = maxChars > 0 && characters > maxChars;
+        return {
+            characters,
+            minChars,
+            maxChars,
+            remaining:maxChars > 0 ? maxChars - characters : null,
+            tooShort,
+            tooLong,
+            valid:!tooShort && !tooLong
+        };
+    }
+
+    function operationLabel(value, language='zh', compact=false){
+        const operation = String(value || '').trim().toLowerCase().replace(/-/g, '_');
+        const labels = {
+            text_to_video:['文本生成视频','Text to video','文生视频','Text→Video'],
+            text_to_video_or_image_to_video:['文本或图片生成视频','Text or image to video','文/图生视频','Text/Image→Video'],
+            image_to_video:['图片生成视频','Image to video','图生视频','Image→Video'],
+            start_end_to_video:['首尾帧生成视频','Start and end frames','首尾帧','Start/End'],
+            frames_to_video:['多帧生成视频','Frames to video','多帧生成','Frames'],
+            reference_to_video:['参考素材生成视频','Reference to video','参考生成','Reference'],
+            multimodal_to_video:['多模态生成视频','Multimodal to video','多模态','Multimodal'],
+            compatible_video:['兼容视频生成','Compatible video generation','兼容生成','Compatible'],
+            video_edit:['视频编辑','Video editing','视频编辑','Video edit']
+        };
+        const known = labels[operation];
+        if(known) return language === 'en' ? known[compact ? 3 : 1] : known[compact ? 2 : 0];
+        const fallback = operation.replace(/_/g, ' ').trim();
+        if(!fallback) return language === 'en' ? 'Capability-based' : '由模型能力判断';
+        return language === 'en' ? `${fallback.charAt(0).toUpperCase()}${fallback.slice(1)}` : fallback;
+    }
+
     function normalizeGeneration(value){
         const source = value && typeof value === 'object' && !Array.isArray(value) ? clone(value) : {};
         return {
@@ -363,6 +406,27 @@
         return String(conflict?.id || '');
     }
 
+    function connectionPlacement(selectedClipId, clips, edgeOverlapMs=500){
+        const ordinary = (Array.isArray(clips) ? clips : [])
+            .filter(clip => clip?.type !== 'connection')
+            .map(normalizeClip)
+            .sort((left, right) => left.startMs - right.startMs || left.id.localeCompare(right.id));
+        if(!ordinary.length) return {startMs:0, durationMs:Math.max(1, nonNegativeMs(edgeOverlapMs, 500) * 2)};
+        const selectedIndex = Math.max(0, ordinary.findIndex(clip => clip.id === String(selectedClipId || '')));
+        const selected = ordinary[selectedIndex] || ordinary.at(-1);
+        const next = ordinary[selectedIndex + 1] || null;
+        const previous = ordinary[selectedIndex - 1] || null;
+        const left = next ? selected : (previous || selected);
+        const right = next || (previous ? selected : null);
+        const overlap = Math.max(1, nonNegativeMs(edgeOverlapMs, 500));
+        const leftEndMs = clipEndMs(left);
+        const startMs = Math.max(0, leftEndMs - overlap);
+        const endMs = right
+            ? Math.max(startMs + overlap * 2, right.startMs + overlap)
+            : startMs + overlap * 2;
+        return {startMs, durationMs:Math.max(1, endMs - startMs)};
+    }
+
     function deriveConnectionInputs(connectionClip, ordinaryClips, thresholdMs=CONNECTION_FRAME_THRESHOLD_MS){
         const clip = normalizeClip({...connectionClip, type:'connection'});
         const originalStartMs = clip.startMs;
@@ -462,9 +526,12 @@
         migrateLegacyMinimaxNode,
         clipEndMs,
         clipMidpoint,
+        promptState,
+        operationLabel,
         compareClipExportOrder,
         exportEntries,
         connectionClipConflict,
+        connectionPlacement,
         deriveConnectionInputs,
         connectionDependencyState
     });
