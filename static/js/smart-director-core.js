@@ -7,6 +7,7 @@
 
     const SCHEMA_VERSION = 1;
     const CONNECTION_FRAME_THRESHOLD_MS = 1000;
+    const PARAMETER_UNSET = '__canvas_unset__';
     const NODE_TYPES = Object.freeze({
         generic:'smart-video-director',
         minimax:'smart-minimax-director',
@@ -43,7 +44,59 @@
             mode:String(source.mode || source.executionMode || source.execution_mode || ''),
             params:source.params && typeof source.params === 'object' && !Array.isArray(source.params)
                 ? clone(source.params)
+                : {},
+            parameterDrafts:source.parameterDrafts && typeof source.parameterDrafts === 'object' && !Array.isArray(source.parameterDrafts)
+                ? clone(source.parameterDrafts)
                 : {}
+        };
+    }
+
+    function selectGenerationModel(value, modelId, operation=''){
+        const generation = normalizeGeneration(value);
+        const previousModel = String(generation.model || '').trim();
+        const nextModel = String(modelId || '').trim();
+        if(previousModel) generation.parameterDrafts[previousModel] = clone(generation.params || {});
+        generation.model = nextModel;
+        generation.mode = String(operation || '');
+        generation.params = clone(generation.parameterDrafts[nextModel] || {});
+        return generation;
+    }
+
+    // 导演台运行设置必须与普通视频节点的“最近设置”隔离，避免临时链接和模式状态串入 Clip。
+    function isolatedVideoRunSettings(value){
+        const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+        const modelId = String(source.modelId || '').trim();
+        const rawParams = source.params && typeof source.params === 'object' && !Array.isArray(source.params)
+            ? clone(source.params)
+            : {};
+        const submittedSource = source.submittedParams && typeof source.submittedParams === 'object' && !Array.isArray(source.submittedParams)
+            ? source.submittedParams
+            : {};
+        const submittedParams = Object.fromEntries(Object.entries(submittedSource).filter(([, value]) => (
+            value !== PARAMETER_UNSET && value !== undefined && value !== null && value !== ''
+        )));
+        const duration = Math.max(1, Math.round(finiteNumber(source.duration, 5)));
+        const ratio = String(source.aspectRatio || '16:9');
+        return {
+            ...submittedParams,
+            engine:'api',
+            apiKind:'video',
+            provider_id:'',
+            model:'',
+            videoProvider:String(source.providerId || ''),
+            videoFamilyId:String(source.familyId || ''),
+            videoModel:modelId,
+            videoDuration:duration,
+            videoAspect:ratio,
+            videoResolution:'',
+            videoUseFrameRoles:Boolean(source.useFrameRoles),
+            videoTempShLinks:[],
+            videoMultimodal:false,
+            _videoMultimodalUserSet:false,
+            videoTrustedAsset:false,
+            videoTrustedSource:'library',
+            capabilityParameters:modelId ? {[modelId]:rawParams} : {},
+            _directorExecutionMode:String(source.mode || '')
         };
     }
 
@@ -390,15 +443,18 @@
                 }
             }
         });
-        return {ready:missing.length === 0, needsRegeneration:stale.length > 0, missing, stale, derived};
+        return {ready:derived.inputs.length > 0 && missing.length === 0, needsRegeneration:stale.length > 0, missing, stale, derived};
     }
 
     return Object.freeze({
         SCHEMA_VERSION,
         CONNECTION_FRAME_THRESHOLD_MS,
+        PARAMETER_UNSET,
         NODE_TYPES,
         normalizeClip,
         normalizeDirector,
+        selectGenerationModel,
+        isolatedVideoRunSettings,
         assetKey,
         registerProjectAssets,
         attachAssetsToClip,

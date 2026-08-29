@@ -101,6 +101,13 @@ console.log(JSON.stringify({
         self.assertIn("smartMinimaxDynamicParams(node, activeSegment)", runner)
         self.assertIn("activeSegment.running = true", runner)
         self.assertNotIn("node.running = true", runner)
+        self.assertIn("renderCapabilityParameterBundleForSource(profile, smartDirectorCapabilityParameterSource", source)
+        generic_settings = source[source.index("function smartDirectorGenericRunSettings"):source.index("function smartMinimaxRunSnapshot")]
+        self.assertIn("SMART_DIRECTOR_CORE.isolatedVideoRunSettings", generic_settings)
+        self.assertNotIn("smartSettingsForNode", generic_settings)
+        director_renderer = source[source.index("function smartMinimaxBodyHtml"):source.index("function nodeBodyHtml")]
+        self.assertIn("directorParameterHtml", director_renderer)
+        self.assertNotIn('${isMiniMaxDirectorNode(node) ? \'\' : \'\'}<label><span>Duration</span>', director_renderer)
         self.assertIn("/api/smart-canvas/director-export", exporter)
         self.assertNotIn("/api/smart-canvas/minimax-export", exporter)
 

@@ -4179,10 +4179,10 @@ function renderJimengUpscaleSetting(){
     const description = capabilityUiText('决定是否在生成完成后继续放大图片，以及放大后的目标清晰度。开启会增加处理时间，并可能产生额外费用。','Controls whether the generated image is upscaled and its target clarity. Enabling it adds processing time and may add cost.');
     return `<section class="capability-setting-row"><div class="capability-setting-label"><span>${escapeHtml(label)}</span>${renderCapabilityParameterHelp(label, description)}</div><div class="capability-option-grid">${JIMENG_UPSCALE_RESOLUTIONS.map(value => `<button type="button" class="capability-option ${value === current ? 'active' : ''}" data-smart-param="jimengUpscaleRes" data-smart-value="${escapeAttr(value)}">${escapeHtml(value.toUpperCase())}</button>`).join('')}</div></section>`;
 }
-function renderCapabilityParameterBundle(profile, excluded=[]){
+function renderCapabilityParameterBundleForSource(profile, source, excluded=[], extraSettings=''){
     if(!profile || profile.validation_mode !== 'strict') return '';
     const excludedKeys = new Set(excluded || []);
-    const values = capabilityParameterValues(profile);
+    const values = capabilityParameterValues(profile, source);
     const entries = Object.entries(profile.parameters || {})
         .filter(([key, spec]) => !excludedKeys.has(key) && spec?.ui_hidden !== true)
         .map(([key, spec]) => renderCapabilityParameterEditor(key, spec, profile, values));
@@ -4191,12 +4191,15 @@ function renderCapabilityParameterBundle(profile, excluded=[]){
     const shortcuts = entries.filter(entry => entry.semantic).sort((left, right) => shortcutPriority(left) - shortcutPriority(right));
     const orderedShortcuts = shortcuts;
     const settingsEntries = entries.filter(entry => !entry.semantic && entry.key !== 'count');
-    const extraSettings = profile?.node_type === 'image_generation' && isJimengProviderId(settings.provider_id) ? renderJimengUpscaleSetting() : '';
     return {
         markup:orderedShortcuts.map(entry => renderCapabilityParameterControl(entry.key, entry.label, profile.parameters[entry.key], profile, entry.value, entry.unset, entry.body, entry.extraClass)).join(''),
         settingsControl:renderCapabilitySettingsControl(settingsEntries, extraSettings),
         layout:{key:capabilityLayoutKey(profile), mode:'grid', order:orderedShortcuts.map(entry => entry.key)}
     };
+}
+function renderCapabilityParameterBundle(profile, excluded=[]){
+    const extraSettings = profile?.node_type === 'image_generation' && isJimengProviderId(settings.provider_id) ? renderJimengUpscaleSetting() : '';
+    return renderCapabilityParameterBundleForSource(profile, settings, excluded, extraSettings);
 }
 function renderGenericCapabilityParameters(profile, excluded=[]){
     const bundle = renderCapabilityParameterBundle(profile, excluded);
@@ -11935,9 +11938,63 @@ function smartDirectorCapabilityState(seg){
     const refs = smartDirectorCapabilityRefs(seg);
     const inputCounts = {text:1, image:imageRefsOnly(refs).length, video:videoRefsOnly(refs).length, audio:audioRefsOnly(refs).length};
     const inputRoles = capabilityInputRoles(refs, true);
-    const parameters = {...(seg?.generation?.params || {})};
-    if(seg?.generation?.mode) parameters.__execution_mode = seg.generation.mode;
+    // 候选模型只按真实输入筛选。上一个模型留下的模式或参数草稿不能让其他模型从列表中消失。
+    const parameters = {};
     return {refs, inputCounts, inputRoles, parameters};
+}
+function smartDirectorCapabilityParameterSource(seg, profile=null){
+    const modelId = String(profile?.model_id || seg?.generation?.model || '').trim();
+    const params = seg?.generation?.params && typeof seg.generation.params === 'object' ? seg.generation.params : {};
+    return {capabilityParameters:modelId ? {[modelId]:params} : {}};
+}
+function smartDirectorCapabilityParameterBundle(seg, profile){
+    if(!seg || !profile) return null;
+    return renderCapabilityParameterBundleForSource(profile, smartDirectorCapabilityParameterSource(seg, profile));
+}
+function smartDirectorCoerceCapabilityValue(profile, key, raw, typeOverride=''){
+    const type = String(typeOverride || profile?.parameters?.[key]?.type || 'text').toLowerCase();
+    if(type === 'boolean') return raw === true || String(raw).toLowerCase() === 'true';
+    if(type === 'integer') return Math.round(Number(raw));
+    if(type === 'number') return Number(raw);
+    return raw;
+}
+function smartDirectorSetCapabilityParameter(seg, profile, key, value){
+    if(!seg || !profile || !key) return;
+    seg.generation = seg.generation && typeof seg.generation === 'object' ? seg.generation : {providerId:'', model:'', mode:'', params:{}};
+    seg.generation.params = seg.generation.params && typeof seg.generation.params === 'object' ? seg.generation.params : {};
+    seg.generation.params[key] = value;
+    const semantic = capabilityParameterSemantic(key, profile.parameters?.[key] || {});
+    if(semantic === 'duration' && value !== CAPABILITY_PARAMETER_UNSET && Number.isFinite(Number(value)) && Number(value) > 0){
+        seg.durationMs = Math.max(1, Math.round(Number(value) * 1000));
+        seg.duration = seg.durationMs / 1000;
+        seg.trimOutMs = seg.durationMs;
+        seg.trimOut = seg.duration;
+    }
+}
+function smartDirectorEnsureCapabilityParameterDefaults(seg, profile){
+    if(!seg || !profile) return;
+    seg.generation = seg.generation && typeof seg.generation === 'object' ? seg.generation : {providerId:'', model:'', mode:'', params:{}};
+    seg.generation.params = seg.generation.params && typeof seg.generation.params === 'object' ? seg.generation.params : {};
+    const durationEntry = Object.entries(profile.parameters || {}).find(([key, spec]) => capabilityParameterSemantic(key, spec) === 'duration');
+    const durationWasMissing = Boolean(durationEntry && seg.generation.params[durationEntry[0]] === undefined);
+    const values = capabilityParameterValues(profile, smartDirectorCapabilityParameterSource(seg, profile));
+    Object.entries(values).forEach(([key, value]) => {
+        if(seg.generation.params[key] === undefined) seg.generation.params[key] = value;
+    });
+    if(durationEntry && durationWasMissing){
+        const value = seg.generation.params[durationEntry[0]];
+        if(value !== CAPABILITY_PARAMETER_UNSET && Number.isFinite(Number(value)) && Number(value) > 0){
+            seg.durationMs = Math.max(1, Math.round(Number(value) * 1000));
+            seg.duration = seg.durationMs / 1000;
+            seg.trimOutMs = seg.durationMs;
+            seg.trimOut = seg.duration;
+        }
+    }
+}
+function smartDirectorSelectCapabilityModel(seg, modelId, profile=null){
+    if(!seg) return;
+    seg.generation = SMART_DIRECTOR_CORE.selectGenerationModel(seg.generation, modelId, profile?.operation || '');
+    if(profile) smartDirectorEnsureCapabilityParameterDefaults(seg, profile);
 }
 function smartMinimaxLightMediaHtml(item, label = 'Reference'){
     const kind = mediaKindForItem(item);
@@ -12425,7 +12482,7 @@ function smartMinimaxBodyHtml(node){
             <div class="minimax-clip-meta"><b>${escapeHtml(isConnection ? tr('smart.directorConnectionClip') : `Clip ${index + 1}`)}</b><span>${derivedLabel ? escapeHtml(derivedLabel) : `${timeLabel(start)} - ${timeLabel(start + duration)}`}</span></div>
             ${result ? `<span class="minimax-segment-result"><i data-lucide="video"></i></span>` : ''}
             ${refCount ? `<span class="minimax-clip-ref-count"><i data-lucide="paperclip"></i>${refCount}</span>` : ''}
-            ${node.segments.length > 1 ? `<button type="button" class="minimax-clip-delete" data-minimax-segment-delete="${escapeAttr(seg.id)}" title="Delete"><i data-lucide="trash-2"></i></button>` : ''}
+            ${node.segments.length > 1 ? `<button type="button" class="minimax-clip-delete" data-minimax-segment-delete="${escapeAttr(seg.id)}" title="${escapeAttr(capabilityUiText('删除','Delete'))}"><i data-lucide="trash-2"></i></button>` : ''}
             <span class="minimax-trim minimax-trim-left ${isConnection ? 'director-connection-edge' : ''}" data-minimax-trim="left" data-minimax-trim-segment="${escapeAttr(seg.id)}" style="left:${isConnection ? 0 : (trimIn / duration) * 100}%"></span>
             <span class="minimax-trim minimax-trim-right ${isConnection ? 'director-connection-edge' : ''}" data-minimax-trim="right" data-minimax-trim-segment="${escapeAttr(seg.id)}" style="left:${isConnection ? 100 : (trimOut / duration) * 100}%"></span>
         </div>`;
@@ -12491,18 +12548,35 @@ function smartMinimaxBodyHtml(node){
     const currentDirectorProvider = directorProviders.find(provider => provider.id === generationProviderId) || null;
     const directorModels = currentDirectorProvider?.compatibleModels || [];
     if(selected && !generation.model && directorModels.length){
-        generation.model = directorModels[0].model_id;
-        generation.mode = directorModels[0].operation || '';
+        smartDirectorSelectCapabilityModel(selected, directorModels[0].model_id, directorModels[0]);
     }
     const selectedModelProfile = directorModels.find(profile => profile.model_id === generation.model) || capabilityProfileFor(generationProviderId, generation.model, 'video_generation');
+    if(selected && selectedModelProfile) smartDirectorEnsureCapabilityParameterDefaults(selected, selectedModelProfile);
     const selectedModelIncompatible = Boolean(generation.model && !directorModels.some(profile => profile.model_id === generation.model));
     const runModes = [...new Set([selectedModelProfile?.operation].filter(Boolean))];
+    const directorParameterBundle = isMiniMaxDirectorNode(node) ? null : smartDirectorCapabilityParameterBundle(selected, selectedModelProfile);
+    const directorParameterHtml = directorParameterBundle
+        ? `<div class="director-capability-parameters" data-director-capability-parameters="1">${directorParameterBundle.markup ? `<div class="capability-fields capability-layout-${escapeAttr(directorParameterBundle.layout.mode)}" data-capability-layout data-layout-key="${escapeAttr(directorParameterBundle.layout.key)}" data-layout-mode="${escapeAttr(directorParameterBundle.layout.mode)}">${directorParameterBundle.markup}</div>` : ''}${directorParameterBundle.settingsControl || ''}</div>`
+        : (!isMiniMaxDirectorNode(node) ? `<div class="director-parameter-empty">${escapeHtml(selectedModelIncompatible ? capabilityUiText('当前模型与 Clip 输入不兼容，请重新选择模型','The current model is incompatible with this Clip. Select another model.') : capabilityUiText('选择模型后显示该模型支持的参数','Select a model to see its supported parameters'))}</div>` : '');
     const connectionDependency = selected?.type === 'connection' ? SMART_DIRECTOR_CORE.connectionDependencyState(selected, node.segments) : null;
-    const connectionStatusHtml = connectionDependency?.missing?.length
+    const connectionHasSource = Boolean(connectionDependency?.derived?.inputs?.length);
+    const connectionStatusHtml = selected?.type === 'connection' && !connectionHasSource
+        ? `<div class="director-connection-status is-error"><i data-lucide="circle-alert"></i><span>${escapeHtml(capabilityUiText('连接 Clip 至少需要命中一侧普通 Clip','A connection Clip must touch at least one ordinary Clip'))}</span></div>`
+        : connectionDependency?.missing?.length
         ? `<div class="director-connection-status is-error"><i data-lucide="circle-alert"></i><span>${escapeHtml(capabilityUiText(`还缺少 ${connectionDependency.missing.length} 个来源 Clip 结果`,`Missing ${connectionDependency.missing.length} source Clip result(s)`))}</span></div>`
         : connectionDependency?.needsRegeneration
             ? `<div class="director-connection-status is-stale"><i data-lucide="refresh-cw"></i><span>${escapeHtml(capabilityUiText('来源结果已变化，需要重新生成连接 Clip','Source results changed; regenerate this connection Clip'))}</span></div>`
             : '';
+    const directorRunBlocked = Boolean(selected?.running
+        || (!isMiniMaxDirectorNode(node) && (!generation.model || selectedModelIncompatible))
+        || (selected?.type === 'connection' && (!connectionHasSource || connectionDependency?.missing?.length)));
+    const directorRunTitle = selected?.running
+        ? capabilityUiText('当前 Clip 正在运行','This Clip is running')
+        : selected?.type === 'connection' && (!connectionHasSource || connectionDependency?.missing?.length)
+            ? capabilityUiText('请先生成连接 Clip 所需的来源 Clip','Generate the required source Clips first')
+            : !isMiniMaxDirectorNode(node) && selectedModelIncompatible
+                ? capabilityUiText('当前模型与 Clip 输入不兼容','The current model is incompatible with this Clip')
+                : capabilityUiText('生成当前 Clip','Generate selected Clip');
     const connectionInputHtml = selected?.type === 'connection' ? `<div class="director-connection-inputs">
         <div class="director-connection-inputs-head"><i data-lucide="lock-keyhole"></i><span>${escapeHtml(capabilityUiText('时间线自动输入（只读）','Automatic timeline inputs (read-only)'))}</span></div>
         ${connectionStatusHtml}
@@ -12523,7 +12597,7 @@ function smartMinimaxBodyHtml(node){
             </div>
             <div class="minimax-transport"></div>
             <div class="minimax-top-actions">
-                <button type="button" data-minimax-export-selected="1" ${selectedResult ? '' : 'disabled'} title="Export selected clip"><i data-lucide="download"></i></button>
+                <button type="button" data-minimax-export-selected="1" ${selectedResult ? '' : 'disabled'} title="${escapeAttr(capabilityUiText('导出当前 Clip','Export selected Clip'))}"><i data-lucide="download"></i></button>
                 <button type="button" data-minimax-export-full="1" title="${escapeAttr(capabilityUiText('导出独立片段','Export clips'))}"><i data-lucide="file-down"></i></button>
             </div>
         </div>
@@ -12541,8 +12615,8 @@ function smartMinimaxBodyHtml(node){
                 <div class="minimax-edit-timeline" data-minimax-scrub-track="1">
                     <span class="minimax-pane-resize minimax-video-resize" data-minimax-pane-resize="video"></span>
                     <div class="minimax-timeline-controls">
-                        <button type="button" data-minimax-play-timeline="1" title="Play / pause"><i data-lucide="play"></i></button>
-                        <button type="button" data-minimax-toggle-mute="1" title="${node.minimaxMuted ? 'Unmute' : 'Mute'}"><i data-lucide="${node.minimaxMuted ? 'volume-x' : 'volume-2'}"></i></button>
+                        <button type="button" data-minimax-play-timeline="1" title="${escapeAttr(capabilityUiText('播放 / 暂停','Play / pause'))}"><i data-lucide="play"></i></button>
+                        <button type="button" data-minimax-toggle-mute="1" title="${escapeAttr(node.minimaxMuted ? capabilityUiText('取消静音','Unmute') : capabilityUiText('静音','Mute'))}"><i data-lucide="${node.minimaxMuted ? 'volume-x' : 'volume-2'}"></i></button>
                     </div>
                     <div class="minimax-ruler"><div class="minimax-track-content" style="width:${timelineWidth}">${ticks}<span class="minimax-playhead" data-minimax-playhead="1" style="left:${playheadPct}%"></span></div></div>
                     <div class="minimax-add-gutter minimax-ruler-gutter"></div>
@@ -12557,20 +12631,20 @@ function smartMinimaxBodyHtml(node){
                     <div class="minimax-current-head">
                         <div class="minimax-current-title"><span class="minimax-current-dot"></span><b>${escapeHtml(selected?.type === 'connection' ? tr('smart.directorConnectionClip') : `Clip ${selectedIndex + 1}`)}</b><span>${timeLabel(Number(selected?.start || 0))} - ${timeLabel(Number(selected?.start || 0) + segDuration)}</span></div>
                         <div class="minimax-current-refs">
-                            ${selectedRefSummary.length ? selectedRefSummary.map(item => `<span><i data-lucide="${smartMinimaxIconForKind(item.kind)}"></i>${item.count}</span>`).join('') : '<span>No refs</span>'}
+                            ${selectedRefSummary.length ? selectedRefSummary.map(item => `<span><i data-lucide="${smartMinimaxIconForKind(item.kind)}"></i>${item.count}</span>`).join('') : `<span>${escapeHtml(capabilityUiText('暂无参考','No refs'))}</span>`}
                         </div>
                     </div>
                     ${connectionInputHtml}
                     <label class="minimax-prompt-field">
-                        <span><i data-lucide="text-cursor-input"></i>Prompt</span>
-                        <textarea data-minimax-prompt="1" placeholder="Prompt for selected clip">${escapeHtml(selected?.prompt || '')}</textarea>
+                        <span><i data-lucide="text-cursor-input"></i>${escapeHtml(capabilityUiText('提示词','Prompt'))}</span>
+                        <textarea data-minimax-prompt="1" placeholder="${escapeAttr(capabilityUiText('当前 Clip 的提示词','Prompt for selected Clip'))}">${escapeHtml(selected?.prompt || '')}</textarea>
                     </label>
                     <div class="director-input-stack" data-minimax-ref-track="1" data-minimax-active-segment="${escapeAttr(selected?.id || '')}">
                         <div class="minimax-section-label"><i data-lucide="paperclip"></i><span>${escapeHtml(tr('smart.directorClipInputs'))}</span></div>
                         ${inputGroups}
                     </div>
                     <div class="minimax-clip-parameters">
-                        <div class="minimax-section-label"><i data-lucide="sliders-horizontal"></i><span>Clip settings</span></div>
+                        <div class="minimax-section-label"><i data-lucide="sliders-horizontal"></i><span>${escapeHtml(capabilityUiText('Clip 设置','Clip settings'))}</span></div>
                         <div class="minimax-settings minimax-segment-fields">
                             ${isMiniMaxDirectorNode(node) ? `<label class="minimax-wide-setting minimax-engine-setting"><span>${escapeHtml(capabilityUiText('运行来源','Engine'))}</span><select class="minimax-engine-select" data-minimax-engine title="${escapeAttr(capabilityUiText('选择生成来源','Choose generation engine'))}">
                                 <option value="comfyui" ${minimaxEngine === 'comfyui' ? 'selected' : ''}>ComfyUI</option>
@@ -12580,10 +12654,10 @@ function smartMinimaxBodyHtml(node){
                                 <label class="${selectedModelIncompatible ? 'is-invalid' : ''}"><span>${escapeHtml(capabilityUiText('模型','Model'))}</span><select data-director-generation="model"><option value="">${escapeHtml(capabilityUiText('请选择','Select'))}</option>${selectedModelIncompatible ? `<option value="${escapeAttr(generation.model)}" selected disabled>${escapeHtml(`${generation.model} · ${capabilityUiText('当前输入不兼容','Incompatible inputs')}`)}</option>` : ''}${directorModels.map(profile => `<option value="${escapeAttr(profile.model_id)}" ${profile.model_id === generation.model ? 'selected' : ''}>${escapeHtml(capabilityModelLabel(profile, profile.model_id))}</option>`).join('')}</select></label>
                                 <label><span>${escapeHtml(capabilityUiText('运行模式','Run mode'))}</span><select data-director-generation="mode"><option value="">${escapeHtml(capabilityUiText('由模型能力判断','Capability-based'))}</option>${runModes.map(mode => `<option value="${escapeAttr(mode)}" ${mode === generation.mode ? 'selected' : ''}>${escapeHtml(mode)}</option>`).join('')}</select></label>
                             </div>`}
-                            <label><span>Duration</span><input type="number" min="0.5" max="60" step="0.1" data-minimax-seg-number="duration" value="${escapeAttr(segDuration)}"><b>s</b></label>
-                            <label><span>Megapixels</span><input type="number" min="0.1" max="2" step="0.1" data-minimax-seg-number="megapixels" value="${escapeAttr(megapixels)}"><b>MP</b></label>
-                            <label class="minimax-wide-setting"><span>Aspect ratio</span><select data-minimax-select="aspectRatio">${['16:9 (Widescreen)','9:16 (Portrait)','1:1 (Square)','4:3 (Standard)','3:4 (Portrait)','21:9 (Ultrawide)'].map(value => `<option value="${escapeAttr(value)}" ${value === aspectRatio ? 'selected' : ''}>${escapeHtml(value.split(' ')[0])}</option>`).join('')}</select></label>
-                            <button class="minimax-run ${selected?.running ? 'is-stop' : ''}" type="button" data-minimax-run="${escapeAttr(node.id)}" ${selected?.running ? 'disabled' : ''} title="${escapeAttr(capabilityUiText('生成当前 Clip','Generate selected Clip'))}"><i data-lucide="${selected?.running ? 'loader-2' : 'sparkles'}"></i><span>${escapeHtml(selected?.running ? capabilityUiText('运行中','Running') : capabilityUiText('生成 Clip','Generate Clip'))}</span></button>
+                            ${isMiniMaxDirectorNode(node) ? `<label><span>${escapeHtml(capabilityUiText('时长','Duration'))}</span><input type="number" min="0.5" max="60" step="0.1" data-minimax-seg-number="duration" value="${escapeAttr(segDuration)}"><b>s</b></label>
+                            <label><span>${escapeHtml(capabilityUiText('百万像素','Megapixels'))}</span><input type="number" min="0.1" max="2" step="0.1" data-minimax-seg-number="megapixels" value="${escapeAttr(megapixels)}"><b>MP</b></label>
+                            <label class="minimax-wide-setting"><span>${escapeHtml(capabilityUiText('画面比例','Aspect ratio'))}</span><select data-minimax-select="aspectRatio">${['16:9 (Widescreen)','9:16 (Portrait)','1:1 (Square)','4:3 (Standard)','3:4 (Portrait)','21:9 (Ultrawide)'].map(value => `<option value="${escapeAttr(value)}" ${value === aspectRatio ? 'selected' : ''}>${escapeHtml(value.split(' ')[0])}</option>`).join('')}</select></label>` : directorParameterHtml}
+                            <button class="minimax-run ${selected?.running ? 'is-stop' : ''}" type="button" data-minimax-run="${escapeAttr(node.id)}" ${directorRunBlocked ? 'disabled' : ''} title="${escapeAttr(directorRunTitle)}"><i data-lucide="${selected?.running ? 'loader-2' : 'sparkles'}"></i><span>${escapeHtml(selected?.running ? capabilityUiText('运行中','Running') : capabilityUiText('生成 Clip','Generate Clip'))}</span></button>
                         </div>
                     </div>
                 </div>
@@ -14463,18 +14537,109 @@ function bindMinimaxNodeControls(el, node){
             const key = select.dataset.directorGeneration;
             if(key === 'providerId'){
                 seg.generation.providerId = select.value;
-                seg.generation.model = '';
-                seg.generation.mode = '';
+                smartDirectorSelectCapabilityModel(seg, '');
                 render();
             } else if(key === 'model') {
-                seg.generation.model = select.value;
-                seg.generation.mode = capabilityProfileFor(seg.generation.providerId, select.value, 'video_generation')?.operation || '';
+                const profile = capabilityProfileFor(seg.generation.providerId, select.value, 'video_generation');
+                smartDirectorSelectCapabilityModel(seg, select.value, profile);
                 render();
             } else if(key === 'mode') {
                 seg.generation.mode = select.value;
             }
             scheduleSave();
         };
+    });
+    const directorCapabilityRoot = el.querySelector('[data-director-capability-parameters]');
+    const currentDirectorCapabilityContext = () => {
+        const seg = smartMinimaxSelectedSegment(node);
+        const profile = seg ? capabilityProfileFor(seg.generation?.providerId, seg.generation?.model, 'video_generation') : null;
+        return {seg, profile};
+    };
+    directorCapabilityRoot?.querySelectorAll('.smart-control > .smart-pill').forEach(pill => {
+        pill.setAttribute('aria-expanded', 'false');
+        pill.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const control = pill.parentElement;
+            const wasPinned = control.classList.contains('pinned');
+            closeAllSmartPopovers();
+            if(!wasPinned){
+                control.classList.add('pinned');
+                pill.setAttribute('aria-expanded', 'true');
+                requestAnimationFrame(() => positionPinnedSmartPopover(control));
+            }
+        };
+    });
+    directorCapabilityRoot?.querySelectorAll('[data-capability-help]').forEach(button => {
+        button.onpointerenter = () => showCapabilityParameterTooltip(button);
+        button.onpointerleave = hideCapabilityParameterTooltip;
+        button.onfocus = () => showCapabilityParameterTooltip(button);
+        button.onblur = hideCapabilityParameterTooltip;
+    });
+    const updateDirectorCapability = (key, value, rerender=true) => {
+        const {seg, profile} = currentDirectorCapabilityContext();
+        if(!seg || !profile || !key) return;
+        smartDirectorSetCapabilityParameter(seg, profile, key, value);
+        scheduleSave();
+        if(rerender) render();
+    };
+    directorCapabilityRoot?.querySelectorAll('[data-capability-option]').forEach(button => {
+        button.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const {profile} = currentDirectorCapabilityContext();
+            const key = button.dataset.capabilityParam;
+            const value = smartDirectorCoerceCapabilityValue(profile, key, button.dataset.capabilityValue, button.dataset.capabilityType);
+            closeAllSmartPopovers();
+            updateDirectorCapability(key, value);
+        };
+    });
+    directorCapabilityRoot?.querySelectorAll('[data-capability-unset]').forEach(button => {
+        button.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            closeAllSmartPopovers();
+            updateDirectorCapability(button.dataset.capabilityParam, CAPABILITY_PARAMETER_UNSET);
+        };
+    });
+    directorCapabilityRoot?.querySelectorAll('[data-capability-enable]').forEach(button => {
+        button.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const {profile} = currentDirectorCapabilityContext();
+            const key = button.dataset.capabilityParam;
+            updateDirectorCapability(key, smartDirectorCoerceCapabilityValue(profile, key, button.dataset.capabilityValue));
+        };
+    });
+    directorCapabilityRoot?.querySelectorAll('[data-capability-step]').forEach(button => {
+        button.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const {seg, profile} = currentDirectorCapabilityContext();
+            if(!seg || !profile) return;
+            const key = button.dataset.capabilityParam;
+            const current = Number(capabilityParameterValues(profile, smartDirectorCapabilityParameterSource(seg, profile))[key] ?? 0);
+            const delta = Number(button.dataset.capabilityDelta || 1) * Number(button.dataset.capabilityStep || 1);
+            const minimum = Number(button.dataset.capabilityMin);
+            let next = current + delta;
+            if(button.dataset.capabilityMin !== '' && Number.isFinite(minimum)) next = Math.max(minimum, next);
+            updateDirectorCapability(key, smartDirectorCoerceCapabilityValue(profile, key, next, button.dataset.capabilityType));
+        };
+    });
+    directorCapabilityRoot?.querySelectorAll('input[data-capability-param],select[data-capability-param],textarea[data-capability-param]').forEach(input => {
+        const update = event => {
+            event?.stopPropagation?.();
+            const {profile} = currentDirectorCapabilityContext();
+            const key = input.dataset.capabilityParam;
+            const value = input.value === CAPABILITY_PARAMETER_UNSET
+                ? CAPABILITY_PARAMETER_UNSET
+                : smartDirectorCoerceCapabilityValue(profile, key, input.value, input.dataset.capabilityType);
+            updateDirectorCapability(key, value, event?.type === 'change');
+            const output = input.closest('.capability-range-field')?.querySelector('output');
+            if(output) output.textContent = String(value);
+        };
+        input.onclick = event => event.stopPropagation();
+        input.oninput = input.onchange = update;
     });
     el.querySelectorAll('[data-director-project-name]').forEach(input => {
         input.oninput = e => {
@@ -24218,7 +24383,11 @@ function smartMinimaxReadableError(error, engine='comfyui'){
             const details = (nodeError?.errors || []).slice(0, 2).map(item => item?.details || item?.message).filter(Boolean);
             if(details.length) parts.push(`节点 ${nodeId}${nodeError?.class_type ? `（${nodeError.class_type}）` : ''}：${details.join('；')}`);
         });
-        const prefix = engine === 'runninghub' ? 'RunningHub 工作流执行失败' : 'ComfyUI 拒绝了工作流';
+        const prefix = engine === 'runninghub'
+            ? 'RunningHub 工作流执行失败'
+            : engine === 'api'
+                ? capabilityUiText('视频模型执行失败','Video model execution failed')
+                : 'ComfyUI 拒绝了工作流';
         return parts.length ? `${prefix}：${parts.join('；')}` : text;
     } catch {
         return text;
@@ -24266,6 +24435,9 @@ async function smartDirectorMaterializeTimelineRefs(node, seg){
         return [];
     }
     const derived = smartDirectorApplyConnectionDerivation(node, seg);
+    if(!derived?.inputs?.length){
+        throw new Error(capabilityUiText('连接 Clip 至少需要命中一侧普通 Clip','A connection Clip must touch at least one ordinary Clip'));
+    }
     const refs = [];
     for(const input of derived?.inputs || []){
         const source = (node.segments || []).find(item => item.id === input.sourceClipId && item.type !== 'connection');
@@ -24310,20 +24482,23 @@ function smartDirectorGenericRunSettings(node, seg, refs=[]){
     const profile = capabilityProfileFor(providerId, modelId, 'video_generation');
     if(!profile) throw new Error(capabilityUiText(`当前能力档案中没有视频模型 ${modelId}`,`Video model ${modelId} is missing from the capability catalog`));
     const params = generation.params && typeof generation.params === 'object' ? generation.params : {};
-    const ratio = String(params.aspect_ratio || seg?.aspectRatio || '16:9').match(/\d+\s*:\s*\d+/)?.[0]?.replace(/\s+/g, '') || '16:9';
-    const base = smartSettingsForNode({type:SMART_NODE_TYPES.videoGenerator, runSettings:{}});
-    return {
-        ...base,
-        ...params,
-        engine:'api', apiKind:'video',
-        videoProvider:providerId,
-        videoFamilyId:String(profile.family_id || ''),
-        videoModel:modelId,
-        videoDuration:Math.max(1, Math.round(Number(seg?.duration || 5))),
-        videoAspect:ratio,
-        videoUseFrameRoles:refs.filter(ref => ref.kind === 'image' && ['first_frame','last_frame'].includes(ref.role)).length > 0,
-        _directorExecutionMode:String(generation.mode || '')
-    };
+    const parameterSource = smartDirectorCapabilityParameterSource(seg, profile);
+    const submittedParams = capabilityParameterSubmissionValues(profile, parameterSource);
+    const ratioEntry = Object.entries(profile.parameters || {}).find(([key, spec]) => capabilityParameterSemantic(key, spec) === 'aspect_ratio');
+    const durationEntry = Object.entries(profile.parameters || {}).find(([key, spec]) => capabilityParameterSemantic(key, spec) === 'duration');
+    const ratio = String((ratioEntry ? submittedParams[ratioEntry[0]] : '') || seg?.aspectRatio || '16:9').match(/\d+\s*:\s*\d+/)?.[0]?.replace(/\s+/g, '') || '16:9';
+    const duration = Number((durationEntry ? submittedParams[durationEntry[0]] : '') || seg?.duration || 5);
+    return SMART_DIRECTOR_CORE.isolatedVideoRunSettings({
+        providerId,
+        familyId:String(profile.family_id || ''),
+        modelId,
+        mode:String(generation.mode || ''),
+        params,
+        submittedParams,
+        duration:Number.isFinite(duration) ? duration : 5,
+        aspectRatio:ratio,
+        useFrameRoles:refs.filter(ref => ref.kind === 'image' && ['first_frame','last_frame'].includes(ref.role)).length > 0
+    });
 }
 function smartMinimaxRunSnapshot(node, extraSettings={}, selectedOverride=null){
     const seg = selectedOverride || smartMinimaxSelectedSegment(node);
@@ -24439,7 +24614,7 @@ async function runMinimaxNode(nodeId){
             const url = typeof item === 'string' ? item : item?.url || '';
             const itemKind = typeof item === 'object' && item.kind ? item.kind : kind;
             const ext = itemKind === 'audio' ? 'mp3' : itemKind === 'image' ? 'png' : 'mp4';
-            return { ...(typeof item === 'object' ? item : {}), url, name:(typeof item === 'object' && item.name) || `minimax-${i + 1}.${ext}`, kind:itemKind };
+            return { ...(typeof item === 'object' ? item : {}), url, name:(typeof item === 'object' && item.name) || `clip-${i + 1}.${ext}`, kind:itemKind };
         }).filter(item => item.url);
         const seg = activeSegment;
         out.forEach(item => smartMinimaxSetSegmentResult(node, seg, item));

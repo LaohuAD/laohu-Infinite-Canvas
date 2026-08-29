@@ -699,6 +699,16 @@ body.smart-prompt-split-resize .prompt-node-llm select { pointer-events:none !im
 .director-connection-status.is-error { color:#fecaca; background:rgba(127,29,29,.24); }
 .director-connection-status.is-stale { color:#fde68a; background:rgba(120,53,15,.22); }
 .director-generation-primary label.is-invalid select { border-color:#ef4444; color:#fecaca; }
+.director-capability-parameters { grid-column:1 / -1; min-width:0; display:grid; grid-template-columns:minmax(0, 1fr) auto; align-items:start; gap:5px; position:relative; isolation:isolate; }
+.director-capability-parameters .capability-fields { min-width:0; display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:4px; }
+.director-capability-parameters .capability-settings-control { align-self:center; }
+.director-capability-parameters .capability-param-pill { width:100%; max-width:none; min-height:28px; height:28px; padding:4px 6px; justify-content:flex-start; gap:5px; border:1px solid #2f3338; border-radius:5px; background:#24272b; overflow:visible; }
+.director-capability-parameters .capability-param-label { font-size:9px; color:#e5e7eb; }
+.director-capability-parameters .capability-settings-pill { width:28px; min-width:28px; height:28px; padding:0; border:1px solid #2f3338; border-radius:5px; background:#24272b; color:#94a3b8; }
+.director-capability-parameters .capability-settings-popover { right:0; }
+.director-parameter-empty { grid-column:1 / -1; min-height:42px; padding:8px; display:flex; align-items:center; justify-content:center; border:1px dashed #374151; border-radius:5px; color:#64748b; font-size:9px; line-height:1.4; text-align:center; }
+.minimax-workbench:has(.director-capability-parameters .smart-control.pinned) { overflow:visible; position:relative; z-index:220; }
+.minimax-current-panel:has(.director-capability-parameters .smart-control.pinned),.minimax-clip-parameters:has(.director-capability-parameters .smart-control.pinned),.minimax-settings:has(.director-capability-parameters .smart-control.pinned) { overflow:visible; position:relative; z-index:220; }
 .minimax-asset-bin { grid-template-rows:30px minmax(0, 1fr); }
 
 .create-menu { position:fixed; z-index:75; display:none; width:286px; max-width:calc(100vw - 28px); max-height:calc(100vh - 28px); padding:12px; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; border-radius:14px; background:var(--card); border:1px solid var(--line); box-shadow:0 22px 58px var(--shadow); backdrop-filter:none; -webkit-backdrop-filter:none; isolation:isolate; }

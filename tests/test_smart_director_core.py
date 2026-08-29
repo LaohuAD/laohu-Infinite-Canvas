@@ -40,6 +40,49 @@ console.log(JSON.stringify(result));
         self.assertEqual(data["clips"][0]["generation"]["model"], "wan-3.0-prime-i2v")
         self.assertEqual(data["clips"][1]["disabledInputRefs"], ["asset-old"])
 
+    def test_model_switch_restores_each_models_parameter_draft(self):
+        data = run_node("""
+const d=require('./static/js/smart-director-core.js');
+let generation={model:'model-a',mode:'text2video',params:{duration:5,seed:11}};
+generation=d.selectGenerationModel(generation,'model-b','image2video');
+generation.params={duration:10,quality:'high'};
+generation=d.selectGenerationModel(generation,'model-a','text2video');
+const restoredA=JSON.parse(JSON.stringify(generation));
+generation=d.selectGenerationModel(generation,'model-b','image2video');
+console.log(JSON.stringify({restoredA,restoredB:generation}));
+""")
+
+        self.assertEqual(data["restoredA"]["params"], {"duration": 5, "seed": 11})
+        self.assertEqual(data["restoredA"]["mode"], "text2video")
+        self.assertEqual(data["restoredB"]["params"], {"duration": 10, "quality": "high"})
+        self.assertEqual(data["restoredB"]["mode"], "image2video")
+
+    def test_director_video_settings_are_isolated_and_submit_only_effective_parameters(self):
+        data = run_node("""
+const d=require('./static/js/smart-director-core.js');
+const settings=d.isolatedVideoRunSettings({
+  providerId:'ai-money',familyId:'wan-3.0',modelId:'wan-3.0-prime-i2v',mode:'image2video',
+  params:{duration:5,seed:'__canvas_unset__',quality:'high'},
+  submittedParams:{duration:5,seed:'__canvas_unset__',quality:'high'},
+  duration:5,aspectRatio:'16:9',useFrameRoles:true,
+  recentSettings:{videoTempShLinks:[{url:'https://example.com/old.mp4'}],videoMultimodal:true,recentOnly:'leak'}
+});
+console.log(JSON.stringify(settings));
+""")
+
+        self.assertEqual(data["videoTempShLinks"], [])
+        self.assertFalse(data["videoMultimodal"])
+        self.assertFalse(data["_videoMultimodalUserSet"])
+        self.assertNotIn("recentOnly", data)
+        self.assertNotIn("seed", {key: data[key] for key in data if key != "capabilityParameters"})
+        self.assertEqual(data["duration"], 5)
+        self.assertEqual(data["quality"], "high")
+        self.assertEqual(
+            data["capabilityParameters"]["wan-3.0-prime-i2v"]["seed"],
+            "__canvas_unset__",
+        )
+        self.assertTrue(data["videoUseFrameRoles"])
+
     def test_export_order_uses_midpoint_then_stable_tiebreakers(self):
         data = run_node("""
 const d=require('./static/js/smart-director-core.js');
@@ -143,6 +186,18 @@ console.log(JSON.stringify(d.connectionDependencyState(bridge,[...ordinary,bridg
         self.assertEqual(data["missing"][0]["sourceClipId"], "right")
         self.assertEqual(data["stale"][0]["previousResultId"], "left-v1")
         self.assertEqual(data["stale"][0]["currentResultId"], "left-v2")
+
+    def test_connection_dependency_requires_at_least_one_timeline_source(self):
+        data = run_node("""
+const d=require('./static/js/smart-director-core.js');
+console.log(JSON.stringify(d.connectionDependencyState(
+  {id:'bridge',type:'connection',startMs:9000,durationMs:1000},
+  [{id:'ordinary',type:'ordinary',startMs:0,durationMs:5000,results:[{id:'v1',url:'/v1.mp4'}]}]
+)));
+""")
+
+        self.assertFalse(data["ready"])
+        self.assertEqual(data["derived"]["inputs"], [])
 
     def test_migrates_legacy_minimax_to_single_new_data_source(self):
         data = run_node("""
