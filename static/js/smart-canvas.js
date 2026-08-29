@@ -11783,6 +11783,9 @@ function smartMinimaxEnsureSegment(node){
         seg.trimOut = Math.min(seg.duration, seg.trimOut);
     });
     if(!node.selectedSegmentId || !node.segments.some(seg => seg.id === node.selectedSegmentId)) node.selectedSegmentId = node.segments[0].id;
+    node.timelineZoom = Math.max(0.5, Math.min(8, Number(node.timelineZoom || 1)));
+    node.timelineScrollMs = Math.max(0, Number(node.timelineScrollMs || 0));
+    node.timelineMinViewMs = Math.max(8000, Number(node.timelineMinViewMs || 16000));
     node.duration = Math.max(0.5, Number(node.duration || Math.max(...node.segments.map(seg => seg.start + seg.duration))) || 8);
     return node.segments.find(seg => seg.id === node.selectedSegmentId) || node.segments[0];
 }
@@ -11814,9 +11817,11 @@ function smartMinimaxRefsForKind(node, kind, selectedOverride=null){
     const local = [...clipRefs, ...timelineRefs].filter(ref => mediaKindForItem(ref) === kind);
     const nodeRefs = node?.refs?.[kind] || [];
     const upstream = inputImagesFor(node).filter(ref => ref?.url && mediaKindForItem(ref) === kind);
-    // Explicit clip refs own the request. Global/upstream refs are only a migration fallback
-    // for older MiniMax nodes that did not store references per timeline segment.
-    const refs = (clipRefs.length || timelineRefs.length) ? local : (nodeRefs.length ? nodeRefs : upstream);
+    // 新导演台中每个 Clip 的输入必须严格隔离；全局引用只服务尚未迁移的旧 MiniMax 节点。
+    const legacyFallback = node?.type === SMART_DIRECTOR_CORE.NODE_TYPES.legacyMinimax;
+    const refs = legacyFallback && !clipRefs.length && !timelineRefs.length
+        ? (nodeRefs.length ? nodeRefs : upstream)
+        : local;
     return smartDirectorUniqueRefs(refs, smartMinimaxMaxForKind(kind)).filter(ref => ref?.url && mediaKindForItem(ref) === kind);
 }
 function smartMinimaxAllRefs(node, selectedOverride=null){
@@ -11903,13 +11908,76 @@ function addAssetToSelectedMinimaxRefs(item){
 }
 function smartMinimaxTimelineTotal(node){
     smartMinimaxEnsureSegment(node);
-    return Math.max(Number(node?.duration || 0), ...(node?.segments || []).map(seg => Number(seg.start || 0) + Number(seg.duration || 0)), 1);
+    node.timelineMinViewMs = Math.max(8000, Number(node.timelineMinViewMs || 16000));
+    node.timelineScrollMs = Math.max(0, Number(node.timelineScrollMs || 0));
+    const visibleSpanMs = node.timelineMinViewMs / Math.max(0.5, Number(node.timelineZoom || 1));
+    return SMART_DIRECTOR_CORE.timelineExtentMs(node.segments || [], {
+        minimumMs:node.timelineMinViewMs,
+        viewportEndMs:node.timelineScrollMs + visibleSpanMs,
+        paddingMs:4000
+    }) / 1000;
 }
 function smartMinimaxCompactSegments(node){
     if(!node?.segments?.length) return;
     node.segments.sort((a, b) => Number(a.start || 0) - Number(b.start || 0));
     const total = Math.max(1, ...node.segments.map(seg => Number(seg.start || 0) + Math.max(0.5, Number(seg.duration || 1))));
     node.playhead = Math.min(Number(node.playhead || 0), total);
+}
+function smartDirectorReplaceTimelineClips(node, clips){
+    if(!isSmartDirectorNode(node)) return [];
+    const selectedId = String(node.selectedSegmentId || '');
+    node.segments = (Array.isArray(clips) ? clips : []).map((clip, index) => attachDirectorClipCompatibility(SMART_DIRECTOR_CORE.normalizeClip(clip, index)));
+    node.selectedSegmentId = node.segments.some(clip => clip.id === selectedId) ? selectedId : (node.segments[0]?.id || '');
+    node.timelineMinViewMs = Math.max(8000, Number(node.timelineMinViewMs || 16000));
+    return node.segments;
+}
+function smartDirectorDurationConstraint(seg, profile=null){
+    const entry = Object.entries(profile?.parameters || {}).find(([key, spec]) => capabilityParameterSemantic(key, spec) === 'duration');
+    const spec = entry?.[1] || {};
+    const seconds = value => Number.isFinite(Number(value)) && Number(value) > 0 ? Math.round(Number(value) * 1000) : 0;
+    const optionsMs = Array.isArray(spec.options) ? spec.options.map(seconds).filter(Boolean) : [];
+    return {
+        optionsMs,
+        minMs:seconds(spec.min) || (optionsMs.length ? Math.min(...optionsMs) : 1000),
+        maxMs:seconds(spec.max) || (optionsMs.length ? Math.max(...optionsMs) : 60000),
+        stepMs:seconds(spec.step) || 1000
+    };
+}
+function smartDirectorSyncTimelineClipDom(el, node){
+    const total = smartMinimaxTimelineTotal(node);
+    (node.segments || []).forEach(seg => {
+        const clip = el.querySelector(`[data-minimax-segment="${CSS.escape(String(seg.id || ''))}"]`);
+        if(!clip) return;
+        clip.style.left = `${total > 0 ? Number(seg.startMs || 0) / 1000 / total * 100 : 0}%`;
+        clip.style.width = `${total > 0 ? Math.max(0.25, Number(seg.durationMs || 1) / 1000 / total * 100) : 100}%`;
+        const meta = clip.querySelector('.minimax-clip-meta span');
+        if(meta && seg.type !== 'connection') meta.textContent = `${timeLabel(Number(seg.start || 0))} - ${timeLabel(Number(seg.start || 0) + Number(seg.duration || 0))}`;
+    });
+    const label = el.querySelector('[data-minimax-time-label]');
+    if(label) label.textContent = `${timeLabel(Number(node.playhead || 0))} / ${timeLabel(total)}`;
+}
+function smartDirectorZoomAtPointer(node, viewport, event){
+    const current = Math.max(0.5, Math.min(8, Number(node.timelineZoom || 1)));
+    const next = Math.max(0.5, Math.min(8, current * (event.deltaY < 0 ? 1.12 : 0.89)));
+    if(Math.abs(next - current) < 0.001) return false;
+    const rect = viewport.getBoundingClientRect();
+    const pointerX = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
+    const content = viewport.querySelector('.director-timeline-canvas');
+    const oldWidth = Math.max(rect.width, Number(content?.scrollWidth || viewport.scrollWidth || rect.width));
+    const oldTotalMs = smartMinimaxTimelineTotal(node) * 1000;
+    const anchorMs = (viewport.scrollLeft + pointerX) / oldWidth * oldTotalMs;
+    node.timelineZoom = next;
+    const newTotalMs = smartMinimaxTimelineTotal(node) * 1000;
+    const newWidth = oldWidth * next / current * newTotalMs / Math.max(1, oldTotalMs);
+    viewport.scrollLeft = Math.max(0, anchorMs / Math.max(1, newTotalMs) * newWidth - pointerX);
+    node.timelineScrollMs = newTotalMs * viewport.scrollLeft / Math.max(1, newWidth);
+    return true;
+}
+function smartDirectorScrollTimelineByWheel(node, viewport, event){
+    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    viewport.scrollLeft = Math.max(0, viewport.scrollLeft + delta);
+    const totalMs = smartMinimaxTimelineTotal(node) * 1000;
+    node.timelineScrollMs = totalMs * viewport.scrollLeft / Math.max(1, viewport.scrollWidth);
 }
 function smartDirectorApplyConnectionDerivation(node, seg, {applyFrameSnap=false}={}){
     if(!isSmartDirectorNode(node) || seg?.type !== 'connection') return null;
@@ -12503,7 +12571,7 @@ function smartDirectorChoiceControl({key, label, value='', displayValue='', opti
 }
 function smartMinimaxBodyHtml(node){
     const selected = smartMinimaxSelectedSegment(node);
-    const total = Math.max(Number(node.duration || 0), ...node.segments.map(seg => Number(seg.start || 0) + Number(seg.duration || 0)));
+    const total = smartMinimaxTimelineTotal(node);
     const fmt = value => {
         const n = Number(value) || 0;
         return n.toFixed(n % 1 ? 1 : 0);
@@ -12524,7 +12592,7 @@ function smartMinimaxBodyHtml(node){
         const start = Number(seg.start || 0);
         const duration = Math.max(0.5, Number(seg.duration || 1));
         const left = total > 0 ? (start / total) * 100 : 0;
-        const width = total > 0 ? Math.max(5, (duration / total) * 100) : 100;
+        const width = total > 0 ? Math.max(0.25, (duration / total) * 100) : 100;
         const active = seg.id === node.selectedSegmentId;
         const trimIn = Math.max(0, Number(seg.trimIn) || 0);
         const trimOut = Math.min(duration, Math.max(trimIn + 0.1, Number(seg.trimOut || duration) || duration));
@@ -12541,8 +12609,8 @@ function smartMinimaxBodyHtml(node){
             ${result ? `<span class="minimax-segment-result"><i data-lucide="video"></i></span>` : ''}
             ${refCount ? `<span class="minimax-clip-ref-count"><i data-lucide="paperclip"></i>${refCount}</span>` : ''}
             ${node.segments.length > 1 ? `<button type="button" class="minimax-clip-delete" data-minimax-segment-delete="${escapeAttr(seg.id)}" title="${escapeAttr(capabilityUiText('删除','Delete'))}"><i data-lucide="trash-2"></i></button>` : ''}
-            <span class="minimax-trim minimax-trim-left ${isConnection ? 'director-connection-edge' : ''}" data-minimax-trim="left" data-minimax-trim-segment="${escapeAttr(seg.id)}" style="left:${isConnection ? 0 : (trimIn / duration) * 100}%"></span>
-            <span class="minimax-trim minimax-trim-right ${isConnection ? 'director-connection-edge' : ''}" data-minimax-trim="right" data-minimax-trim-segment="${escapeAttr(seg.id)}" style="left:${isConnection ? 100 : (trimOut / duration) * 100}%"></span>
+            <span class="minimax-trim minimax-trim-left ${isConnection ? 'director-connection-edge' : ''}" data-minimax-trim="left" data-minimax-trim-segment="${escapeAttr(seg.id)}" style="left:0%"></span>
+            <span class="minimax-trim minimax-trim-right ${isConnection ? 'director-connection-edge' : ''}" data-minimax-trim="right" data-minimax-trim-segment="${escapeAttr(seg.id)}" style="left:100%"></span>
         </div>`;
     };
     const timeline = [
@@ -12556,8 +12624,8 @@ function smartMinimaxBodyHtml(node){
     const previewH = Math.max(130, Math.min(760, Number(node.minimaxPreviewH || 190)));
     const videoTrackH = Math.max(44, Math.min(160, Number(node.minimaxVideoTrackH || 70)));
     const libraryW = Math.max(178, Math.min(420, Number(node.minimaxLibraryW || 178)));
-    const timelineZoom = Math.max(1, Math.min(8, Number(node.timelineZoom || 1)));
-    const timelineWidth = `${Math.round(timelineZoom * 100)}%`;
+    const timelineZoom = Math.max(0.5, Math.min(8, Number(node.timelineZoom || 1)));
+    const timelineWidth = `${Math.max(100, Math.round(timelineZoom * total / 16 * 100))}%`;
     const refAssets = smartDirectorUniqueRefs([
         ...(node.assets || []).map(ref => ({...ref, kind:mediaKindForItem(ref)})),
         ...node.segments.flatMap(seg => (seg.refItems || []).map(ref => ({...ref, kind:mediaKindForItem(ref), segmentId:seg.id}))),
@@ -12704,10 +12772,15 @@ function smartMinimaxBodyHtml(node){
                         <button type="button" data-minimax-play-timeline="1" title="${escapeAttr(capabilityUiText('播放 / 暂停','Play / pause'))}"><i data-lucide="play"></i></button>
                         <button type="button" data-minimax-toggle-mute="1" title="${escapeAttr(node.minimaxMuted ? capabilityUiText('取消静音','Unmute') : capabilityUiText('静音','Mute'))}"><i data-lucide="${node.minimaxMuted ? 'volume-x' : 'volume-2'}"></i></button>
                     </div>
-                    <div class="minimax-ruler"><div class="minimax-track-content" style="width:${timelineWidth}">${ticks}<span class="minimax-playhead" data-minimax-playhead="1" style="left:${playheadPct}%"></span></div></div>
                     <div class="minimax-add-gutter minimax-ruler-gutter"></div>
                     <div class="minimax-track-label minimax-video-label">${escapeHtml(tr('smart.directorTimeline'))}</div>
-                    <div class="minimax-track minimax-video-track"><div class="minimax-track-content" style="width:${timelineWidth}">${timeline}</div></div>
+                    <div class="director-timeline-scroll" data-director-timeline-scroll="1" data-timeline-scroll-ms="${escapeAttr(node.timelineScrollMs || 0)}">
+                        <div class="director-timeline-canvas" style="width:${timelineWidth}">
+                            <div class="minimax-ruler">${ticks}</div>
+                            <div class="minimax-track minimax-video-track"><div class="minimax-track-content">${timeline}</div></div>
+                            <span class="minimax-playhead" data-minimax-playhead="1" style="left:${playheadPct}%"></span>
+                        </div>
+                    </div>
                     <div class="director-add-actions">
                         <button type="button" data-minimax-add-segment="1" title="${escapeAttr(tr('smart.directorAddClip'))}"><i data-lucide="plus"></i><span>${escapeHtml(tr('smart.directorAddClip'))}</span></button>
                         <button type="button" data-minimax-add-connection="1" title="${escapeAttr(tr('smart.directorAddConnectionClip'))}"><i data-lucide="link-2"></i><span>${escapeHtml(tr('smart.directorAddConnectionClip'))}</span></button>
@@ -12736,7 +12809,7 @@ function smartMinimaxBodyHtml(node){
                                 <option value="comfyui" ${minimaxEngine === 'comfyui' ? 'selected' : ''}>ComfyUI</option>
                                 <option value="runninghub" ${minimaxEngine === 'runninghub' ? 'selected' : ''}>RunningHub</option>
                             </select></label>` : directorGenerationControls}
-                            ${isMiniMaxDirectorNode(node) ? `<label><span>${escapeHtml(capabilityUiText('时长','Duration'))}</span><input type="number" min="0.5" max="60" step="0.1" data-minimax-seg-number="duration" value="${escapeAttr(segDuration)}"><b>s</b></label>
+                            ${isMiniMaxDirectorNode(node) ? `<label><span>${escapeHtml(capabilityUiText('时长','Duration'))}</span><input type="number" min="1" max="60" step="1" data-minimax-seg-number="duration" value="${escapeAttr(Math.round(segDuration))}"><b>s</b></label>
                             <label><span>${escapeHtml(capabilityUiText('百万像素','Megapixels'))}</span><input type="number" min="0.1" max="2" step="0.1" data-minimax-seg-number="megapixels" value="${escapeAttr(megapixels)}"><b>MP</b></label>
                             <label class="minimax-wide-setting"><span>${escapeHtml(capabilityUiText('画面比例','Aspect ratio'))}</span><select data-minimax-select="aspectRatio">${['16:9 (Widescreen)','9:16 (Portrait)','1:1 (Square)','4:3 (Standard)','3:4 (Portrait)','21:9 (Ultrawide)'].map(value => `<option value="${escapeAttr(value)}" ${value === aspectRatio ? 'selected' : ''}>${escapeHtml(value.split(' ')[0])}</option>`).join('')}</select></label>` : directorParameterHtml}
                             <button class="minimax-run ${selected?.running ? 'is-stop' : ''}" type="button" data-minimax-run="${escapeAttr(node.id)}" data-director-base-blocked="${directorRunBlocked && !directorPromptInvalid ? '1' : '0'}" ${directorRunBlocked ? 'disabled' : ''} title="${escapeAttr(directorRunTitle)}"><i data-lucide="${selected?.running ? 'loader-2' : 'sparkles'}"></i><span>${escapeHtml(selected?.running ? capabilityUiText('运行中','Running') : capabilityUiText('生成 Clip','Generate Clip'))}</span></button>
@@ -14535,6 +14608,19 @@ function bindMinimaxNodeControls(el, node){
         syncSelectionUi();
         updateComposer();
     };
+    const timelineViewport = el.querySelector('[data-director-timeline-scroll]');
+    if(timelineViewport){
+        timelineViewport.addEventListener('scroll', () => {
+            const totalMs = smartMinimaxTimelineTotal(node) * 1000;
+            node.timelineScrollMs = totalMs * timelineViewport.scrollLeft / Math.max(1, timelineViewport.scrollWidth);
+            scheduleSave();
+        }, {passive:true});
+        requestAnimationFrame(() => {
+            if(!timelineViewport.isConnected) return;
+            const totalMs = smartMinimaxTimelineTotal(node) * 1000;
+            timelineViewport.scrollLeft = Math.max(0, Number(node.timelineScrollMs || 0)) / Math.max(1, totalMs) * timelineViewport.scrollWidth;
+        });
+    }
     el.querySelectorAll('.minimax-library-list').forEach(scroller => {
         scroller.addEventListener('wheel', e => e.stopPropagation(), {passive:true});
     });
@@ -14613,6 +14699,7 @@ function bindMinimaxNodeControls(el, node){
         focusMinimaxNode();
         const seg = smartMinimaxSelectedSegment(node);
         if(!seg) return;
+        const previousDurationMs = Number(seg.durationMs || 0);
         seg.generation = seg.generation && typeof seg.generation === 'object' ? seg.generation : {providerId:'', model:'', mode:'', params:{}};
         if(key === 'providerId'){
             seg.generation.providerId = value;
@@ -14620,6 +14707,16 @@ function bindMinimaxNodeControls(el, node){
         } else if(key === 'model') {
             const profile = capabilityProfileFor(seg.generation.providerId, value, 'video_generation');
             smartDirectorSelectCapabilityModel(seg, value, profile);
+            const desiredDurationMs = Number(seg.durationMs || previousDurationMs);
+            if(seg.type !== 'connection' && desiredDurationMs !== previousDurationMs){
+                seg.durationMs = previousDurationMs;
+                seg.trimOutMs = previousDurationMs;
+                smartDirectorReplaceTimelineClips(node, SMART_DIRECTOR_CORE.resizeOrdinaryClip(node.segments, seg.id, {
+                    edge:'right',
+                    timeMs:Number(seg.startMs || 0) + desiredDurationMs,
+                    constraint:smartDirectorDurationConstraint(seg, profile)
+                }));
+            }
         } else if(key === 'mode') {
             seg.generation.mode = value;
         }
@@ -14697,7 +14794,24 @@ function bindMinimaxNodeControls(el, node){
     const updateDirectorCapability = (key, value, rerender=true) => {
         const {seg, profile} = currentDirectorCapabilityContext();
         if(!seg || !profile || !key) return;
+        const previousDurationMs = Number(seg.durationMs || 0);
         smartDirectorSetCapabilityParameter(seg, profile, key, value);
+        if(capabilityParameterSemantic(key, profile.parameters?.[key] || {}) === 'duration' && Number(seg.durationMs || 0) !== previousDurationMs){
+            const desiredDurationMs = Number(seg.durationMs || previousDurationMs);
+            if(seg.type !== 'connection'){
+                seg.durationMs = previousDurationMs;
+                seg.trimOutMs = previousDurationMs;
+                smartDirectorReplaceTimelineClips(node, SMART_DIRECTOR_CORE.resizeOrdinaryClip(node.segments, seg.id, {
+                    edge:'right',
+                    timeMs:Number(seg.startMs || 0) + desiredDurationMs,
+                    constraint:smartDirectorDurationConstraint(seg, profile)
+                }));
+                const active = node.segments.find(item => item.id === seg.id);
+                if(active?.generation?.params) active.generation.params[key] = Number(active.durationMs || 0) / 1000;
+            }
+            (node.segments || []).filter(item => item.type === 'connection').forEach(item => smartDirectorApplyConnectionDerivation(node, item));
+            if(!rerender) smartDirectorSyncTimelineClipDom(el, node);
+        }
         scheduleSave();
         if(rerender) render();
     };
@@ -14772,45 +14886,54 @@ function bindMinimaxNodeControls(el, node){
             if(e.target.closest('[data-minimax-trim],button,input,select,textarea')) return;
             focusMinimaxNode();
             e.stopPropagation();
-            const seg = node.segments.find(item => item.id === btn.dataset.minimaxSegment);
-            if(seg?.type !== 'connection' || e.button !== 0) return;
+            const initialSeg = node.segments.find(item => item.id === btn.dataset.minimaxSegment);
+            if(!initialSeg || e.button !== 0) return;
             e.preventDefault();
-            node.selectedSegmentId = seg.id;
+            node.selectedSegmentId = initialSeg.id;
             const content = btn.closest('.minimax-track-content');
-            const total = smartMinimaxTimelineTotal(node);
             const rect = content?.getBoundingClientRect?.();
             if(!rect?.width) return;
             const startClientX = e.clientX;
-            const originalStartMs = Number(seg.startMs || 0);
-            const originalDurationMs = Number(seg.durationMs || 1000);
+            const originalStartMs = Number(initialSeg.startMs || 0);
+            const originalDurationMs = Number(initialSeg.durationMs || 1000);
+            const originalClips = node.segments.map((clip, index) => SMART_DIRECTOR_CORE.normalizeClip(clip, index));
             let changed = false;
             const onMove = event => {
                 const deltaPx = event.clientX - startClientX;
                 if(!changed && Math.abs(deltaPx) < 2) return;
                 if(!changed){ pushUndo(); changed = true; }
-                const deltaMs = deltaPx / rect.width * total * 1000;
-                const maxStartMs = Math.max(0, total * 1000 - originalDurationMs);
-                seg.startMs = Math.max(0, Math.min(maxStartMs, Math.round(originalStartMs + deltaMs)));
-                const leftPct = total > 0 ? seg.startMs / 1000 / total * 100 : 0;
-                btn.style.left = `${leftPct}%`;
+                const totalMs = smartMinimaxTimelineTotal(node) * 1000;
+                const deltaMs = deltaPx / rect.width * totalMs;
+                if(initialSeg.type === 'connection'){
+                    const next = originalClips.map((clip, index) => SMART_DIRECTOR_CORE.normalizeClip(clip, index));
+                    const moving = next.find(clip => clip.id === initialSeg.id);
+                    if(moving) moving.startMs = Math.max(0, Math.round((originalStartMs + deltaMs) / 1000) * 1000);
+                    smartDirectorReplaceTimelineClips(node, next);
+                } else {
+                    smartDirectorReplaceTimelineClips(node, SMART_DIRECTOR_CORE.moveOrdinaryClip(originalClips, initialSeg.id, originalStartMs + deltaMs));
+                }
+                smartDirectorSyncTimelineClipDom(el, node);
             };
             const onUp = () => {
                 window.removeEventListener('mousemove', onMove, true);
                 window.removeEventListener('mouseup', onUp, true);
                 if(!changed) return;
-                const conflictId = SMART_DIRECTOR_CORE.connectionClipConflict(seg, node.segments);
-                if(conflictId){
-                    seg.startMs = originalStartMs;
-                    seg.durationMs = originalDurationMs;
-                    toast(capabilityUiText('连接 Clip 不能互相覆盖','Connection Clips cannot overlap'));
-                } else {
-                    smartDirectorApplyConnectionDerivation(node, seg, {applyFrameSnap:true});
-                    const snappedConflictId = SMART_DIRECTOR_CORE.connectionClipConflict(seg, node.segments);
-                    if(snappedConflictId){
-                        seg.startMs = originalStartMs;
-                        seg.durationMs = originalDurationMs;
-                        toast(capabilityUiText('自动对齐后会与另一个连接 Clip 冲突','Snapping would overlap another connection Clip'));
+                const seg = node.segments.find(item => item.id === initialSeg.id);
+                if(seg?.type === 'connection'){
+                    const conflictId = SMART_DIRECTOR_CORE.connectionClipConflict(seg, node.segments);
+                    if(conflictId){
+                        smartDirectorReplaceTimelineClips(node, originalClips);
+                        toast(capabilityUiText('连接 Clip 不能互相覆盖','Connection Clips cannot overlap'));
+                    } else {
+                        smartDirectorApplyConnectionDerivation(node, seg, {applyFrameSnap:true});
+                        const snappedConflictId = SMART_DIRECTOR_CORE.connectionClipConflict(seg, node.segments);
+                        if(snappedConflictId){
+                            smartDirectorReplaceTimelineClips(node, originalClips);
+                            toast(capabilityUiText('自动对齐后会与另一个连接 Clip 冲突','Snapping would overlap another connection Clip'));
+                        }
                     }
+                } else {
+                    (node.segments || []).filter(item => item.type === 'connection').forEach(item => smartDirectorApplyConnectionDerivation(node, item));
                 }
                 render();
                 scheduleSave();
@@ -14822,11 +14945,11 @@ function bindMinimaxNodeControls(el, node){
             e.preventDefault();
             e.stopPropagation();
             focusMinimaxNode();
-            const previousSegmentId = node.selectedSegmentId;
+            const renderedSegmentId = el.querySelector('.minimax-workbench')?.dataset.directorRenderedSegment || '';
             node.selectedSegmentId = btn.dataset.minimaxSegment || node.selectedSegmentId;
             const seg = smartMinimaxSelectedSegment(node);
             const time = smartMinimaxSetPlayheadDom(el, node, Number(seg?.start || 0) + Number(seg?.trimIn || 0));
-            if(!isMiniMaxDirectorNode(node) && previousSegmentId !== seg?.id){
+            if(renderedSegmentId !== seg?.id){
                 render();
                 scheduleSave();
                 return;
@@ -14858,14 +14981,14 @@ function bindMinimaxNodeControls(el, node){
                 let changed = false;
                 const onMove = event => {
                     if(!changed){ pushUndo(); changed = true; }
-                    const pointerMs = Math.max(0, Math.min(total * 1000, Math.round((event.clientX - contentRect.left) / contentRect.width * total * 1000)));
+                    const pointerMs = Math.max(0, Math.min(total * 1000, Math.round(((event.clientX - contentRect.left) / contentRect.width * total * 1000) / 1000) * 1000));
                     if(mode === 'left'){
-                        seg.startMs = Math.min(originalEndMs - 500, pointerMs);
-                        seg.durationMs = Math.max(500, originalEndMs - seg.startMs);
+                        seg.startMs = Math.min(originalEndMs - 1000, pointerMs);
+                        seg.durationMs = Math.max(1000, originalEndMs - seg.startMs);
                     } else {
-                        const endMs = Math.max(originalStartMs + 500, pointerMs);
+                        const endMs = Math.max(originalStartMs + 1000, pointerMs);
                         seg.startMs = originalStartMs;
-                        seg.durationMs = Math.max(500, endMs - originalStartMs);
+                        seg.durationMs = Math.max(1000, endMs - originalStartMs);
                     }
                     track.style.left = `${seg.startMs / 1000 / total * 100}%`;
                     track.style.width = `${Math.max(0.5, seg.durationMs / 1000 / total * 100)}%`;
@@ -14898,23 +15021,32 @@ function bindMinimaxNodeControls(el, node){
             pushUndo();
             node.selectedSegmentId = seg.id;
             const mode = handle.dataset.minimaxTrim;
-            const trimLeft = track.querySelector('[data-minimax-trim="left"]');
-            const trimRight = track.querySelector('[data-minimax-trim="right"]');
+            const content = track.closest('.minimax-track-content');
+            const contentRect = content?.getBoundingClientRect?.();
+            if(!contentRect?.width) return;
+            const originalClips = node.segments.map((clip, index) => SMART_DIRECTOR_CORE.normalizeClip(clip, index));
+            const profile = capabilityProfileFor(seg?.generation?.providerId, seg?.generation?.model, 'video_generation');
+            const constraint = smartDirectorDurationConstraint(seg, profile);
             smartMinimaxSetActiveSegmentDom(el, node, seg);
             const onMove = event => {
-                const rect = track.getBoundingClientRect();
-                const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
-                const value = ratio * Math.max(0.5, Number(seg.duration || 1));
-                if(mode === 'left') seg.trimIn = Math.max(0, Math.min(value, Number(seg.trimOut || seg.duration) - 0.1));
-                else seg.trimOut = Math.max(Number(seg.trimIn || 0) + 0.1, Math.min(Number(seg.duration || 0.5), value));
-                if(trimLeft) trimLeft.style.left = `${(Number(seg.trimIn || 0) / Math.max(0.5, Number(seg.duration || 1))) * 100}%`;
-                if(trimRight) trimRight.style.left = `${(Number(seg.trimOut || seg.duration) / Math.max(0.5, Number(seg.duration || 1))) * 100}%`;
-                const time = smartMinimaxSetPlayheadDom(el, node, Number(seg.start || 0) + Number(mode === 'left' ? seg.trimIn : seg.trimOut));
-                smartMinimaxSyncPlayerDom(el, seg, time, false);
+                const totalMs = smartMinimaxTimelineTotal(node) * 1000;
+                const pointerMs = Math.max(0, Math.round(((event.clientX - contentRect.left) / contentRect.width * totalMs) / 1000) * 1000);
+                const next = SMART_DIRECTOR_CORE.resizeOrdinaryClip(originalClips, seg.id, {edge:mode, timeMs:pointerMs, constraint});
+                smartDirectorReplaceTimelineClips(node, next);
+                const active = node.segments.find(item => item.id === seg.id);
+                if(active){
+                    active.trimInMs = 0;
+                    active.trimOutMs = active.durationMs;
+                    const durationEntry = Object.entries(profile?.parameters || {}).find(([key, spec]) => capabilityParameterSemantic(key, spec) === 'duration');
+                    if(durationEntry && active.generation?.params) active.generation.params[durationEntry[0]] = Number(active.durationMs || 0) / 1000;
+                }
+                smartDirectorSyncTimelineClipDom(el, node);
             };
             const onUp = () => {
                 window.removeEventListener('mousemove', onMove, true);
                 window.removeEventListener('mouseup', onUp, true);
+                (node.segments || []).filter(item => item.type === 'connection').forEach(item => smartDirectorApplyConnectionDerivation(node, item));
+                render();
                 scheduleSave();
             };
             window.addEventListener('mousemove', onMove, true);
@@ -14927,21 +15059,18 @@ function bindMinimaxNodeControls(el, node){
             e.stopPropagation();
             focusMinimaxNode();
             pushUndo();
-            const current = smartMinimaxSelectedSegment(node);
-            const start = current ? Number(current.start || 0) + Number(current.duration || 0) : Math.max(0, Number(node.duration || 8));
-            const duration = Math.max(0.5, Number(current?.duration || node.duration || 8) || 8);
-            const seg = attachDirectorClipCompatibility(SMART_DIRECTOR_CORE.normalizeClip({
-                id:uid('clip'), type:'ordinary', startMs:start * 1000, durationMs:duration * 1000,
-                prompt:'', inputRefs:[], disabledInputRefs:[], timelineInputs:[],
-                generation:{providerId:'', model:'', mode:'', params:{
-                    aspect_ratio:current?.aspectRatio || node.aspectRatio || '16:9 (Widescreen)',
-                    megapixels:Number(current?.megapixels || node.megapixels || 0.4)
-                }},
-                trimInMs:0, trimOutMs:duration * 1000, results:[], currentResultId:''
-            }, node.segments.length));
-            node.segments.push(seg);
-            node.selectedSegmentId = seg.id;
-            node.duration = Math.max(Number(node.duration || 0), seg.start + seg.duration);
+            const director = SMART_DIRECTOR_CORE.appendFreshOrdinaryClip({
+                clips:node.segments,
+                selectedClipId:node.selectedSegmentId,
+                timelineZoom:node.timelineZoom,
+                timelineScrollMs:node.timelineScrollMs,
+                timelineMinViewMs:node.timelineMinViewMs
+            }, {id:uid('clip'), durationMs:8000});
+            smartDirectorReplaceTimelineClips(node, director.clips);
+            node.selectedSegmentId = director.selectedClipId;
+            const seg = node.segments.find(item => item.id === director.selectedClipId);
+            const visibleSpanMs = Math.max(8000, Number(node.timelineMinViewMs || 16000)) / Math.max(0.5, Number(node.timelineZoom || 1));
+            node.timelineScrollMs = Math.max(0, Number(seg?.startMs || 0) - visibleSpanMs * 0.35);
             render();
             scheduleSave();
         };
@@ -14984,7 +15113,6 @@ function bindMinimaxNodeControls(el, node){
             node.segments = node.segments.filter(seg => seg.id !== removeId);
             node.selectedSegmentId = node.segments[0]?.id || '';
             smartMinimaxEnsureSegment(node);
-            smartMinimaxCompactSegments(node);
             el.querySelectorAll('[data-minimax-segment]').forEach(item => {
                 if(item.dataset.minimaxSegment === removeId) item.remove();
             });
@@ -15000,7 +15128,6 @@ function bindMinimaxNodeControls(el, node){
             node.segments = node.segments.filter(seg => seg.id !== removeId);
             node.selectedSegmentId = node.segments.find(seg => seg.id === node.selectedSegmentId)?.id || node.segments[0]?.id || '';
             smartMinimaxEnsureSegment(node);
-            smartMinimaxCompactSegments(node);
             el.querySelectorAll('[data-minimax-segment]').forEach(item => {
                 if(item.dataset.minimaxSegment === removeId) item.remove();
             });
@@ -15040,8 +15167,20 @@ function bindMinimaxNodeControls(el, node){
             const value = Number(input.value);
             if(key === 'start') seg.start = Math.max(0, value || 0);
             if(key === 'duration'){
-                seg.duration = Math.max(0.5, value || 0.5);
-                seg.trimOut = Math.min(Math.max(Number(seg.trimOut || seg.duration), Number(seg.trimIn || 0) + 0.1), seg.duration);
+                const desiredDurationMs = SMART_DIRECTOR_CORE.constrainDurationMs((value || 1) * 1000, smartDirectorDurationConstraint(seg));
+                if(seg.type === 'connection'){
+                    seg.durationMs = desiredDurationMs;
+                    seg.trimInMs = 0;
+                    seg.trimOutMs = desiredDurationMs;
+                    smartDirectorApplyConnectionDerivation(node, seg);
+                } else {
+                    smartDirectorReplaceTimelineClips(node, SMART_DIRECTOR_CORE.resizeOrdinaryClip(node.segments, seg.id, {
+                        edge:'right',
+                        timeMs:Number(seg.startMs || 0) + desiredDurationMs,
+                        constraint:smartDirectorDurationConstraint(seg)
+                    }));
+                    (node.segments || []).filter(item => item.type === 'connection').forEach(item => smartDirectorApplyConnectionDerivation(node, item));
+                }
             }
             if(key === 'trimIn') seg.trimIn = Math.max(0, Math.min(value || 0, Math.max(0, Number(seg.trimOut || seg.duration) - 0.1)));
             if(key === 'trimOut') seg.trimOut = Math.max(Number(seg.trimIn || 0) + 0.1, Math.min(Number(seg.duration || 0.5), value || Number(seg.duration || 0.5)));
@@ -15143,18 +15282,19 @@ function bindMinimaxNodeControls(el, node){
     });
     el.querySelectorAll('[data-minimax-scrub-track]').forEach(track => {
         track.addEventListener('wheel', e => {
-            if(!e.ctrlKey) return;
+            const viewport = e.target.closest?.('[data-director-timeline-scroll]');
+            if(!viewport || selectedId !== node.id || selectedIds.length) return;
             e.preventDefault();
             e.stopPropagation();
-            focusMinimaxNode();
-            const current = Math.max(1, Math.min(8, Number(node.timelineZoom || 1)));
-            const next = Math.max(1, Math.min(8, current * (e.deltaY < 0 ? 1.12 : 0.89)));
-            if(Math.abs(next - current) < 0.01) return;
-            node.timelineZoom = next;
-            render();
+            if(e.ctrlKey){
+                if(smartDirectorZoomAtPointer(node, viewport, e)) render();
+            } else {
+                smartDirectorScrollTimelineByWheel(node, viewport, e);
+            }
             scheduleSave();
         }, {passive:false});
         track.addEventListener('mousedown', e => {
+            if(!e.target.closest?.('[data-director-timeline-scroll]')) return;
             if(e.target.closest('[data-minimax-segment],button,input,select,textarea,[data-minimax-trim]')) return;
             e.preventDefault();
             e.stopPropagation();

@@ -641,10 +641,16 @@ body.smart-prompt-split-resize .prompt-node-llm select { pointer-events:none !im
 .minimax-workbench .minimax-wb-main { grid-template-rows:var(--minimax-preview-h, 190px) calc(28px + var(--minimax-video-h, 70px)) minmax(170px, 1fr); }
 .minimax-workbench .minimax-edit-timeline { grid-template-columns:70px minmax(0, 1fr) 180px; grid-template-rows:28px var(--minimax-video-h, 70px); }
 .minimax-workbench .minimax-video-resize { left:70px; right:180px; }
-.minimax-workbench .minimax-video-track { grid-column:2; grid-row:2; }
-.minimax-workbench .minimax-ruler { grid-column:2; }
 .minimax-workbench .minimax-timeline-controls { grid-column:1; grid-row:1; gap:3px; }
 .minimax-workbench .minimax-video-label { grid-column:1; grid-row:2; }
+.director-timeline-scroll { grid-column:2; grid-row:1 / 3; min-width:0; min-height:0; overflow-x:auto; overflow-y:hidden; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:#4b5563 #17191c; background:#17191c; }
+.director-timeline-canvas { position:relative; min-width:100%; height:100%; display:grid; grid-template-rows:28px var(--minimax-video-h, 70px); }
+.director-timeline-canvas .minimax-ruler { grid-column:1; grid-row:1; position:relative; overflow:hidden; }
+.director-timeline-canvas .minimax-video-track { grid-column:1; grid-row:2; position:relative; min-width:0; }
+.director-timeline-canvas .minimax-track-content { position:absolute; inset:0; min-width:0; }
+.director-timeline-canvas .minimax-playhead { top:0; bottom:0; }
+.minimax-workbench .minimax-tl-clip { min-width:18px; cursor:grab; }
+.minimax-workbench .minimax-tl-clip:active { cursor:grabbing; }
 .director-add-actions { grid-column:3; grid-row:2; border-left:1px solid #2f3338; display:grid; grid-template-rows:1fr 1fr; background:#202328; }
 .director-add-actions button { min-width:0; padding:0 8px; border-bottom:1px solid #2f3338; color:#cbd5e1; display:flex; align-items:center; justify-content:flex-start; gap:6px; font-size:9.5px; font-weight:850; text-align:left; }
 .director-add-actions button:last-child { border-bottom:0; color:#93c5fd; }

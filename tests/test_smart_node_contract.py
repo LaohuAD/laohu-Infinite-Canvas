@@ -111,6 +111,41 @@ console.log(JSON.stringify({
         self.assertIn("/api/smart-canvas/director-export", exporter)
         self.assertNotIn("/api/smart-canvas/minimax-export", exporter)
 
+    def test_director_timeline_uses_shared_scroll_viewport_and_core_mutations(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        css = (ROOT / "static/css/smart-canvas.css").read_text(encoding="utf-8")
+
+        self.assertIn('data-director-timeline-scroll="1"', source)
+        self.assertIn("SMART_DIRECTOR_CORE.moveOrdinaryClip", source)
+        self.assertIn("SMART_DIRECTOR_CORE.resizeOrdinaryClip", source)
+        self.assertIn("timelineScrollMs", source)
+        self.assertIn("smartDirectorReplaceTimelineClips", source)
+        self.assertIn("smartDirectorDurationConstraint", source)
+        self.assertIn("smartDirectorZoomAtPointer", source)
+        self.assertIn("smartDirectorScrollTimelineByWheel", source)
+        delete_handlers = source[
+            source.index("el.querySelectorAll('[data-minimax-delete-segment]')"):
+            source.index("el.querySelectorAll('[data-minimax-number]')")
+        ]
+        self.assertNotIn("smartMinimaxCompactSegments(node);", delete_handlers)
+        self.assertIn(".director-timeline-scroll", css)
+        self.assertIn("if(renderedSegmentId !== seg?.id)", source)
+        refs = source[source.index("function smartMinimaxRefsForKind"):source.index("function smartMinimaxAllRefs")]
+        self.assertIn("legacyFallback", refs)
+        self.assertNotIn("(clipRefs.length || timelineRefs.length) ? local", refs)
+
+    def test_director_add_clip_uses_fresh_core_state_and_selects_it(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        handler = source[
+            source.index("el.querySelectorAll('[data-minimax-add-segment]')"):
+            source.index("el.querySelectorAll('[data-minimax-add-connection]')")
+        ]
+
+        self.assertIn("SMART_DIRECTOR_CORE.appendFreshOrdinaryClip", handler)
+        self.assertIn("node.selectedSegmentId = director.selectedClipId", handler)
+        self.assertNotIn("current?.aspectRatio", handler)
+        self.assertNotIn("current?.megapixels", handler)
+
     def test_runninghub_upload_source_covers_all_project_media_routes(self):
         script = """
 const c=require('./static/js/smart-node-contract.js');
