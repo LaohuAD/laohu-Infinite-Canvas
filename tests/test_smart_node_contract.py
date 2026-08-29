@@ -76,6 +76,20 @@ console.log(JSON.stringify({
         self.assertTrue(data["minimax"])
         self.assertTrue(data["legacy"])
 
+    def test_canvas_exposes_generic_and_minimax_director_entries_with_bilingual_labels(self):
+        html = (ROOT / "static/smart-canvas.html").read_text(encoding="utf-8")
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        i18n = (ROOT / "static/js/i18n/smart-canvas.js").read_text(encoding="utf-8")
+
+        self.assertIn('data-create-type="video-director"', html)
+        self.assertIn('data-i18n="smart.createVideoDirector"', html)
+        self.assertIn('data-create-type="minimax-director"', html)
+        self.assertIn('data-i18n="smart.createMinimaxDirector"', html)
+        self.assertIn("createDirectorNode('generic'", source)
+        self.assertIn("createDirectorNode('minimax-h3'", source)
+        self.assertIn('"smart.createVideoDirector": { zh: "通用导演台", en: "Video Director" }', i18n)
+        self.assertIn('"smart.createMinimaxDirector": { zh: "MiniMax H3 导演台", en: "MiniMax H3 Director" }', i18n)
+
     def test_runninghub_upload_source_covers_all_project_media_routes(self):
         script = """
 const c=require('./static/js/smart-node-contract.js');

@@ -78,14 +78,24 @@
         };
     }
 
+    function assetKey(value){
+        const source = value && typeof value === 'object' ? value : {};
+        const url = String(source.url || source.path || source.src || source.uri || '').trim();
+        if(url) return `url:${url}`;
+        const text = String(source.text ?? source.content ?? '').trim();
+        if(text) return `text:${text}`;
+        return `id:${String(source.id || source.assetId || source.material_id || '')}`;
+    }
+
     function normalizeDirector(value){
         const source = value && typeof value === 'object' && !Array.isArray(value) ? clone(value) : {};
         const seenAssets = new Set();
         const assets = (Array.isArray(source.assets) ? source.assets : [])
             .map(normalizeAsset)
             .filter(asset => {
-                if(seenAssets.has(asset.id)) return false;
-                seenAssets.add(asset.id);
+                const key = assetKey(asset);
+                if(seenAssets.has(key)) return false;
+                seenAssets.add(key);
                 return true;
             });
         const directorKind = source.directorKind === 'minimax-h3' ? 'minimax-h3' : 'generic';
@@ -98,6 +108,52 @@
             clips:(Array.isArray(source.clips) ? source.clips : []).map(normalizeClip),
             selectedClipId:String(source.selectedClipId || source.selected_clip_id || '')
         };
+    }
+
+    function registerProjectAssets(value, refs){
+        const director = normalizeDirector(value);
+        const byKey = new Map(director.assets.map(asset => [assetKey(asset), asset]));
+        (Array.isArray(refs) ? refs : []).forEach((ref, index) => {
+            const normalized = normalizeAsset(ref, director.assets.length + index);
+            const key = assetKey(normalized);
+            if(!key || key === 'id:') return;
+            if(!byKey.has(key)) byKey.set(key, normalized);
+        });
+        director.assets = [...byKey.values()];
+        return director;
+    }
+
+    function attachAssetsToClip(value, clipId, refs){
+        let director = registerProjectAssets(value, refs);
+        const clip = director.clips.find(item => item.id === clipId);
+        if(!clip) return director;
+        const projectByKey = new Map(director.assets.map(asset => [assetKey(asset), asset]));
+        const clipByKey = new Map((clip.inputRefs || []).map(asset => [assetKey(asset), asset]));
+        (Array.isArray(refs) ? refs : []).forEach(ref => {
+            const registered = projectByKey.get(assetKey(ref));
+            if(registered && !clipByKey.has(assetKey(registered))) clipByKey.set(assetKey(registered), clone(registered));
+        });
+        clip.inputRefs = [...clipByKey.values()];
+        return director;
+    }
+
+    function referenceLabels(clip){
+        const labels = {text:'文本', image:'图片', video:'视频', audio:'音频'};
+        const order = ['text', 'image', 'video', 'audio'];
+        const counters = {text:0, image:0, video:0, audio:0};
+        return (Array.isArray(clip?.inputRefs) ? clip.inputRefs : [])
+            .map((asset, index) => normalizeAsset(asset, index))
+            .filter(asset => order.includes(asset.kind))
+            .sort((left, right) => order.indexOf(left.kind) - order.indexOf(right.kind))
+            .map(asset => {
+                counters[asset.kind] += 1;
+                return {
+                    assetId:asset.id,
+                    kind:asset.kind,
+                    mention:`@${labels[asset.kind]}${counters[asset.kind]}`,
+                    asset
+                };
+            });
     }
 
     function migrateLegacyMinimaxNode(value){
@@ -316,6 +372,10 @@
         NODE_TYPES,
         normalizeClip,
         normalizeDirector,
+        assetKey,
+        registerProjectAssets,
+        attachAssetsToClip,
+        referenceLabels,
         migrateLegacyMinimaxNode,
         clipEndMs,
         clipMidpoint,

@@ -152,6 +152,30 @@ console.log(JSON.stringify(migrated));
         self.assertNotIn("materials", data)
         self.assertNotIn("refs", data)
 
+    def test_project_registration_and_direct_clip_drop_share_stable_assets(self):
+        data = run_node("""
+const d=require('./static/js/smart-director-core.js');
+let director=d.normalizeDirector({clips:[{id:'clip-a'}]});
+director=d.registerProjectAssets(director,[
+  {id:'image-a',kind:'image',url:'/api/materials/image-a'},
+  {id:'image-a-copy',kind:'image',url:'/api/materials/image-a'}
+]);
+director=d.attachAssetsToClip(director,'clip-a',[
+  {id:'image-a-copy',kind:'image',url:'/api/materials/image-a'},
+  {id:'audio-a',kind:'audio',url:'/api/materials/audio-a'},
+  {id:'text-a',kind:'text',text:'旁白'}
+]);
+console.log(JSON.stringify({director,labels:d.referenceLabels(director.clips[0])}));
+""")
+
+        self.assertEqual(len(data["director"]["assets"]), 3)
+        self.assertEqual(len(data["director"]["clips"][0]["inputRefs"]), 3)
+        self.assertEqual(
+            [item["mention"] for item in data["labels"]],
+            ["@文本1", "@图片1", "@音频1"],
+        )
+        self.assertEqual(data["labels"][1]["assetId"], "image-a")
+
 
 if __name__ == "__main__":
     unittest.main()
