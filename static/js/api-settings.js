@@ -424,6 +424,7 @@ function tr(key){
         'api.localComfyuiNav':'本地 ComfyUI',
         'api.runningHubComfyuiNav':'RunningHub ComfyUI',
         'api.comfyuiSettingsDesc':'在这里统一管理 RunningHub AI 应用和本地 ComfyUI 工作流。RunningHub 的 API Key 仍在对应平台中保存。',
+        'api.runningHubLegacyWorkflowDeprecated':'已废弃：RunningHub 旧工作流入口只用于历史画布兼容；新导演台和新节点仅使用已同步的 AI 应用。',
         'api.comfyuiSettingsBack':'返回平台设置'
     };
     return fallback[key] || key;

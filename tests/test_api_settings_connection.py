@@ -148,6 +148,16 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("comfyuiSettingsSection === 'runninghub'", script)
         self.assertIn(".comfyui-subnav", css)
 
+    def test_legacy_runninghub_workflow_is_visibly_marked_deprecated(self):
+        html = (ROOT / "static/api-settings.html").read_text(encoding="utf-8")
+        script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
+        i18n = (ROOT / "static/js/i18n/api-settings.js").read_text(encoding="utf-8")
+        combined = "\n".join((html, script, i18n))
+
+        self.assertIn("api.runningHubLegacyWorkflowDeprecated", combined)
+        self.assertIn("已废弃", combined)
+        self.assertIn("Deprecated", combined)
+
     def test_runninghub_app_reference_accepts_id_and_supported_links(self):
         script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
 

@@ -11933,14 +11933,17 @@ function smartDirectorReplaceTimelineClips(node, clips){
 }
 function smartDirectorDurationConstraint(seg, profile=null){
     const entry = Object.entries(profile?.parameters || {}).find(([key, spec]) => capabilityParameterSemantic(key, spec) === 'duration');
-    const spec = entry?.[1] || {};
-    const seconds = value => Number.isFinite(Number(value)) && Number(value) > 0 ? Math.round(Number(value) * 1000) : 0;
-    const optionsMs = Array.isArray(spec.options) ? spec.options.map(seconds).filter(Boolean) : [];
+    const remembered = !entry && seg?.adapter?.durationConstraint && typeof seg.adapter.durationConstraint === 'object'
+        ? seg.adapter.durationConstraint
+        : null;
+    const spec = entry?.[1] || remembered || {};
+    const seconds = (value, rounding=Math.round) => Number.isFinite(Number(value)) && Number(value) > 0 ? rounding(Number(value)) * 1000 : 0;
+    const optionsMs = Array.isArray(spec.options) ? [...new Set(spec.options.map(value => seconds(value)).filter(Boolean))] : [];
     return {
         optionsMs,
-        minMs:seconds(spec.min) || (optionsMs.length ? Math.min(...optionsMs) : 1000),
-        maxMs:seconds(spec.max) || (optionsMs.length ? Math.max(...optionsMs) : 60000),
-        stepMs:seconds(spec.step) || 1000
+        minMs:seconds(spec.min, Math.ceil) || (optionsMs.length ? Math.min(...optionsMs) : 1000),
+        maxMs:seconds(spec.max, Math.floor) || (optionsMs.length ? Math.max(...optionsMs) : 60000),
+        stepMs:Math.max(1000, seconds(spec.step) || 1000)
     };
 }
 function smartDirectorSyncTimelineClipDom(el, node){
@@ -12045,8 +12048,28 @@ function smartDirectorInputAcceptance(seg, profile, kind){
         reason:accepted ? '' : capabilityUiText('当前输入组合不能再添加此类素材','This input combination cannot accept more media of this type')
     };
 }
+function smartDirectorPersonalizedInputAcceptance(node, seg, kind){
+    const mediaType = String(kind || '').toLowerCase();
+    if(!['text','image','video','audio'].includes(mediaType)) return {accepted:false, supported:false, atLimit:false, max:0, reason:capabilityUiText('不支持此类素材','Unsupported media type')};
+    if(mediaType === 'text') return {accepted:false, supported:false, atLimit:true, max:0, reason:capabilityUiText('请使用中间的提示词输入','Use the prompt field in the middle column')};
+    const state = smartDirectorPersonalizedAdapter(node, seg);
+    if(state.engine === 'runninghub-workflow-deprecated') return {accepted:true, supported:true, atLimit:false, max:smartMinimaxMaxForKind(mediaType), reason:''};
+    if(state.engine === 'local-comfyui' && state.selectedId === 'MiniMax_H3.json'){
+        const max = smartMinimaxMaxForKind(mediaType);
+        const count = (seg?.refItems || []).filter(item => mediaKindForItem(item) === mediaType).length;
+        return {accepted:count < max, supported:true, atLimit:count >= max, max, reason:count >= max ? capabilityUiText(`已达到上限 ${max}`,`Limit reached: ${max}`) : ''};
+    }
+    if(!state.selectedId || (state.engine === 'runninghub-app' && !state.fields.length) || (state.engine === 'local-comfyui' && !state.config)){
+        return {accepted:false, supported:false, atLimit:false, max:0, reason:capabilityUiText('请先选择并加载生成来源','Select and load a generation source first')};
+    }
+    const fields = state.fields.filter(field => (state.engine === 'runninghub-app' ? rhInputFieldKind(field) : comfyFieldKind(field)) === mediaType);
+    const max = fields.length;
+    const count = (seg?.refItems || []).filter(item => mediaKindForItem(item) === mediaType).length;
+    if(!max) return {accepted:false, supported:false, atLimit:false, max:0, reason:capabilityUiText('当前工作流或 AI 应用不支持此类素材','The selected workflow or AI app does not support this media type')};
+    return {accepted:count < max, supported:true, atLimit:count >= max, max, reason:count >= max ? capabilityUiText(`已达到字段上限 ${max}`,`Field limit reached: ${max}`) : ''};
+}
 function smartDirectorCanAcceptDrop(node, seg, item){
-    if(isMiniMaxDirectorNode(node)) return {accepted:true, reason:''};
+    if(isMiniMaxDirectorNode(node)) return smartDirectorPersonalizedInputAcceptance(node, seg, mediaKindForItem(item));
     const profile = capabilityProfileFor(seg?.generation?.providerId, seg?.generation?.model, 'video_generation');
     if(!profile) return {accepted:true, reason:''};
     return smartDirectorInputAcceptance(seg, profile, mediaKindForItem(item));
@@ -12569,6 +12592,133 @@ function smartDirectorChoiceControl({key, label, value='', displayValue='', opti
         <div class="smart-popover director-choice-popover" role="listbox"><div class="smart-popover-title">${escapeHtml(label)}</div>${search}<div class="director-choice-options">${optionHtml || `<div class="muted-note">${escapeHtml(capabilityUiText('暂无可用选项','No available options'))}</div>`}</div></div>
     </div>`;
 }
+function smartDirectorPersonalizedCommonRole(field, engine='local-comfyui'){
+    const text = engine === 'runninghub-app'
+        ? `${field?.fieldName || ''} ${field?.label || ''}`.toLowerCase()
+        : `${field?.input || ''} ${field?.name || ''} ${field?.label || ''}`.toLowerCase();
+    if(/duration|seconds|时长|秒数/.test(text)) return 'duration';
+    if(/aspect[_\s-]?ratio|画面比例|宽高比/.test(text)) return 'aspectRatio';
+    if(/megapixels?|百万像素/.test(text)) return 'megapixels';
+    return '';
+}
+function smartDirectorRememberPersonalizedDurationConstraint(adapter, fields, engine){
+    const field = (fields || []).find(item => smartDirectorPersonalizedCommonRole(item, engine) === 'duration');
+    if(!field){ delete adapter.durationConstraint; return; }
+    const options = engine === 'runninghub-app' ? rhExtractFieldOptions(field) : field.options;
+    adapter.durationConstraint = {
+        min:Number(field.min),
+        max:Number(field.max),
+        step:Number(field.step),
+        options:Array.isArray(options) ? options.map(Number).filter(value => Number.isFinite(value) && value > 0) : []
+    };
+}
+function smartDirectorPersonalizedAdapter(node, seg){
+    if(!seg) return {adapter:{}, engine:'local-comfyui', selectedId:'', options:[], fields:[], config:null, entry:null};
+    const hadAdapter = Boolean(seg.adapter && typeof seg.adapter === 'object');
+    seg.adapter = hadAdapter ? seg.adapter : {};
+    const adapter = seg.adapter;
+    if(!adapter.engine){
+        const legacyWorkflowId = String(node?.minimaxRunningHubWorkflowId || '').trim();
+        adapter.engine = !hadAdapter && smartMinimaxEngine(node) === 'runninghub' && legacyWorkflowId
+            ? 'runninghub-workflow-deprecated'
+            : 'local-comfyui';
+        adapter.selectedId = adapter.engine === 'runninghub-workflow-deprecated'
+            ? legacyWorkflowId
+            : String(node?.workflow || '').trim();
+    }
+    adapter.params = adapter.params && typeof adapter.params === 'object' ? adapter.params : {};
+    adapter.inputBindings = adapter.inputBindings && typeof adapter.inputBindings === 'object' ? adapter.inputBindings : {};
+    const engine = ['local-comfyui','runninghub-app','runninghub-workflow-deprecated'].includes(adapter.engine)
+        ? adapter.engine
+        : 'local-comfyui';
+    adapter.engine = engine;
+    if(engine === 'runninghub-app'){
+        const entries = runningHubEntries('app');
+        let entry = entries.find(item => runningHubEntryId(item, 'app') === String(adapter.selectedId || '')) || entries[0] || null;
+        const selectedId = entry ? runningHubEntryId(entry, 'app') : '';
+        adapter.selectedId = selectedId;
+        const fields = sortRunningHubFields(rhUsableFields(rhEntryFields(entry)));
+        smartDirectorRememberPersonalizedDurationConstraint(adapter, fields, engine);
+        return {
+            adapter, engine, selectedId, entry, fields, config:null,
+            options:entries.map(item => ({id:runningHubEntryId(item, 'app'), label:runningHubEntryLabel(item, 'app')})).filter(item => item.id)
+        };
+    }
+    const options = comfyWorkflows.map(workflow => ({
+        id:String(workflow?.name || '').trim(),
+        label:String(workflow?.title || workflow?.name || '').replace(/\.json$/i, '')
+    })).filter(item => item.id);
+    if(engine === 'runninghub-workflow-deprecated'){
+        return {adapter, engine, selectedId:String(adapter.selectedId || ''), entry:null, fields:[], config:null, options};
+    }
+    let selectedId = String(adapter.selectedId || '').trim();
+    if(!options.some(item => item.id === selectedId)) selectedId = options[0]?.id || '';
+    adapter.selectedId = selectedId;
+    const config = comfyWorkflowCache[selectedId]?.config || null;
+    const fields = Array.isArray(config?.fields) ? config.fields : [];
+    smartDirectorRememberPersonalizedDurationConstraint(adapter, fields, engine);
+    return {adapter, engine, selectedId, entry:null, fields, config, options};
+}
+function smartDirectorPersonalizedParamValue(adapterState, key, fallback=''){
+    const stored = adapterState?.adapter?.params?.[key];
+    return stored && typeof stored === 'object' && Object.prototype.hasOwnProperty.call(stored, 'value') ? stored.value : (stored ?? fallback);
+}
+function smartDirectorPersonalizedFieldHtml(adapterState, field){
+    if(smartDirectorPersonalizedCommonRole(field, adapterState.engine)) return '';
+    if(adapterState.engine === 'runninghub-app'){
+        const inputKind = rhInputFieldKind(field);
+        if(['text','image','video','audio'].includes(inputKind)) return '';
+        const key = rhParamKey(field.nodeId, field.fieldName);
+        const label = field.label || field.fieldName || key;
+        const kind = rhFieldRole(field);
+        const value = smartDirectorPersonalizedParamValue(adapterState, key, rhDefaultValue(field));
+        const options = rhExtractFieldOptions(field);
+        if(kind === 'boolean'){
+            const normalized = String(value).toLowerCase();
+            return `<label class="director-personalized-field"><span>${escapeHtml(label)}</span><select data-director-personalized-param="${escapeAttr(key)}" data-director-personalized-param-type="boolean"><option value="true" ${normalized === 'true' ? 'selected' : ''}>${escapeHtml(capabilityUiText('是','Yes'))}</option><option value="false" ${normalized === 'false' ? 'selected' : ''}>${escapeHtml(capabilityUiText('否','No'))}</option></select></label>`;
+        }
+        if(options?.length){
+            return `<label class="director-personalized-field"><span>${escapeHtml(label)}</span><select data-director-personalized-param="${escapeAttr(key)}">${options.map(option => `<option value="${escapeAttr(option)}" ${String(option) === String(value) ? 'selected' : ''}>${escapeHtml(field?.optionLabels?.[String(option)] ?? option)}</option>`).join('')}</select></label>`;
+        }
+        const inputType = ['number','slider'].includes(kind) ? 'number' : 'text';
+        const limits = inputType === 'number' ? ` min="${escapeAttr(field.min ?? '')}" max="${escapeAttr(field.max ?? '')}" step="${escapeAttr(field.step ?? 'any')}"` : '';
+        return `<label class="director-personalized-field"><span>${escapeHtml(label)}</span><input type="${inputType}" data-director-personalized-param="${escapeAttr(key)}" data-director-personalized-param-type="${escapeAttr(kind)}" value="${escapeAttr(value)}"${limits}></label>`;
+    }
+    const kind = comfyFieldKind(field);
+    if(['prompt','image','video','audio'].includes(kind)) return '';
+    const key = String(field.id || '');
+    const label = field.name || field.label || field.input || key;
+    const value = smartDirectorPersonalizedParamValue(adapterState, key, field.default ?? '');
+    if(field.type === 'boolean'){
+        return `<label class="director-personalized-field"><span>${escapeHtml(label)}</span><select data-director-personalized-param="${escapeAttr(key)}" data-director-personalized-param-type="boolean"><option value="true" ${Boolean(value) ? 'selected' : ''}>${escapeHtml(capabilityUiText('是','Yes'))}</option><option value="false" ${!Boolean(value) ? 'selected' : ''}>${escapeHtml(capabilityUiText('否','No'))}</option></select></label>`;
+    }
+    if(field.type === 'dropdown' && Array.isArray(field.options)){
+        return `<label class="director-personalized-field"><span>${escapeHtml(label)}</span><select data-director-personalized-param="${escapeAttr(key)}">${field.options.map(option => `<option value="${escapeAttr(option)}" ${String(option) === String(value) ? 'selected' : ''}>${escapeHtml(option)}</option>`).join('')}</select></label>`;
+    }
+    const inputType = ['number','slider'].includes(field.type) ? 'number' : 'text';
+    const limits = inputType === 'number' ? ` min="${escapeAttr(field.min ?? '')}" max="${escapeAttr(field.max ?? '')}" step="${escapeAttr(field.step ?? 'any')}"` : '';
+    return `<label class="director-personalized-field"><span>${escapeHtml(label)}</span><input type="${inputType}" data-director-personalized-param="${escapeAttr(key)}" data-director-personalized-param-type="${escapeAttr(field.type || '')}" value="${escapeAttr(value)}"${limits}></label>`;
+}
+function smartDirectorPersonalizedSettingHtml(node, seg, adapterState=smartDirectorPersonalizedAdapter(node, seg)){
+    const legacy = adapterState.engine === 'runninghub-workflow-deprecated';
+    const selectedLabel = adapterState.options.find(option => option.id === adapterState.selectedId)?.label || adapterState.selectedId;
+    const parameterHtml = adapterState.fields.map(field => smartDirectorPersonalizedFieldHtml(adapterState, field)).filter(Boolean).join('');
+    const emptyText = adapterState.selectedId
+        ? capabilityUiText('当前来源没有需要手动设置的参数，素材会按字段顺序映射。','This source has no manual parameters. Media is mapped in schema order.')
+        : adapterState.engine === 'runninghub-app'
+            ? capabilityUiText('请先在 API 设置中同步 RunningHub AI 应用','Sync a RunningHub AI app in API Settings first')
+            : capabilityUiText('请先在 API 设置中添加本地 ComfyUI 工作流','Add a local ComfyUI workflow in API Settings first');
+    return `<div class="director-personalized-settings">
+        <label class="minimax-wide-setting"><span>${escapeHtml(capabilityUiText('运行来源','Engine'))}</span><select data-director-personalized-engine>
+            ${legacy ? `<option value="runninghub-workflow-deprecated" selected disabled>${escapeHtml(capabilityUiText('旧 RunningHub 工作流（已废弃）','Legacy RunningHub workflow (Deprecated)'))}</option>` : ''}
+            <option value="local-comfyui" ${adapterState.engine === 'local-comfyui' ? 'selected' : ''}>${escapeHtml(capabilityUiText('本地 ComfyUI','Local ComfyUI'))}</option>
+            <option value="runninghub-app" ${adapterState.engine === 'runninghub-app' ? 'selected' : ''}>RunningHub ComfyUI</option>
+        </select></label>
+        ${legacy ? `<div class="director-personalized-warning">${escapeHtml(capabilityUiText('该入口只供历史画布兼容。请选择新的运行来源后再继续。','This entry is retained only for legacy canvases. Choose a current engine to continue.'))}</div>` : `<label class="minimax-wide-setting"><span>${escapeHtml(adapterState.engine === 'runninghub-app' ? capabilityUiText('AI 应用','AI app') : capabilityUiText('工作流','Workflow'))}</span><select data-director-personalized-source ${adapterState.options.length ? '' : 'disabled'}>${adapterState.options.map(option => `<option value="${escapeAttr(option.id)}" ${option.id === adapterState.selectedId ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select></label>
+        ${adapterState.engine === 'local-comfyui' && adapterState.selectedId && !adapterState.config ? `<div class="director-personalized-loading" data-director-workflow-loading="${escapeAttr(adapterState.selectedId)}">${escapeHtml(capabilityUiText(`正在读取 ${selectedLabel}…`,`Loading ${selectedLabel}…`))}</div>` : ''}
+        <div class="director-personalized-parameters">${parameterHtml || `<div class="director-parameter-empty">${escapeHtml(emptyText)}</div>`}</div>`}
+    </div>`;
+}
 function smartMinimaxBodyHtml(node){
     const selected = smartMinimaxSelectedSegment(node);
     const total = smartMinimaxTimelineTotal(node);
@@ -12646,20 +12796,49 @@ function smartMinimaxBodyHtml(node){
     const selectedRefSummary = ['image','video','audio']
         .map(kind => ({kind, count:selectedRefs.filter(item => item.kind === kind).length}))
         .filter(item => item.count > 0);
-    const minimaxEngine = smartMinimaxEngine(node);
+    const personalizedAdapter = isMiniMaxDirectorNode(node) ? smartDirectorPersonalizedAdapter(node, selected) : null;
+    const personalizedMediaFields = personalizedAdapter?.fields?.filter(field => ['text','image','video','audio'].includes(
+        personalizedAdapter.engine === 'runninghub-app' ? rhInputFieldKind(field) : comfyFieldKind(field)
+    )) || [];
+    let personalizedBoundByField = {};
+    if(personalizedAdapter?.engine === 'runninghub-app'){
+        personalizedAdapter.adapter.inputBindings = SMART_NODE_CONTRACT.reconcileRunningHubInputBindings(
+            personalizedMediaFields,
+            selectedRefs,
+            personalizedAdapter.adapter.inputBindings || {}
+        );
+        personalizedBoundByField = SMART_NODE_CONTRACT.runningHubBoundMedia(
+            personalizedMediaFields,
+            selectedRefs,
+            personalizedAdapter.adapter.inputBindings
+        );
+    }
+    const personalizedFieldForItem = (kind, item, kindIndex) => {
+        if(!personalizedAdapter) return null;
+        const fields = personalizedMediaFields.filter(field => (personalizedAdapter.engine === 'runninghub-app' ? rhInputFieldKind(field) : comfyFieldKind(field)) === kind);
+        if(personalizedAdapter.engine !== 'runninghub-app') return fields[kindIndex] || null;
+        const itemKey = SMART_DIRECTOR_CORE.assetKey(item);
+        return fields.find(field => SMART_DIRECTOR_CORE.assetKey(personalizedBoundByField[rhParamKey(field.nodeId, field.fieldName)]) === itemKey) || null;
+    };
     const inputGroupsForProfile = profile => ['text','image','video','audio'].map(kind => {
         const items = selectedRefs.filter(item => item.kind === kind);
         const label = kind === 'text' ? capabilityUiText('文本','Text') : kind === 'image' ? capabilityUiText('图片','Images') : kind === 'video' ? capabilityUiText('视频','Videos') : capabilityUiText('音频','Audio');
         const mentionPrefix = kind === 'text' ? '文本' : kind === 'image' ? '图片' : kind === 'video' ? '视频' : '音频';
-        const acceptance = isMiniMaxDirectorNode(node) ? {accepted:true, reason:''} : smartDirectorInputAcceptance(selected, profile, kind);
+        const acceptance = isMiniMaxDirectorNode(node)
+            ? smartDirectorPersonalizedInputAcceptance(node, selected, kind)
+            : smartDirectorInputAcceptance(selected, profile, kind);
         const disabled = !acceptance.accepted;
         return `<section class="director-input-group director-input-${kind} ${disabled ? 'is-disabled' : ''}" data-director-input-disabled="${disabled ? '1' : '0'}" data-director-input-kind="${escapeAttr(kind)}" title="${escapeAttr(disabled ? acceptance.reason : '')}">
-            <div class="director-input-group-title"><i data-lucide="${kind === 'text' ? 'file-text' : smartMinimaxIconForKind(kind)}"></i><span>${escapeHtml(label)}</span><b>${items.length}</b></div>
-            <div class="director-input-group-list">${items.length ? items.map((item, kindIndex) => `<div class="director-input-row" draggable="true" data-minimax-ref-drag="${escapeAttr(`${selected.id}:${item.__index}`)}">
+            <div class="director-input-group-title"><i data-lucide="${kind === 'text' ? 'file-text' : smartMinimaxIconForKind(kind)}"></i><span>${escapeHtml(label)}</span><b>${items.length}${isMiniMaxDirectorNode(node) && personalizedMediaFields.length ? ` / ${personalizedMediaFields.filter(field => (personalizedAdapter.engine === 'runninghub-app' ? rhInputFieldKind(field) : comfyFieldKind(field)) === kind).length}` : ''}</b></div>
+            <div class="director-input-group-list">${items.length ? items.map((item, kindIndex) => {
+                const mappedField = personalizedFieldForItem(kind, item, kindIndex);
+                const mappedLabel = mappedField ? (personalizedAdapter.engine === 'runninghub-app' ? rhFieldDisplayLabel(mappedField, personalizedMediaFields) : (mappedField.name || mappedField.label || mappedField.input || '')) : '';
+                return `<div class="director-input-row" draggable="true" data-minimax-ref-drag="${escapeAttr(`${selected.id}:${item.__index}`)}">
                 <div class="director-input-thumb">${smartMinimaxLightMediaHtml(item, label)}</div>
-                <div class="director-input-name"><b>${escapeHtml(item.name || label)}</b><span>${escapeHtml(`@${mentionPrefix}${kindIndex + 1}`)}</span></div>
+                <div class="director-input-name"><b>${escapeHtml(item.name || label)}</b><span>${escapeHtml(`${mappedLabel ? `${mappedLabel} · ` : ''}@${mentionPrefix}${kindIndex + 1}`)}</span></div>
                 <button type="button" data-minimax-ref-thumb-delete="${escapeAttr(`${selected.id}:${item.__index}`)}" title="${escapeAttr(tr('common.delete'))}"><i data-lucide="x"></i></button>
-            </div>`).join('') : `<div class="director-input-empty">${escapeHtml(disabled ? acceptance.reason : capabilityUiText('可拖入素材','Drop media here'))}</div>`}</div>
+            </div>`;
+            }).join('') : `<div class="director-input-empty">${escapeHtml(disabled ? acceptance.reason : capabilityUiText('可拖入素材','Drop media here'))}</div>`}</div>
         </section>`;
     }).join('');
     let generation = selected?.generation || {providerId:'',model:'',mode:''};
@@ -12716,14 +12895,22 @@ function smartMinimaxBodyHtml(node){
         : connectionDependency?.needsRegeneration
             ? `<div class="director-connection-status is-stale"><i data-lucide="refresh-cw"></i><span>${escapeHtml(capabilityUiText('来源结果已变化，需要重新生成连接 Clip','Source results changed; regenerate this connection Clip'))}</span></div>`
             : '';
+    const personalizedReady = !isMiniMaxDirectorNode(node) || Boolean(
+        personalizedAdapter?.selectedId
+        && personalizedAdapter.engine !== 'runninghub-workflow-deprecated'
+        && (personalizedAdapter.engine === 'runninghub-app' ? personalizedAdapter.fields.length : personalizedAdapter.config)
+    );
     const directorRunBlocked = Boolean(selected?.running
         || (!isMiniMaxDirectorNode(node) && (!generation.model || selectedModelIncompatible))
+        || (isMiniMaxDirectorNode(node) && !personalizedReady)
         || directorPromptInvalid
         || (selected?.type === 'connection' && (!connectionHasSource || connectionDependency?.missing?.length)));
     const directorRunTitle = selected?.running
         ? capabilityUiText('当前 Clip 正在运行','This Clip is running')
         : selected?.type === 'connection' && (!connectionHasSource || connectionDependency?.missing?.length)
             ? capabilityUiText('请先生成连接 Clip 所需的来源 Clip','Generate the required source Clips first')
+            : isMiniMaxDirectorNode(node) && !personalizedReady
+                ? capabilityUiText('请先选择并加载可用的工作流或 AI 应用','Select and load an available workflow or AI app first')
             : !isMiniMaxDirectorNode(node) && selectedModelIncompatible
                 ? capabilityUiText('当前模型与 Clip 输入不兼容','The current model is incompatible with this Clip')
                 : directorPromptInvalid
@@ -12813,10 +13000,7 @@ function smartMinimaxBodyHtml(node){
                         <section class="director-settings-column minimax-clip-parameters">
                             <div class="minimax-section-label"><i data-lucide="sliders-horizontal"></i><span>${escapeHtml(capabilityUiText('Clip 设置','Clip settings'))}</span></div>
                             <div class="minimax-settings minimax-segment-fields">
-                            ${isMiniMaxDirectorNode(node) ? `<label class="minimax-wide-setting minimax-engine-setting"><span>${escapeHtml(capabilityUiText('运行来源','Engine'))}</span><select class="minimax-engine-select" data-minimax-engine title="${escapeAttr(capabilityUiText('选择生成来源','Choose generation engine'))}">
-                                <option value="comfyui" ${minimaxEngine === 'comfyui' ? 'selected' : ''}>ComfyUI</option>
-                                <option value="runninghub" ${minimaxEngine === 'runninghub' ? 'selected' : ''}>RunningHub</option>
-                            </select></label>` : directorGenerationControls}
+                            ${isMiniMaxDirectorNode(node) ? smartDirectorPersonalizedSettingHtml(node, selected, personalizedAdapter) : directorGenerationControls}
                             ${isMiniMaxDirectorNode(node) ? `<label><span>${escapeHtml(capabilityUiText('时长','Duration'))}</span><input type="number" min="1" max="60" step="1" data-minimax-seg-number="duration" value="${escapeAttr(Math.round(segDuration))}"><b>s</b></label>
                             <label><span>${escapeHtml(capabilityUiText('百万像素','Megapixels'))}</span><input type="number" min="0.1" max="2" step="0.1" data-minimax-seg-number="megapixels" value="${escapeAttr(megapixels)}"><b>MP</b></label>
                             <label class="minimax-wide-setting"><span>${escapeHtml(capabilityUiText('画面比例','Aspect ratio'))}</span><select data-minimax-select="aspectRatio">${['16:9 (Widescreen)','9:16 (Portrait)','1:1 (Square)','4:3 (Standard)','3:4 (Portrait)','21:9 (Ultrawide)'].map(value => `<option value="${escapeAttr(value)}" ${value === aspectRatio ? 'selected' : ''}>${escapeHtml(value.split(' ')[0])}</option>`).join('')}</select></label>` : directorParameterHtml}
@@ -14685,24 +14869,60 @@ function bindMinimaxNodeControls(el, node){
         });
         control.addEventListener('dblclick', e => e.stopPropagation());
     });
-    el.querySelectorAll('[data-minimax-engine]').forEach(select => {
+    el.querySelectorAll('[data-director-personalized-engine]').forEach(select => {
         select.onchange = e => {
             e.stopPropagation();
             focusMinimaxNode();
-            const nextEngine = select.value === 'runninghub' ? 'runninghub' : SMART_MINIMAX_DEFAULT_ENGINE;
-            if(nextEngine === 'runninghub'){
-                const entry = smartMinimaxRunningHubEntry(node);
-                if(!entry){
-                    select.value = smartMinimaxEngine(node);
-                    toast(`请先在 API 设置中添加「${SMART_MINIMAX_RUNNINGHUB_WORKFLOW_TITLE}」`);
-                    return;
-                }
-                node.minimaxRunningHubWorkflowId = runningHubEntryId(entry, 'workflow');
-            }
-            node.minimaxEngine = nextEngine;
+            const seg = smartMinimaxSelectedSegment(node);
+            if(!seg) return;
+            seg.adapter = {
+                engine:select.value === 'runninghub-app' ? 'runninghub-app' : 'local-comfyui',
+                selectedId:'',
+                params:{},
+                inputBindings:{}
+            };
+            smartDirectorPersonalizedAdapter(node, seg);
             render();
             scheduleSave();
         };
+    });
+    el.querySelectorAll('[data-director-personalized-source]').forEach(select => {
+        select.onchange = async e => {
+            e.stopPropagation();
+            focusMinimaxNode();
+            const seg = smartMinimaxSelectedSegment(node);
+            if(!seg) return;
+            const adapter = smartDirectorPersonalizedAdapter(node, seg).adapter;
+            adapter.selectedId = String(select.value || '');
+            adapter.params = {};
+            adapter.inputBindings = {};
+            if(adapter.engine === 'local-comfyui') await ensureComfyWorkflow(adapter.selectedId);
+            render();
+            scheduleSave();
+        };
+    });
+    el.querySelectorAll('[data-director-personalized-param]').forEach(input => {
+        const update = e => {
+            e.stopPropagation();
+            const seg = smartMinimaxSelectedSegment(node);
+            if(!seg) return;
+            const state = smartDirectorPersonalizedAdapter(node, seg);
+            const key = input.dataset.directorPersonalizedParam;
+            let value = input.value;
+            const type = input.dataset.directorPersonalizedParamType;
+            if(type === 'boolean') value = value === 'true';
+            else if(['number','slider'].includes(type) && value !== '' && Number.isFinite(Number(value))) value = Number(value);
+            state.adapter.params[key] = {value};
+            scheduleSave();
+        };
+        input.oninput = input.onchange = update;
+    });
+    el.querySelectorAll('[data-director-workflow-loading]').forEach(status => {
+        const workflowName = status.dataset.directorWorkflowLoading;
+        ensureComfyWorkflow(workflowName).then(data => {
+            const current = smartMinimaxSelectedSegment(node);
+            if(data && current?.adapter?.engine === 'local-comfyui' && current.adapter.selectedId === workflowName) render();
+        });
     });
     const applyDirectorGenerationChoice = (key, value) => {
         focusMinimaxNode();
@@ -24836,7 +25056,8 @@ function smartDirectorValidatePrompt(node, seg){
 function smartMinimaxRunSnapshot(node, extraSettings={}, selectedOverride=null){
     const seg = selectedOverride || smartMinimaxSelectedSegment(node);
     const refs = smartMinimaxRunRefs(node, seg);
-    const engine = smartMinimaxEngine(node);
+    const personalized = isMiniMaxDirectorNode(node) ? smartDirectorPersonalizedAdapter(node, seg) : null;
+    const engine = personalized?.engine || smartMinimaxEngine(node);
     const duration = Math.max(0.5, Number(seg?.duration || node?.duration || 8) || 8);
     const aspectRatio = seg?.aspectRatio || node?.aspectRatio || '16:9 (Widescreen)';
     const megapixels = Number(seg?.megapixels || node?.megapixels || 0.4);
@@ -24847,13 +25068,14 @@ function smartMinimaxRunSnapshot(node, extraSettings={}, selectedOverride=null){
         prompt:smartMinimaxPrompt(node, seg),
         refs:refs.map(ref => ({url:ref.url || '', name:ref.name || 'media', kind:ref.kind || mediaKindForItem(ref)})).filter(ref => ref.url),
         settings:{
-            engine:engine === 'runninghub' ? 'runninghub' : 'comfy',
-            comfyWorkflow:node?.workflow || 'MiniMax_H3.json',
+            engine:engine === 'runninghub-app' || engine === 'runninghub-workflow-deprecated' || engine === 'runninghub' ? 'runninghub' : 'comfy',
+            comfyWorkflow:engine === 'local-comfyui' ? personalized?.selectedId : (node?.workflow || 'MiniMax_H3.json'),
             comfyMode:'custom',
-            rhWorkflowId:node?.minimaxRunningHubWorkflowId || SMART_MINIMAX_RUNNINGHUB_WORKFLOW_ID,
+            rhWorkflowId:engine === 'runninghub-workflow-deprecated' ? (personalized?.selectedId || node?.minimaxRunningHubWorkflowId || SMART_MINIMAX_RUNNINGHUB_WORKFLOW_ID) : '',
+            rhAppId:engine === 'runninghub-app' ? personalized?.selectedId : '',
             rhWorkflowTitle:SMART_MINIMAX_RUNNINGHUB_WORKFLOW_TITLE,
-            rhTaskLabel:SMART_MINIMAX_RUNNINGHUB_WORKFLOW_TITLE,
-            rhMode:'workflow',
+            rhTaskLabel:engine === 'runninghub-app' ? runningHubEntryLabel(personalized?.entry, 'app') : SMART_MINIMAX_RUNNINGHUB_WORKFLOW_TITLE,
+            rhMode:engine === 'runninghub-app' ? 'app' : 'workflow',
             duration,
             aspectRatio,
             megapixels:Number.isFinite(megapixels) ? megapixels : 0.4,
@@ -24892,6 +25114,123 @@ async function runMinimaxRunningHub(node, selectedOverride=null){
     if(!urls.length) throw new Error(tr('smart.errNoOutVideos'));
     return {urls, kind:mediaKindForUrls(urls, 'video'), runSettings};
 }
+function smartDirectorRunningHubAppSettings(node, seg){
+    const state = smartDirectorPersonalizedAdapter(node, seg);
+    if(state.engine !== 'runninghub-app' || !state.entry || !state.selectedId){
+        throw new Error(capabilityUiText('请先选择已同步的 RunningHub AI 应用','Select a synced RunningHub AI app first'));
+    }
+    if(!state.fields.length){
+        throw new Error(capabilityUiText('当前 AI 应用缺少官方字段，请在 API 设置中重新同步','This AI app has no official fields. Sync it again in API Settings.'));
+    }
+    const rhParams = {};
+    Object.entries(state.adapter.params || {}).forEach(([key, stored]) => {
+        rhParams[key] = stored && typeof stored === 'object' && Object.prototype.hasOwnProperty.call(stored, 'value')
+            ? {value:stored.value}
+            : {value:stored};
+    });
+    const promptField = state.fields.find(field => rhFieldRole(field) === 'prompt');
+    if(promptField){
+        const promptKey = rhParamKey(promptField.nodeId, promptField.fieldName);
+        if(!Object.prototype.hasOwnProperty.call(rhParams, promptKey)) rhParams[promptKey] = {value:smartMinimaxPrompt(node, seg)};
+    }
+    const commonValues = {
+        duration:Number(seg?.duration || 8),
+        aspectRatio:String(seg?.aspectRatio || '16:9').match(/\d+\s*:\s*\d+/)?.[0]?.replace(/\s+/g, '') || '16:9',
+        megapixels:Number(seg?.megapixels || 0.4)
+    };
+    state.fields.forEach(field => {
+        const role = smartDirectorPersonalizedCommonRole(field, state.engine);
+        if(!role) return;
+        const key = rhParamKey(field.nodeId, field.fieldName);
+        rhParams[key] = {value:smartMinimaxRunningHubValue(field, commonValues[role])};
+    });
+    return {
+        engine:'runninghub',
+        rhConfigKey:runningHubEntryKey('app', state.selectedId),
+        rhPayment:'free',
+        rhParams,
+        rhRandomActive:{},
+        rhInputBindings:{...(state.adapter.inputBindings || {})},
+        rhSchemaSnapshot:SMART_NODE_CONTRACT.runningHubSchemaSnapshot(state.fields),
+        rhFields:state.fields,
+        rhMode:'app'
+    };
+}
+async function smartDirectorLocalWorkflowParams(node, seg, state){
+    const workflowName = String(state.selectedId || '').trim();
+    if(!workflowName) throw new Error(capabilityUiText('请先选择本地 ComfyUI 工作流','Select a local ComfyUI workflow first'));
+    if(workflowName === 'MiniMax_H3.json'){
+        return {workflowName, params:await smartMinimaxDynamicParams(node, seg)};
+    }
+    const loaded = await ensureComfyWorkflow(workflowName);
+    const config = loaded?.config;
+    const fields = Array.isArray(config?.fields) ? config.fields : [];
+    if(!config || !fields.length) throw new Error(capabilityUiText('当前本地工作流没有可用字段，请在 API 设置中检查映射','This local workflow has no usable fields. Check its mapping in API Settings.'));
+    const values = {};
+    Object.entries(state.adapter.params || {}).forEach(([key, stored]) => {
+        values[key] = stored && typeof stored === 'object' && Object.prototype.hasOwnProperty.call(stored, 'value') ? stored.value : stored;
+    });
+    const prompt = smartMinimaxPrompt(node, seg);
+    const promptField = fields.find(field => comfyFieldKind(field) === 'prompt' && !/negative|负向/i.test(`${field.input || ''} ${field.name || ''}`));
+    if(promptField) values[promptField.id] = prompt;
+    const commonValues = {
+        duration:Number(seg?.duration || 8),
+        aspectRatio:String(seg?.aspectRatio || '16:9').match(/\d+\s*:\s*\d+/)?.[0]?.replace(/\s+/g, '') || '16:9',
+        megapixels:Number(seg?.megapixels || 0.4)
+    };
+    fields.forEach(field => {
+        const role = smartDirectorPersonalizedCommonRole(field, state.engine);
+        if(!role) return;
+        let value = commonValues[role];
+        if(field.type === 'dropdown' && Array.isArray(field.options)){
+            const wanted = String(value).replace(/\s+/g, '');
+            value = field.options.find(option => String(option).replace(/\s+/g, '').startsWith(wanted)) ?? value;
+        }
+        values[field.id] = value;
+    });
+    const refs = smartMinimaxRunRefs(node, seg);
+    for(const kind of ['image','video','audio']){
+        const kindFields = fields.filter(field => comfyFieldKind(field) === kind);
+        const kindRefs = refs.filter(ref => mediaKindForItem(ref) === kind);
+        for(let index = 0; index < kindFields.length; index++){
+            const field = kindFields[index];
+            const ref = kindRefs[index];
+            if(!ref){
+                if(field.required === true) throw new Error(capabilityUiText(`本地工作流缺少必填${smartMinimaxLabelForKind(kind)}：${field.name || field.input}`,`Local workflow is missing required ${kind}: ${field.name || field.input}`));
+                continue;
+            }
+            values[field.id] = await comfyNameForRef(ref);
+        }
+    }
+    return {workflowName, params:comfyParamsFromWorkflowValues(config, values)};
+}
+async function runPersonalizedDirectorClip(node, seg){
+    const state = smartDirectorPersonalizedAdapter(node, seg);
+    const prompt = smartMinimaxPrompt(node, seg);
+    const refs = smartMinimaxRunRefs(node, seg);
+    if(state.engine === 'runninghub-app'){
+        const runSettings = smartDirectorRunningHubAppSettings(node, seg);
+        const urls = await runRunningHubGeneration(prompt, refs, runSettings, null, createCanvasOperationId(`${node.id}:${seg.id}`));
+        return {urls, kind:mediaKindForUrls(urls, 'video'), runSettings};
+    }
+    if(state.engine !== 'local-comfyui'){
+        throw new Error(capabilityUiText('旧 RunningHub 工作流已废弃，请为当前 Clip 选择新的运行来源','Legacy RunningHub workflows are deprecated. Choose a current engine for this Clip.'));
+    }
+    const local = await smartDirectorLocalWorkflowParams(node, seg, state);
+    const result = await runQueuedSmartComfyGenerate({
+        prompt,
+        workflow_json:local.workflowName,
+        params:local.params,
+        type:'workflow-custom',
+        client_id:smartClientId
+    });
+    const urls = resultMediaUrls(result);
+    return {
+        urls,
+        kind:mediaKindForUrls(urls, 'video'),
+        runSettings:{engine:'comfy', comfyWorkflow:local.workflowName, comfyMode:'custom'}
+    };
+}
 async function runMinimaxNode(nodeId){
     const node = nodes.find(n => n.id === nodeId && isSmartDirectorNode(n));
     if(!node) return;
@@ -24920,7 +25259,7 @@ async function runMinimaxNode(nodeId){
                 settings:runSettings
             };
             urls = await runApiVideoGeneration(smartMinimaxPrompt(node, activeSegment), refs, runSettings, activeSegment, createCanvasOperationId(`${node.id}:${activeSegment.id}`));
-        } else if(smartMinimaxEngine(node) === 'runninghub'){
+        } else if(smartDirectorPersonalizedAdapter(node, activeSegment).engine === 'runninghub-workflow-deprecated'){
             const rhResult = await runMinimaxRunningHub(node, activeSegment);
             urls = rhResult.urls || [];
             resultKind = rhResult.kind || 'video';
@@ -24931,16 +25270,10 @@ async function runMinimaxNode(nodeId){
                 rhMode:rhResult.runSettings.rhMode || 'workflow'
             }, activeSegment);
         } else {
-            const params = await smartMinimaxDynamicParams(node, activeSegment);
-            const result = await runQueuedSmartComfyGenerate({
-                prompt:smartMinimaxPrompt(node, activeSegment),
-                workflow_json:node.workflow || 'MiniMax_H3.json',
-                params,
-                type:'minimax-h3',
-                client_id:smartClientId
-            });
-            urls = resultMediaUrls(result);
-            resultKind = mediaKindForUrls(urls, result.videos?.length ? 'video' : 'video');
+            const personalizedResult = await runPersonalizedDirectorClip(node, activeSegment);
+            urls = personalizedResult.urls || [];
+            resultKind = personalizedResult.kind || 'video';
+            runLog = smartMinimaxRunSnapshot(node, personalizedResult.runSettings || {}, activeSegment);
         }
         if(!urls.length) throw new Error(tr('smart.errComfyNoImages'));
         const kind = resultKind;
@@ -24959,7 +25292,8 @@ async function runMinimaxNode(nodeId){
         toast(capabilityUiText(`Clip ${Math.max(1, node.segments.findIndex(item => item.id === seg?.id) + 1)} 已生成`,`Clip ${Math.max(1, node.segments.findIndex(item => item.id === seg?.id) + 1)} generated`));
         scheduleSave();
     } catch(e) {
-        const readable = smartMinimaxReadableError(e, isMiniMaxDirectorNode(node) ? smartMinimaxEngine(node) : 'api');
+        const personalizedEngine = isMiniMaxDirectorNode(node) ? smartDirectorPersonalizedAdapter(node, activeSegment).engine : 'api';
+        const readable = smartMinimaxReadableError(e, personalizedEngine === 'runninghub-app' || personalizedEngine === 'runninghub-workflow-deprecated' ? 'runninghub' : personalizedEngine);
         const details = e?.smartDetails || {};
         runLog = smartMinimaxRunSnapshot(node, {
             rhTaskId:details.taskId || runLog.settings.rhTaskId || '',
@@ -24967,7 +25301,7 @@ async function runMinimaxNode(nodeId){
             rhAppId:details.webappId || runLog.settings.rhAppId || '',
             rhMode:details.webappId ? 'app' : (runLog.settings.rhMode || 'workflow')
         }, activeSegment);
-        addSmartGenerationLog({run:runLog, outputs:[], runMs:Math.max(0, nowMs() - Number(startedAt || nowMs())), error:smartMinimaxLogError(e, isMiniMaxDirectorNode(node) ? smartMinimaxEngine(node) : 'api')});
+        addSmartGenerationLog({run:runLog, outputs:[], runMs:Math.max(0, nowMs() - Number(startedAt || nowMs())), error:smartMinimaxLogError(e, personalizedEngine === 'runninghub-app' || personalizedEngine === 'runninghub-workflow-deprecated' ? 'runninghub' : personalizedEngine)});
         toast(readable.slice(0, 320));
     } finally {
         delete activeSegment.runtimeTimelineRefs;

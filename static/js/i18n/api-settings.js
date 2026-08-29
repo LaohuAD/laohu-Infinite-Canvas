@@ -136,6 +136,7 @@
         "api.localComfyuiNav": { zh: "本地 ComfyUI", en: "Local ComfyUI" },
         "api.runningHubComfyuiNav": { zh: "RunningHub ComfyUI", en: "RunningHub ComfyUI" },
         "api.comfyuiSettingsDesc": { zh: "在这里统一管理 RunningHub AI 应用和本地 ComfyUI 工作流。RunningHub 的 API Key 仍在对应平台中保存。", en: "Manage RunningHub AI apps and local ComfyUI workflows here. RunningHub API keys remain in the RunningHub provider settings." },
+        "api.runningHubLegacyWorkflowDeprecated": { zh: "已废弃：RunningHub 旧工作流入口只用于历史画布兼容；新导演台和新节点仅使用已同步的 AI 应用。", en: "Deprecated: the legacy RunningHub workflow entry is retained only for older canvases. New Directors and nodes use synced AI apps only." },
         "api.comfyuiSettingsBack": { zh: "返回平台设置", en: "Back to Provider Settings" },
         "api.runningHubAppsTitle": { zh: "RunningHub AI 应用", en: "RunningHub AI Apps" },
         "api.runningHubAppsDesc": { zh: "只需输入 AI 应用 ID；标题、封面和参数会从当前 RunningHub 站点官方自动同步。", en: "Enter an AI app ID. The title, cover, and fields are synced from the selected RunningHub site." },

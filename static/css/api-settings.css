@@ -188,6 +188,16 @@ html.studio-theme-dark body .custom-provider-guide-icon { background:#f5f6f8; co
 .block-head > div { min-width:0; flex:1 1 280px; }
 .block-title { font-size:12px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text); }
 .block-desc { color:var(--muted); font-size:11.5px; line-height:1.55; font-weight:600; margin-top:4px; max-width:480px; }
+.comfyui-deprecated-note {
+    margin:0 0 14px;
+    padding:10px 12px;
+    border:1px solid color-mix(in srgb, #f59e0b 38%, var(--line));
+    border-radius:10px;
+    background:color-mix(in srgb, #f59e0b 9%, var(--card));
+    color:var(--muted);
+    font-size:12px;
+    line-height:1.55;
+}
 .form { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
 .field { display:flex; flex-direction:column; gap:7px; min-width:0; }
 .field.full { grid-column:1/-1; }

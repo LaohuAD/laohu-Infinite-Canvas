@@ -98,7 +98,7 @@ console.log(JSON.stringify({
         self.assertIn("capabilityModelsForProvider(provider.id, 'video_generation'", source)
         self.assertIn("await smartDirectorMaterializeTimelineRefs(node, activeSegment)", runner)
         self.assertIn("runApiVideoGeneration", runner)
-        self.assertIn("smartMinimaxDynamicParams(node, activeSegment)", runner)
+        self.assertIn("runPersonalizedDirectorClip(node, activeSegment)", runner)
         self.assertIn("activeSegment.running = true", runner)
         self.assertNotIn("node.running = true", runner)
         self.assertIn("renderCapabilityParameterBundleForSource(profile, smartDirectorCapabilityParameterSource", source)
@@ -168,6 +168,30 @@ console.log(JSON.stringify({
         self.assertIn("director-settings-column", source)
         self.assertIn(".director-clip-workspace", css)
         self.assertIn(".director-shortcuts-popover", css)
+
+    def test_personalized_director_uses_local_workflows_or_runninghub_apps_only(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        adapter = source[
+            source.index("function smartDirectorPersonalizedAdapter"):
+            source.index("function smartDirectorPersonalizedSettingHtml")
+        ]
+        renderer = source[
+            source.index("function smartDirectorPersonalizedSettingHtml"):
+            source.index("function smartMinimaxBodyHtml")
+        ]
+        runner = source[
+            source.index("async function runPersonalizedDirectorClip"):
+            source.index("async function runMinimaxNode")
+        ]
+
+        self.assertIn("runningHubEntries('app')", adapter)
+        self.assertIn("comfyWorkflows", adapter)
+        self.assertNotIn("runningHubEntries('workflow')", adapter)
+        self.assertIn("data-director-personalized-engine", renderer)
+        self.assertIn("data-director-personalized-source", renderer)
+        self.assertIn("runRunningHubGeneration", runner)
+        self.assertIn("runQueuedSmartComfyGenerate", runner)
+        self.assertNotIn("runLegacyRunningHubWorkflowGeneration", runner)
 
     def test_runninghub_upload_source_covers_all_project_media_routes(self):
         script = """
