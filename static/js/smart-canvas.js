@@ -11953,9 +11953,21 @@ function smartDirectorSyncTimelineClipDom(el, node){
         if(!clip) return;
         clip.style.left = `${total > 0 ? Number(seg.startMs || 0) / 1000 / total * 100 : 0}%`;
         clip.style.width = `${total > 0 ? Math.max(0.25, Number(seg.durationMs || 1) / 1000 / total * 100) : 100}%`;
+        const roundedStart = Math.round(Number(seg.startMs || 0) / 1000);
+        const roundedEnd = Math.round((Number(seg.startMs || 0) + Number(seg.durationMs || 0)) / 1000);
         const meta = clip.querySelector('.minimax-clip-meta span');
-        if(meta && seg.type !== 'connection') meta.textContent = `${timeLabel(Number(seg.start || 0))} - ${timeLabel(Number(seg.start || 0) + Number(seg.duration || 0))}`;
+        if(meta && seg.type !== 'connection') meta.textContent = `${timeLabel(roundedStart)} - ${timeLabel(roundedEnd)}`;
+        clip.title = `${seg.type === 'connection' ? capabilityUiText('连接 Clip','Connection Clip') : `Clip ${Math.max(1, (node.segments || []).indexOf(seg) + 1)}`} · ${roundedStart}s-${roundedEnd}s`;
     });
+    const selected = smartMinimaxSelectedSegment(node);
+    if(selected){
+        const roundedStart = Math.round(Number(selected.startMs || 0) / 1000);
+        const roundedEnd = Math.round((Number(selected.startMs || 0) + Number(selected.durationMs || 0)) / 1000);
+        const currentRange = el.querySelector('[data-director-current-range]');
+        if(currentRange) currentRange.textContent = `${timeLabel(roundedStart)} - ${timeLabel(roundedEnd)}`;
+        const durationInput = el.querySelector('[data-minimax-seg-number="duration"]');
+        if(durationInput && document.activeElement !== durationInput) durationInput.value = String(Math.max(1, roundedEnd - roundedStart));
+    }
     const label = el.querySelector('[data-minimax-time-label]');
     if(label) label.textContent = `${timeLabel(Number(node.playhead || 0))} / ${timeLabel(total)}`;
 }
@@ -12421,6 +12433,11 @@ async function handleMinimaxTimelineDrop(el, node, event, zone){
         smartMinimaxSetSegmentResult(node, seg, item);
     } else {
         const added = smartMinimaxAddSegmentRefs(node, seg, [item]);
+        const targetFieldKey = zone.closest?.('[data-director-field-key]')?.dataset?.directorFieldKey || '';
+        if(added && targetFieldKey && isMiniMaxDirectorNode(node)){
+            const adapterState = smartDirectorPersonalizedAdapter(node, seg);
+            if(adapterState.engine === 'runninghub-app') adapterState.adapter.inputBindings[targetFieldKey] = SMART_DIRECTOR_CORE.assetKey(item);
+        }
         const drag = item.__minimaxDrag;
         const copyRef = event.altKey || Boolean(drag?.copy);
         if(added && drag && !copyRef && drag.segmentId !== seg.id){
@@ -12663,11 +12680,26 @@ function smartDirectorPersonalizedParamValue(adapterState, key, fallback=''){
     const stored = adapterState?.adapter?.params?.[key];
     return stored && typeof stored === 'object' && Object.prototype.hasOwnProperty.call(stored, 'value') ? stored.value : (stored ?? fallback);
 }
+function smartDirectorPersonalizedChoiceHtml({key, label, value='', options=[], kind='adapter', type='', disabled=false}){
+    const selected = options.find(option => String(option.value) === String(value));
+    const selectedText = selected?.label || value || label;
+    const optionAttr = kind === 'param'
+        ? 'data-director-personalized-param-option'
+        : kind === 'common'
+            ? 'data-director-personalized-common-option'
+            : 'data-director-personalized-choice-option';
+    const optionHtml = options.map(option => `<button type="button" class="direct-option director-choice-option ${String(option.value) === String(value) ? 'active' : ''}" ${optionAttr}="${escapeAttr(key)}" data-director-personalized-choice-value="${escapeAttr(option.value)}" ${kind === 'param' ? `data-director-personalized-param-type="${escapeAttr(type)}"` : ''} ${option.disabled ? 'disabled' : ''}><span>${escapeHtml(option.label || option.value)}</span></button>`).join('');
+    return `<div class="smart-control director-choice-field director-personalized-choice-field" data-director-personalized-choice="${escapeAttr(key)}">
+        <span class="director-choice-label">${escapeHtml(label)}</span>
+        <button type="button" class="smart-pill director-choice-trigger" title="${escapeAttr(selectedText)}" aria-haspopup="listbox" aria-expanded="false" ${disabled ? 'disabled' : ''}><span>${escapeHtml(selectedText)}</span><i data-lucide="chevron-down"></i></button>
+        <div class="smart-popover director-choice-popover" role="listbox"><div class="smart-popover-title">${escapeHtml(label)}</div><div class="director-choice-options">${optionHtml || `<div class="muted-note">${escapeHtml(capabilityUiText('暂无可用选项','No available options'))}</div>`}</div></div>
+    </div>`;
+}
 function smartDirectorPersonalizedFieldHtml(adapterState, field){
     if(smartDirectorPersonalizedCommonRole(field, adapterState.engine)) return '';
     if(adapterState.engine === 'runninghub-app'){
         const inputKind = rhInputFieldKind(field);
-        if(['text','image','video','audio'].includes(inputKind)) return '';
+        if(['image','video','audio'].includes(inputKind) || (inputKind === 'text' && rhFieldRole(field) === 'prompt')) return '';
         const key = rhParamKey(field.nodeId, field.fieldName);
         const label = field.label || field.fieldName || key;
         const kind = rhFieldRole(field);
@@ -12675,10 +12707,10 @@ function smartDirectorPersonalizedFieldHtml(adapterState, field){
         const options = rhExtractFieldOptions(field);
         if(kind === 'boolean'){
             const normalized = String(value).toLowerCase();
-            return `<label class="director-personalized-field"><span>${escapeHtml(label)}</span><select data-director-personalized-param="${escapeAttr(key)}" data-director-personalized-param-type="boolean"><option value="true" ${normalized === 'true' ? 'selected' : ''}>${escapeHtml(capabilityUiText('是','Yes'))}</option><option value="false" ${normalized === 'false' ? 'selected' : ''}>${escapeHtml(capabilityUiText('否','No'))}</option></select></label>`;
+            return smartDirectorPersonalizedChoiceHtml({key, label, value:normalized === 'false' ? 'false' : 'true', kind:'param', type:'boolean', options:[{value:'true',label:capabilityUiText('是','Yes')},{value:'false',label:capabilityUiText('否','No')}]});
         }
         if(options?.length){
-            return `<label class="director-personalized-field"><span>${escapeHtml(label)}</span><select data-director-personalized-param="${escapeAttr(key)}">${options.map(option => `<option value="${escapeAttr(option)}" ${String(option) === String(value) ? 'selected' : ''}>${escapeHtml(field?.optionLabels?.[String(option)] ?? option)}</option>`).join('')}</select></label>`;
+            return smartDirectorPersonalizedChoiceHtml({key, label, value, kind:'param', type:kind, options:options.map(option => ({value:option,label:field?.optionLabels?.[String(option)] ?? option}))});
         }
         const inputType = ['number','slider'].includes(kind) ? 'number' : 'text';
         const limits = inputType === 'number' ? ` min="${escapeAttr(field.min ?? '')}" max="${escapeAttr(field.max ?? '')}" step="${escapeAttr(field.step ?? 'any')}"` : '';
@@ -12690,31 +12722,94 @@ function smartDirectorPersonalizedFieldHtml(adapterState, field){
     const label = field.name || field.label || field.input || key;
     const value = smartDirectorPersonalizedParamValue(adapterState, key, field.default ?? '');
     if(field.type === 'boolean'){
-        return `<label class="director-personalized-field"><span>${escapeHtml(label)}</span><select data-director-personalized-param="${escapeAttr(key)}" data-director-personalized-param-type="boolean"><option value="true" ${Boolean(value) ? 'selected' : ''}>${escapeHtml(capabilityUiText('是','Yes'))}</option><option value="false" ${!Boolean(value) ? 'selected' : ''}>${escapeHtml(capabilityUiText('否','No'))}</option></select></label>`;
+        return smartDirectorPersonalizedChoiceHtml({key, label, value:Boolean(value) ? 'true' : 'false', kind:'param', type:'boolean', options:[{value:'true',label:capabilityUiText('是','Yes')},{value:'false',label:capabilityUiText('否','No')}]});
     }
     if(field.type === 'dropdown' && Array.isArray(field.options)){
-        return `<label class="director-personalized-field"><span>${escapeHtml(label)}</span><select data-director-personalized-param="${escapeAttr(key)}">${field.options.map(option => `<option value="${escapeAttr(option)}" ${String(option) === String(value) ? 'selected' : ''}>${escapeHtml(option)}</option>`).join('')}</select></label>`;
+        return smartDirectorPersonalizedChoiceHtml({key, label, value, kind:'param', type:'dropdown', options:field.options.map(option => ({value:option,label:option}))});
     }
     const inputType = ['number','slider'].includes(field.type) ? 'number' : 'text';
     const limits = inputType === 'number' ? ` min="${escapeAttr(field.min ?? '')}" max="${escapeAttr(field.max ?? '')}" step="${escapeAttr(field.step ?? 'any')}"` : '';
     return `<label class="director-personalized-field"><span>${escapeHtml(label)}</span><input type="${inputType}" data-director-personalized-param="${escapeAttr(key)}" data-director-personalized-param-type="${escapeAttr(field.type || '')}" value="${escapeAttr(value)}"${limits}></label>`;
 }
+function smartDirectorPersonalizedSchemaFields(adapterState){
+    const fields = [...(adapterState.fields || [])];
+    if(adapterState.engine === 'local-comfyui' && adapterState.selectedId === 'MiniMax_H3.json'){
+        const existingKinds = new Set(fields.map(field => comfyFieldKind(field)));
+        ['image','video','audio'].forEach(kind => {
+            if(!existingKinds.has(kind)) fields.push({__directorMediaKind:kind, id:`director-${kind}`, name:kind === 'image' ? capabilityUiText('参考图片','Reference images') : kind === 'video' ? capabilityUiText('参考视频','Reference videos') : capabilityUiText('参考音频','Reference audio')});
+        });
+    }
+    const roles = new Set(fields.map(field => smartDirectorPersonalizedCommonRole(field, adapterState.engine)).filter(Boolean));
+    if(!roles.has('duration')) fields.push({__directorRole:'duration'});
+    if(!roles.has('megapixels')) fields.push({__directorRole:'megapixels'});
+    if(!roles.has('aspectRatio')) fields.push({__directorRole:'aspectRatio'});
+    return fields;
+}
+function smartDirectorPersonalizedSchemaFieldHtml(node, seg, adapterState, field){
+    const explicitRole = field?.__directorRole || '';
+    const commonRole = explicitRole || smartDirectorPersonalizedCommonRole(field, adapterState.engine);
+    const durationSeconds = Math.max(1, Math.round(Number(seg?.durationMs || 8000) / 1000));
+    if(commonRole === 'duration'){
+        const constraint = smartDirectorDurationConstraint(seg);
+        return `<label class="director-personalized-field"><span>${escapeHtml(capabilityUiText('时长','Duration'))}</span><input type="number" min="${escapeAttr(constraint.minMs / 1000)}" max="${escapeAttr(constraint.maxMs / 1000)}" step="1" data-minimax-seg-number="duration" value="${escapeAttr(durationSeconds)}"><b>s</b></label>`;
+    }
+    if(commonRole === 'megapixels'){
+        return `<label class="director-personalized-field"><span>${escapeHtml(capabilityUiText('百万像素','Megapixels'))}</span><input type="number" min="0.1" max="2" step="0.1" data-minimax-seg-number="megapixels" value="${escapeAttr(Number(seg?.megapixels || node.megapixels || 0.4))}"><b>MP</b></label>`;
+    }
+    if(commonRole === 'aspectRatio'){
+        const current = seg?.aspectRatio || node.aspectRatio || '16:9 (Widescreen)';
+        const values = ['16:9 (Widescreen)','9:16 (Portrait)','1:1 (Square)','4:3 (Standard)','3:4 (Portrait)','21:9 (Ultrawide)'];
+        return smartDirectorPersonalizedChoiceHtml({key:'aspectRatio', label:capabilityUiText('画面比例','Aspect ratio'), value:current, kind:'common', options:values.map(value => ({value,label:value.split(' ')[0]}))});
+    }
+    const inputKind = field?.__directorMediaKind || (adapterState.engine === 'runninghub-app' ? rhInputFieldKind(field) : comfyFieldKind(field));
+    const isPromptField = adapterState.engine === 'runninghub-app'
+        ? inputKind === 'text' && rhFieldRole(field) === 'prompt'
+        : inputKind === 'prompt';
+    if(isPromptField){
+        const label = adapterState.engine === 'runninghub-app' ? rhFieldDisplayLabel(field, adapterState.fields) : (field.name || field.label || field.input || capabilityUiText('文本','Text'));
+        return `<div class="director-personalized-schema-row is-prompt"><span>${escapeHtml(label)}</span><b>${escapeHtml(capabilityUiText('在中间提示词填写','Use the prompt in the middle'))}</b></div>`;
+    }
+    if(['image','video','audio'].includes(inputKind)){
+        const refs = (seg?.refItems || []).map((item, index) => ({...item, __index:index, kind:mediaKindForItem(item)})).filter(item => item.kind === inputKind && item?.url);
+        const mediaFields = (adapterState.fields || []).filter(item => ['image','video','audio'].includes(adapterState.engine === 'runninghub-app' ? rhInputFieldKind(item) : comfyFieldKind(item)));
+        const fieldKey = adapterState.engine === 'runninghub-app' ? rhParamKey(field.nodeId, field.fieldName) : String(field.id || field.input || field.name || inputKind);
+        let item = null;
+        if(adapterState.engine === 'runninghub-app'){
+            const bound = SMART_NODE_CONTRACT.runningHubBoundMedia(mediaFields, (seg?.refItems || []).filter(ref => ref?.url), adapterState.adapter.inputBindings || {});
+            const boundItem = bound[fieldKey];
+            const boundKey = SMART_DIRECTOR_CORE.assetKey(boundItem);
+            item = refs.find(ref => SMART_DIRECTOR_CORE.assetKey(ref) === boundKey) || null;
+        } else {
+            const sameKindFields = smartDirectorPersonalizedSchemaFields(adapterState).filter(item => (item?.__directorMediaKind || comfyFieldKind(item)) === inputKind);
+            item = refs[Math.max(0, sameKindFields.indexOf(field))] || refs[0] || null;
+        }
+        const label = field?.__directorMediaKind
+            ? field.name
+            : adapterState.engine === 'runninghub-app'
+                ? rhFieldDisplayLabel(field, adapterState.fields)
+                : (field.name || field.label || field.input || inputKind);
+        const empty = inputKind === 'image' ? capabilityUiText('拖入图片','Drop image') : inputKind === 'video' ? capabilityUiText('拖入视频','Drop video') : capabilityUiText('拖入音频','Drop audio');
+        return `<div class="director-personalized-media-field" data-minimax-ref-track="1" data-director-field-key="${escapeAttr(fieldKey)}" data-director-input-kind="${escapeAttr(inputKind)}">
+            <span class="director-personalized-media-label"><i data-lucide="${smartMinimaxIconForKind(inputKind)}"></i>${escapeHtml(label)}</span>
+            ${item ? `<div class="director-input-row" draggable="true" data-minimax-ref-drag="${escapeAttr(`${seg.id}:${item.__index}`)}"><div class="director-input-thumb">${smartMinimaxLightMediaHtml(item, label)}</div><div class="director-input-name"><b>${escapeHtml(item.name || label)}</b><span>${escapeHtml(`@${inputKind === 'image' ? '图片' : inputKind === 'video' ? '视频' : '音频'}${item.__index + 1}`)}</span></div><button type="button" data-minimax-ref-thumb-delete="${escapeAttr(`${seg.id}:${item.__index}`)}" title="${escapeAttr(tr('common.delete'))}"><i data-lucide="x"></i></button></div>` : `<div class="director-input-empty">${escapeHtml(empty)}</div>`}
+        </div>`;
+    }
+    return smartDirectorPersonalizedFieldHtml(adapterState, field);
+}
 function smartDirectorPersonalizedSettingHtml(node, seg, adapterState=smartDirectorPersonalizedAdapter(node, seg)){
     const legacy = adapterState.engine === 'runninghub-workflow-deprecated';
     const selectedLabel = adapterState.options.find(option => option.id === adapterState.selectedId)?.label || adapterState.selectedId;
-    const parameterHtml = adapterState.fields.map(field => smartDirectorPersonalizedFieldHtml(adapterState, field)).filter(Boolean).join('');
+    const schemaFields = smartDirectorPersonalizedSchemaFields(adapterState);
+    const parameterHtml = adapterState.fields.map(field => smartDirectorPersonalizedSchemaFieldHtml(node, seg, adapterState, field)).filter(Boolean).join('')
+        + schemaFields.slice(adapterState.fields.length).map(field => smartDirectorPersonalizedSchemaFieldHtml(node, seg, adapterState, field)).filter(Boolean).join('');
     const emptyText = adapterState.selectedId
         ? capabilityUiText('当前来源没有需要手动设置的参数，素材会按字段顺序映射。','This source has no manual parameters. Media is mapped in schema order.')
         : adapterState.engine === 'runninghub-app'
             ? capabilityUiText('请先在 API 设置中同步 RunningHub AI 应用','Sync a RunningHub AI app in API Settings first')
             : capabilityUiText('请先在 API 设置中添加本地 ComfyUI 工作流','Add a local ComfyUI workflow in API Settings first');
     return `<div class="director-personalized-settings">
-        <label class="minimax-wide-setting"><span>${escapeHtml(capabilityUiText('运行来源','Engine'))}</span><select data-director-personalized-engine>
-            ${legacy ? `<option value="runninghub-workflow-deprecated" selected disabled>${escapeHtml(capabilityUiText('旧 RunningHub 工作流（已废弃）','Legacy RunningHub workflow (Deprecated)'))}</option>` : ''}
-            <option value="local-comfyui" ${adapterState.engine === 'local-comfyui' ? 'selected' : ''}>${escapeHtml(capabilityUiText('本地 ComfyUI','Local ComfyUI'))}</option>
-            <option value="runninghub-app" ${adapterState.engine === 'runninghub-app' ? 'selected' : ''}>RunningHub ComfyUI</option>
-        </select></label>
-        ${legacy ? `<div class="director-personalized-warning">${escapeHtml(capabilityUiText('该入口只供历史画布兼容。请选择新的运行来源后再继续。','This entry is retained only for legacy canvases. Choose a current engine to continue.'))}</div>` : `<label class="minimax-wide-setting"><span>${escapeHtml(adapterState.engine === 'runninghub-app' ? capabilityUiText('AI 应用','AI app') : capabilityUiText('工作流','Workflow'))}</span><select data-director-personalized-source ${adapterState.options.length ? '' : 'disabled'}>${adapterState.options.map(option => `<option value="${escapeAttr(option.id)}" ${option.id === adapterState.selectedId ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select></label>
+        ${smartDirectorPersonalizedChoiceHtml({key:'engine', label:capabilityUiText('运行来源','Engine'), value:adapterState.engine, options:[...(legacy ? [{value:'runninghub-workflow-deprecated',label:capabilityUiText('旧 RunningHub 工作流（已废弃）','Legacy RunningHub workflow (Deprecated)'),disabled:true}] : []),{value:'local-comfyui',label:capabilityUiText('本地 ComfyUI','Local ComfyUI')},{value:'runninghub-app',label:'RunningHub ComfyUI'}]})}
+        ${legacy ? `<div class="director-personalized-warning">${escapeHtml(capabilityUiText('该入口只供历史画布兼容。请选择新的运行来源后再继续。','This entry is retained only for legacy canvases. Choose a current engine to continue.'))}</div>` : `${smartDirectorPersonalizedChoiceHtml({key:'source', label:adapterState.engine === 'runninghub-app' ? capabilityUiText('AI 应用','AI app') : capabilityUiText('工作流','Workflow'), value:adapterState.selectedId, options:adapterState.options.map(option => ({value:option.id,label:option.label})), disabled:!adapterState.options.length})}
         ${adapterState.engine === 'local-comfyui' && adapterState.selectedId && !adapterState.config ? `<div class="director-personalized-loading" data-director-workflow-loading="${escapeAttr(adapterState.selectedId)}">${escapeHtml(capabilityUiText(`正在读取 ${selectedLabel}…`,`Loading ${selectedLabel}…`))}</div>` : ''}
         <div class="director-personalized-parameters">${parameterHtml || `<div class="director-parameter-empty">${escapeHtml(emptyText)}</div>`}</div>`}
     </div>`;
@@ -12797,7 +12892,7 @@ function smartMinimaxBodyHtml(node){
         .map(kind => ({kind, count:selectedRefs.filter(item => item.kind === kind).length}))
         .filter(item => item.count > 0);
     const personalizedAdapter = isMiniMaxDirectorNode(node) ? smartDirectorPersonalizedAdapter(node, selected) : null;
-    const personalizedMediaFields = personalizedAdapter?.fields?.filter(field => ['text','image','video','audio'].includes(
+    const personalizedMediaFields = personalizedAdapter?.fields?.filter(field => ['image','video','audio'].includes(
         personalizedAdapter.engine === 'runninghub-app' ? rhInputFieldKind(field) : comfyFieldKind(field)
     )) || [];
     let personalizedBoundByField = {};
@@ -12980,16 +13075,16 @@ function smartMinimaxBodyHtml(node){
                 </div>
                 <div class="minimax-current-panel">
                     <div class="minimax-current-head">
-                        <div class="minimax-current-title"><span class="minimax-current-dot"></span><b>${escapeHtml(selected?.type === 'connection' ? tr('smart.directorConnectionClip') : `Clip ${selectedIndex + 1}`)}</b><span>${timeLabel(Number(selected?.start || 0))} - ${timeLabel(Number(selected?.start || 0) + segDuration)}</span></div>
+                        <div class="minimax-current-title"><span class="minimax-current-dot"></span><b>${escapeHtml(selected?.type === 'connection' ? tr('smart.directorConnectionClip') : `Clip ${selectedIndex + 1}`)}</b><span data-director-current-range="1">${timeLabel(Number(selected?.start || 0))} - ${timeLabel(Number(selected?.start || 0) + segDuration)}</span></div>
                         <div class="minimax-current-refs">
                             ${selectedRefSummary.length ? selectedRefSummary.map(item => `<span><i data-lucide="${smartMinimaxIconForKind(item.kind)}"></i>${item.count}</span>`).join('') : `<span>${escapeHtml(capabilityUiText('暂无参考','No refs'))}</span>`}
                         </div>
                     </div>
-                    <div class="director-clip-workspace">
-                        <section class="director-clip-assets-column director-input-stack" data-minimax-ref-track="1" data-minimax-active-segment="${escapeAttr(selected?.id || '')}">
+                    <div class="director-clip-workspace ${isMiniMaxDirectorNode(node) ? 'is-personalized' : ''}">
+                        ${isMiniMaxDirectorNode(node) ? '' : `<section class="director-clip-assets-column director-input-stack" data-minimax-ref-track="1" data-minimax-active-segment="${escapeAttr(selected?.id || '')}">
                             <div class="minimax-section-label"><i data-lucide="paperclip"></i><span>${escapeHtml(tr('smart.directorClipInputs'))}</span></div>
                             ${inputGroups}
-                        </section>
+                        </section>`}
                         <section class="director-prompt-column">
                             ${connectionInputHtml}
                             <label class="minimax-prompt-field">
@@ -12997,13 +13092,11 @@ function smartMinimaxBodyHtml(node){
                                 <textarea data-minimax-prompt="1" ${directorPromptState.minChars ? `minlength="${directorPromptState.minChars}"` : ''} ${directorPromptState.maxChars ? `maxlength="${directorPromptState.maxChars}"` : ''} aria-invalid="${directorPromptInvalid ? 'true' : 'false'}" placeholder="${escapeAttr(capabilityUiText('当前 Clip 的提示词','Prompt for selected Clip'))}">${escapeHtml(selected?.prompt || '')}</textarea>
                             </label>
                         </section>
-                        <section class="director-settings-column minimax-clip-parameters">
+                        <section class="director-settings-column minimax-clip-parameters" ${isMiniMaxDirectorNode(node) ? 'data-minimax-ref-track="1"' : ''}>
                             <div class="minimax-section-label"><i data-lucide="sliders-horizontal"></i><span>${escapeHtml(capabilityUiText('Clip 设置','Clip settings'))}</span></div>
                             <div class="minimax-settings minimax-segment-fields">
                             ${isMiniMaxDirectorNode(node) ? smartDirectorPersonalizedSettingHtml(node, selected, personalizedAdapter) : directorGenerationControls}
-                            ${isMiniMaxDirectorNode(node) ? `<label><span>${escapeHtml(capabilityUiText('时长','Duration'))}</span><input type="number" min="1" max="60" step="1" data-minimax-seg-number="duration" value="${escapeAttr(Math.round(segDuration))}"><b>s</b></label>
-                            <label><span>${escapeHtml(capabilityUiText('百万像素','Megapixels'))}</span><input type="number" min="0.1" max="2" step="0.1" data-minimax-seg-number="megapixels" value="${escapeAttr(megapixels)}"><b>MP</b></label>
-                            <label class="minimax-wide-setting"><span>${escapeHtml(capabilityUiText('画面比例','Aspect ratio'))}</span><select data-minimax-select="aspectRatio">${['16:9 (Widescreen)','9:16 (Portrait)','1:1 (Square)','4:3 (Standard)','3:4 (Portrait)','21:9 (Ultrawide)'].map(value => `<option value="${escapeAttr(value)}" ${value === aspectRatio ? 'selected' : ''}>${escapeHtml(value.split(' ')[0])}</option>`).join('')}</select></label>` : directorParameterHtml}
+                            ${isMiniMaxDirectorNode(node) ? '' : directorParameterHtml}
                             <button class="minimax-run ${selected?.running ? 'is-stop' : ''}" type="button" data-minimax-run="${escapeAttr(node.id)}" data-director-base-blocked="${directorRunBlocked && !directorPromptInvalid ? '1' : '0'}" ${directorRunBlocked ? 'disabled' : ''} title="${escapeAttr(directorRunTitle)}"><i data-lucide="${selected?.running ? 'loader-2' : 'sparkles'}"></i><span>${escapeHtml(selected?.running ? capabilityUiText('运行中','Running') : capabilityUiText('生成 Clip','Generate Clip'))}</span></button>
                             </div>
                         </section>
@@ -14901,6 +14994,73 @@ function bindMinimaxNodeControls(el, node){
             scheduleSave();
         };
     });
+    el.querySelectorAll('[data-director-personalized-choice-option]').forEach(option => {
+        option.onclick = async e => {
+            e.preventDefault();
+            e.stopPropagation();
+            if(option.disabled) return;
+            focusMinimaxNode();
+            const seg = smartMinimaxSelectedSegment(node);
+            if(!seg) return;
+            const key = option.dataset.directorPersonalizedChoiceOption;
+            const value = String(option.dataset.directorPersonalizedChoiceValue || '');
+            if(key === 'engine'){
+                seg.adapter = {
+                    engine:value === 'runninghub-app' ? 'runninghub-app' : 'local-comfyui',
+                    selectedId:'',
+                    params:{},
+                    inputBindings:{}
+                };
+                smartDirectorPersonalizedAdapter(node, seg);
+            } else if(key === 'source'){
+                const adapter = smartDirectorPersonalizedAdapter(node, seg).adapter;
+                adapter.selectedId = value;
+                adapter.params = {};
+                adapter.inputBindings = {};
+                if(adapter.engine === 'local-comfyui') await ensureComfyWorkflow(adapter.selectedId);
+            }
+            closeAllSmartPopovers();
+            render();
+            scheduleSave();
+        };
+    });
+    el.querySelectorAll('[data-director-personalized-param-option]').forEach(option => {
+        option.onclick = e => {
+            e.preventDefault();
+            e.stopPropagation();
+            if(option.disabled) return;
+            const seg = smartMinimaxSelectedSegment(node);
+            if(!seg) return;
+            const state = smartDirectorPersonalizedAdapter(node, seg);
+            const key = option.dataset.directorPersonalizedParamOption;
+            const type = option.dataset.directorPersonalizedParamType;
+            let value = option.dataset.directorPersonalizedChoiceValue || '';
+            if(type === 'boolean') value = value === 'true';
+            else if(['number','slider'].includes(type) && value !== '' && Number.isFinite(Number(value))) value = Number(value);
+            state.adapter.params[key] = {value};
+            closeAllSmartPopovers();
+            render();
+            scheduleSave();
+        };
+    });
+    el.querySelectorAll('[data-director-personalized-common-option]').forEach(option => {
+        option.onclick = e => {
+            e.preventDefault();
+            e.stopPropagation();
+            if(option.disabled) return;
+            const seg = smartMinimaxSelectedSegment(node);
+            if(!seg) return;
+            const key = option.dataset.directorPersonalizedCommonOption;
+            const value = option.dataset.directorPersonalizedChoiceValue || '';
+            if(key === 'aspectRatio'){
+                seg.aspectRatio = value;
+                node.aspectRatio = value;
+            }
+            closeAllSmartPopovers();
+            render();
+            scheduleSave();
+        };
+    });
     el.querySelectorAll('[data-director-personalized-param]').forEach(input => {
         const update = e => {
             e.stopPropagation();
@@ -15141,19 +15301,21 @@ function bindMinimaxNodeControls(el, node){
             const originalDurationMs = Number(initialSeg.durationMs || 1000);
             const originalClips = node.segments.map((clip, index) => SMART_DIRECTOR_CORE.normalizeClip(clip, index));
             let changed = false;
+            let lastTargetStartMs = originalStartMs;
             const onMove = event => {
                 const deltaPx = event.clientX - startClientX;
                 if(!changed && Math.abs(deltaPx) < 2) return;
                 if(!changed){ pushUndo(); changed = true; }
                 const totalMs = smartMinimaxTimelineTotal(node) * 1000;
                 const deltaMs = deltaPx / rect.width * totalMs;
+                lastTargetStartMs = Math.max(0, originalStartMs + deltaMs);
                 if(initialSeg.type === 'connection'){
                     const next = originalClips.map((clip, index) => SMART_DIRECTOR_CORE.normalizeClip(clip, index));
                     const moving = next.find(clip => clip.id === initialSeg.id);
-                    if(moving) moving.startMs = Math.max(0, Math.round((originalStartMs + deltaMs) / 1000) * 1000);
+                    if(moving) moving.startMs = lastTargetStartMs;
                     smartDirectorReplaceTimelineClips(node, next);
                 } else {
-                    smartDirectorReplaceTimelineClips(node, SMART_DIRECTOR_CORE.moveOrdinaryClip(originalClips, initialSeg.id, originalStartMs + deltaMs));
+                    smartDirectorReplaceTimelineClips(node, SMART_DIRECTOR_CORE.moveOrdinaryClip(originalClips, initialSeg.id, lastTargetStartMs, {snap:false}));
                 }
                 smartDirectorSyncTimelineClipDom(el, node);
             };
@@ -15163,6 +15325,7 @@ function bindMinimaxNodeControls(el, node){
                 if(!changed) return;
                 const seg = node.segments.find(item => item.id === initialSeg.id);
                 if(seg?.type === 'connection'){
+                    seg.startMs = Math.max(0, Math.round(lastTargetStartMs / 1000) * 1000);
                     const conflictId = SMART_DIRECTOR_CORE.connectionClipConflict(seg, node.segments);
                     if(conflictId){
                         smartDirectorReplaceTimelineClips(node, originalClips);
@@ -15176,6 +15339,7 @@ function bindMinimaxNodeControls(el, node){
                         }
                     }
                 } else {
+                    smartDirectorReplaceTimelineClips(node, SMART_DIRECTOR_CORE.moveOrdinaryClip(originalClips, initialSeg.id, lastTargetStartMs, {snap:true}));
                     (node.segments || []).filter(item => item.type === 'connection').forEach(item => smartDirectorApplyConnectionDerivation(node, item));
                 }
                 render();
@@ -15222,9 +15386,11 @@ function bindMinimaxNodeControls(el, node){
                 const originalDurationMs = Number(seg.durationMs || 1000);
                 const originalEndMs = originalStartMs + originalDurationMs;
                 let changed = false;
+                let lastPointerMs = mode === 'left' ? originalStartMs : originalEndMs;
                 const onMove = event => {
                     if(!changed){ pushUndo(); changed = true; }
-                    const pointerMs = Math.max(0, Math.min(total * 1000, Math.round(((event.clientX - contentRect.left) / contentRect.width * total * 1000) / 1000) * 1000));
+                    const pointerMs = Math.max(0, Math.min(total * 1000, (event.clientX - contentRect.left) / contentRect.width * total * 1000));
+                    lastPointerMs = pointerMs;
                     if(mode === 'left'){
                         seg.startMs = Math.min(originalEndMs - 1000, pointerMs);
                         seg.durationMs = Math.max(1000, originalEndMs - seg.startMs);
@@ -15233,13 +15399,20 @@ function bindMinimaxNodeControls(el, node){
                         seg.startMs = originalStartMs;
                         seg.durationMs = Math.max(1000, endMs - originalStartMs);
                     }
-                    track.style.left = `${seg.startMs / 1000 / total * 100}%`;
-                    track.style.width = `${Math.max(0.5, seg.durationMs / 1000 / total * 100)}%`;
+                    smartDirectorSyncTimelineClipDom(el, node);
                 };
                 const onUp = () => {
                     window.removeEventListener('mousemove', onMove, true);
                     window.removeEventListener('mouseup', onUp, true);
                     if(!changed) return;
+                    const snappedPointerMs = Math.round(lastPointerMs / 1000) * 1000;
+                    if(mode === 'left'){
+                        seg.startMs = Math.min(originalEndMs - 1000, snappedPointerMs);
+                        seg.durationMs = Math.max(1000, originalEndMs - seg.startMs);
+                    } else {
+                        seg.startMs = originalStartMs;
+                        seg.durationMs = Math.max(1000, snappedPointerMs - originalStartMs);
+                    }
                     const conflictId = SMART_DIRECTOR_CORE.connectionClipConflict(seg, node.segments);
                     if(conflictId){
                         seg.startMs = originalStartMs;
@@ -15271,10 +15444,12 @@ function bindMinimaxNodeControls(el, node){
             const profile = capabilityProfileFor(seg?.generation?.providerId, seg?.generation?.model, 'video_generation');
             const constraint = smartDirectorDurationConstraint(seg, profile);
             smartMinimaxSetActiveSegmentDom(el, node, seg);
+            let lastPointerMs = mode === 'left' ? Number(seg.startMs || 0) : Number(seg.startMs || 0) + Number(seg.durationMs || 0);
             const onMove = event => {
                 const totalMs = smartMinimaxTimelineTotal(node) * 1000;
-                const pointerMs = Math.max(0, Math.round(((event.clientX - contentRect.left) / contentRect.width * totalMs) / 1000) * 1000);
-                const next = SMART_DIRECTOR_CORE.resizeOrdinaryClip(originalClips, seg.id, {edge:mode, timeMs:pointerMs, constraint});
+                const pointerMs = Math.max(0, (event.clientX - contentRect.left) / contentRect.width * totalMs);
+                lastPointerMs = pointerMs;
+                const next = SMART_DIRECTOR_CORE.resizeOrdinaryClip(originalClips, seg.id, {edge:mode, timeMs:pointerMs, constraint, snap:false});
                 smartDirectorReplaceTimelineClips(node, next);
                 const active = node.segments.find(item => item.id === seg.id);
                 if(active){
@@ -15288,6 +15463,14 @@ function bindMinimaxNodeControls(el, node){
             const onUp = () => {
                 window.removeEventListener('mousemove', onMove, true);
                 window.removeEventListener('mouseup', onUp, true);
+                smartDirectorReplaceTimelineClips(node, SMART_DIRECTOR_CORE.resizeOrdinaryClip(originalClips, seg.id, {edge:mode, timeMs:lastPointerMs, constraint, snap:true}));
+                const active = node.segments.find(item => item.id === seg.id);
+                if(active){
+                    active.trimInMs = 0;
+                    active.trimOutMs = active.durationMs;
+                    const durationEntry = Object.entries(profile?.parameters || {}).find(([key, spec]) => capabilityParameterSemantic(key, spec) === 'duration');
+                    if(durationEntry && active.generation?.params) active.generation.params[durationEntry[0]] = Number(active.durationMs || 0) / 1000;
+                }
                 (node.segments || []).filter(item => item.type === 'connection').forEach(item => smartDirectorApplyConnectionDerivation(node, item));
                 render();
                 scheduleSave();

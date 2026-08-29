@@ -187,11 +187,68 @@ console.log(JSON.stringify({
         self.assertIn("runningHubEntries('app')", adapter)
         self.assertIn("comfyWorkflows", adapter)
         self.assertNotIn("runningHubEntries('workflow')", adapter)
-        self.assertIn("data-director-personalized-engine", renderer)
-        self.assertIn("data-director-personalized-source", renderer)
+        self.assertIn("key:'engine'", renderer)
+        self.assertIn("key:'source'", renderer)
         self.assertIn("runRunningHubGeneration", runner)
         self.assertIn("runQueuedSmartComfyGenerate", runner)
         self.assertNotIn("runLegacyRunningHubWorkflowGeneration", runner)
+
+    def test_personalized_director_merges_media_into_schema_ordered_clip_settings(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        css = (ROOT / "static/css/smart-canvas.css").read_text(encoding="utf-8")
+        renderer = source[
+            source.index("function smartDirectorPersonalizedSettingHtml"):
+            source.index("function smartMinimaxBodyHtml")
+        ]
+        choice = source[
+            source.index("function smartDirectorPersonalizedChoiceHtml"):
+            source.index("function smartDirectorPersonalizedFieldHtml")
+        ]
+        workspace = source[
+            source.index('<div class="director-clip-workspace'):
+            source.index('</div>\n                </div>\n            </div>\n        </div>\n    </div>`;', source.index('<div class="director-clip-workspace'))
+        ]
+
+        self.assertIn("smartDirectorPersonalizedSchemaFieldHtml", renderer)
+        self.assertIn("adapterState.fields.map", renderer)
+        self.assertIn("smartDirectorPersonalizedChoiceHtml", renderer)
+        self.assertIn("data-director-personalized-choice", choice)
+        self.assertIn("is-personalized", workspace)
+        self.assertIn("isMiniMaxDirectorNode(node) ? ''", workspace)
+        self.assertIn(".director-clip-workspace.is-personalized", css)
+
+    def test_director_setting_controls_use_compact_director_specific_typography(self):
+        css = (ROOT / "static/css/smart-canvas.css").read_text(encoding="utf-8")
+
+        self.assertIn(".director-choice-option {", css)
+        self.assertIn("font-size:9.5px", css)
+        self.assertIn(".director-settings-column .director-choice-popover", css)
+        self.assertIn(".director-settings-column .director-choice-trigger", css)
+        self.assertIn(".minimax-workbench .director-choice-popover {", css)
+        self.assertIn("background:#202328", css)
+
+    def test_ordinary_clip_trim_handles_keep_a_wide_hit_target_inside_the_clip(self):
+        css = (ROOT / "static/css/smart-canvas.css").read_text(encoding="utf-8")
+
+        self.assertIn(".director-ordinary-clip .minimax-trim", css)
+        self.assertIn("width:10px", css)
+        self.assertIn(".director-ordinary-clip .minimax-trim-right", css)
+        self.assertIn("right:0", css)
+
+    def test_personalized_director_keeps_non_prompt_text_fields_as_schema_parameters(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        schema_renderer = source[
+            source.index("function smartDirectorPersonalizedSchemaFieldHtml"):
+            source.index("function smartDirectorPersonalizedSettingHtml")
+        ]
+        body = source[
+            source.index("const personalizedMediaFields"):
+            source.index("let personalizedBoundByField")
+        ]
+
+        self.assertIn("rhFieldRole(field) === 'prompt'", schema_renderer)
+        self.assertIn("['image','video','audio'].includes", body)
+        self.assertNotIn("['text','image','video','audio'].includes", body)
 
     def test_runninghub_upload_source_covers_all_project_media_routes(self):
         script = """

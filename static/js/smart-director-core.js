@@ -183,6 +183,15 @@
         return Math.max(minMs, Math.min(maxMs, snapped));
     }
 
+    function clampDurationMs(value, constraint={}){
+        const source = constraint && typeof constraint === 'object' ? constraint : {};
+        const rawOptions = Array.isArray(source.optionsMs) ? source.optionsMs.map(option => nonNegativeMs(option)).filter(Boolean) : [];
+        const minMs = Math.max(1000, nonNegativeMs(source.minMs) || (rawOptions.length ? Math.min(...rawOptions) : 1000));
+        const configuredMax = nonNegativeMs(source.maxMs) || (rawOptions.length ? Math.max(...rawOptions) : 0);
+        const maxMs = configuredMax > 0 ? Math.max(minMs, configuredMax) : Number.MAX_SAFE_INTEGER;
+        return Math.max(minMs, Math.min(maxMs, nonNegativeMs(value, minMs)));
+    }
+
     function orderedOrdinaryIds(clips){
         return (Array.isArray(clips) ? clips : [])
             .map((clip, index) => ({clip:normalizeClip(clip, index), index}))
@@ -206,7 +215,7 @@
         return result;
     }
 
-    function moveOrdinaryClip(clips, clipId, targetStartMs){
+    function moveOrdinaryClip(clips, clipId, targetStartMs, options={}){
         const source = Array.isArray(clips) ? clips : [];
         const result = source.map((clip, index) => normalizeClip(clip, index));
         const orderedIds = orderedOrdinaryIds(source);
@@ -216,7 +225,9 @@
         const changed = byId.get(orderedIds[changedIndex]);
         const previous = changedIndex > 0 ? byId.get(orderedIds[changedIndex - 1]) : null;
         const previousEndMs = previous ? clipEndMs(previous) : 0;
-        changed.startMs = Math.max(previousEndMs, Math.round(nonNegativeMs(targetStartMs) / 1000) * 1000);
+        const requestedStartMs = nonNegativeMs(targetStartMs);
+        const resolvedStartMs = options.snap === false ? requestedStartMs : Math.round(requestedStartMs / 1000) * 1000;
+        changed.startMs = Math.max(previousEndMs, resolvedStartMs);
         return pushFollowingOrdinaryClipsRight(result, orderedIds, changedIndex);
     }
 
@@ -234,7 +245,8 @@
             const fixedEndMs = clipEndMs(changed);
             const previous = changedIndex > 0 ? byId.get(orderedIds[changedIndex - 1]) : null;
             const previousEndMs = previous ? clipEndMs(previous) : 0;
-            const desiredStartMs = Math.max(previousEndMs, Math.round(nonNegativeMs(options.timeMs) / 1000) * 1000);
+            const requestedStartMs = nonNegativeMs(options.timeMs);
+            const desiredStartMs = Math.max(previousEndMs, options.snap === false ? requestedStartMs : Math.round(requestedStartMs / 1000) * 1000);
             const maximumDurationMs = Math.max(1000, fixedEndMs - previousEndMs);
             const configuredMax = nonNegativeMs(constraint.maxMs);
             const limitedConstraint = {
@@ -244,11 +256,15 @@
                     ? constraint.optionsMs.filter(value => nonNegativeMs(value) <= maximumDurationMs)
                     : undefined
             };
-            changed.durationMs = constrainDurationMs(fixedEndMs - desiredStartMs, limitedConstraint);
+            changed.durationMs = options.snap === false
+                ? clampDurationMs(fixedEndMs - desiredStartMs, limitedConstraint)
+                : constrainDurationMs(fixedEndMs - desiredStartMs, limitedConstraint);
             changed.startMs = Math.max(previousEndMs, fixedEndMs - changed.durationMs);
             return result;
         }
-        changed.durationMs = constrainDurationMs(nonNegativeMs(options.timeMs) - changed.startMs, constraint);
+        changed.durationMs = options.snap === false
+            ? clampDurationMs(nonNegativeMs(options.timeMs) - changed.startMs, constraint)
+            : constrainDurationMs(nonNegativeMs(options.timeMs) - changed.startMs, constraint);
         return pushFollowingOrdinaryClipsRight(result, orderedIds, changedIndex);
     }
 

@@ -327,6 +327,27 @@ console.log(JSON.stringify({movedRight,movedLeft}));
         self.assertEqual(data["movedLeft"][1]["startMs"], 5000)
         self.assertEqual(data["movedLeft"][0]["startMs"], 0)
 
+    def test_timeline_drag_preview_stays_continuous_until_commit_snap(self):
+        data = run_node("""
+const d=require('./static/js/smart-director-core.js');
+const clips=[
+  {id:'clip-a',type:'ordinary',startMs:0,durationMs:8000},
+  {id:'clip-b',type:'ordinary',startMs:8000,durationMs:8000}
+];
+const movePreview=d.moveOrdinaryClip(clips,'clip-b',10550,{snap:false});
+const moveCommit=d.moveOrdinaryClip(clips,'clip-b',10550,{snap:true});
+const resizePreview=d.resizeOrdinaryClip(clips,'clip-a',{edge:'right',timeMs:7550,snap:false});
+const resizeCommit=d.resizeOrdinaryClip(clips,'clip-a',{edge:'right',timeMs:7550,snap:true});
+console.log(JSON.stringify({movePreview,moveCommit,resizePreview,resizeCommit}));
+""")
+
+        self.assertEqual(data["movePreview"][1]["startMs"], 10550)
+        self.assertEqual(data["moveCommit"][1]["startMs"], 11000)
+        self.assertEqual(data["resizePreview"][0]["durationMs"], 7550)
+        self.assertEqual(data["resizePreview"][1]["startMs"], 8000)
+        self.assertEqual(data["resizeCommit"][0]["durationMs"], 8000)
+        self.assertEqual(data["resizeCommit"][1]["startMs"], 8000)
+
     def test_duration_constraint_uses_supported_integer_seconds(self):
         data = run_node("""
 const d=require('./static/js/smart-director-core.js');
