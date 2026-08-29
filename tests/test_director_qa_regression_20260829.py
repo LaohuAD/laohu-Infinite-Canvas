@@ -103,16 +103,16 @@ console.log(JSON.stringify({
         self.assertIn("world.getBoundingClientRect()", source)
         self.assertIn("min-width:18px", css)
         self.assertIn(".director-connection-clip .minimax-clip-delete", css)
-        self.assertIn('grid-template-areas:"provider mode" "model model"', css)
+        self.assertIn('.director-generation-primary { grid-column:1; display:grid; grid-template-columns:minmax(0, 1fr);', css)
 
     def test_switching_generic_clips_renders_the_selected_clips_settings(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
         handler = source[
-            source.index("const previousSegmentId = node.selectedSegmentId"):
+            source.index("const renderedSegmentId = el.querySelector('.minimax-workbench')?.dataset.directorRenderedSegment"):
             source.index("el.querySelectorAll('[data-minimax-trim]')")
         ]
 
-        self.assertIn("previousSegmentId !== seg?.id", handler)
+        self.assertIn("renderedSegmentId !== seg?.id", handler)
         self.assertIn("render();", handler)
         self.assertIn("data-director-rendered-segment", source)
         self.assertIn("renderedSegmentId !== node.selectedSegmentId", source)
