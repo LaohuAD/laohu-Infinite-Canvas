@@ -100,6 +100,100 @@
         };
     }
 
+    function migrateLegacyMinimaxNode(value){
+        if(!value || typeof value !== 'object') return value;
+        if(value.type !== NODE_TYPES.legacyMinimax){
+            if([NODE_TYPES.generic, NODE_TYPES.minimax].includes(value.type)) return normalizeDirector(value);
+            return clone(value);
+        }
+        const source = clone(value);
+        const allLegacyAssets = [
+            ...(Array.isArray(source.materials) ? source.materials : []),
+            ...['image', 'video', 'audio'].flatMap(kind => (Array.isArray(source.refs?.[kind]) ? source.refs[kind] : []).map(item => ({...item, kind}))),
+            ...(Array.isArray(source.segments) ? source.segments : []).flatMap(segment => Array.isArray(segment?.refItems) ? segment.refItems : [])
+        ];
+        const assetByKey = new Map();
+        allLegacyAssets.forEach((asset, index) => {
+            const normalized = normalizeAsset({
+                ...asset,
+                id:asset?.id || asset?.assetId || asset?.material_id || `asset-${String(index + 1).padStart(3, '0')}`
+            }, index);
+            const key = String(normalized.id || normalized.url || normalized.path || '');
+            if(key && !assetByKey.has(key)) assetByKey.set(key, normalized);
+        });
+        const clips = (Array.isArray(source.segments) ? source.segments : []).map((segment, index) => {
+            const results = Array.isArray(segment?.results) ? clone(segment.results) : [];
+            if(segment?.result?.url && !results.some(result => result?.id === segment.result.id || result?.url === segment.result.url)){
+                results.push(clone(segment.result));
+            }
+            const current = segment?.result?.url
+                ? segment.result
+                : results.find(result => result?.url) || {};
+            const inputRefs = (Array.isArray(segment?.refItems) ? segment.refItems : [])
+                .map((item, refIndex) => normalizeAsset({
+                    ...item,
+                    id:item?.id || item?.assetId || item?.material_id || `clip-${index + 1}-asset-${refIndex + 1}`
+                }, refIndex));
+            return normalizeClip({
+                id:segment?.id || `clip-${String(index + 1).padStart(3, '0')}`,
+                type:'ordinary',
+                startMs:Math.round(finiteNumber(segment?.start) * 1000),
+                durationMs:Math.round(Math.max(0.5, finiteNumber(segment?.duration, source.duration || 8)) * 1000),
+                createdAt:finiteNumber(segment?.createdAt ?? segment?.created_at, index),
+                prompt:String(segment?.prompt || ''),
+                inputRefs,
+                generation:{
+                    providerId:'',
+                    model:'',
+                    mode:'',
+                    params:{
+                        aspect_ratio:segment?.aspectRatio || source.aspectRatio || '16:9 (Widescreen)',
+                        megapixels:finiteNumber(segment?.megapixels, source.megapixels || 0.4)
+                    }
+                },
+                trimInMs:Math.round(finiteNumber(segment?.trimIn) * 1000),
+                trimOutMs:Math.round(finiteNumber(segment?.trimOut, segment?.duration || source.duration || 8) * 1000),
+                results,
+                currentResultId:String(current?.id || '')
+            }, index);
+        });
+        if(!clips.length){
+            clips.push(normalizeClip({
+                id:'clip-001',
+                durationMs:Math.round(Math.max(0.5, finiteNumber(source.duration, 8)) * 1000)
+            }, 0));
+        }
+        const {
+            materials:unusedMaterials,
+            refs:unusedRefs,
+            segments:unusedSegments,
+            selectedSegmentId:unusedSelectedSegmentId,
+            minimaxEngine:unusedMinimaxEngine,
+            minimaxRunningHubWorkflowId:unusedRunningHubWorkflowId,
+            workflow:unusedWorkflow,
+            duration:unusedDuration,
+            aspectRatio:unusedAspectRatio,
+            megapixels:unusedMegapixels,
+            ...stableNode
+        } = source;
+        return normalizeDirector({
+            ...stableNode,
+            type:NODE_TYPES.minimax,
+            title:source.title || 'MiniMax H3 导演台',
+            directorKind:'minimax-h3',
+            projectName:source.projectName || source.title || '',
+            assets:[...assetByKey.values()],
+            clips,
+            selectedClipId:source.selectedSegmentId || clips[0].id,
+            adapter:{
+                kind:'minimax-h3',
+                engine:String(source.minimaxEngine || 'comfyui'),
+                workflow:String(source.workflow || 'MiniMax_H3.json'),
+                runningHubWorkflowId:String(source.minimaxRunningHubWorkflowId || '')
+            }
+        });
+    }
+
     function compareClipExportOrder(left, right){
         return (clipMidpoint(left) - clipMidpoint(right))
             || (nonNegativeMs(left?.startMs) - nonNegativeMs(right?.startMs))
@@ -222,6 +316,7 @@
         NODE_TYPES,
         normalizeClip,
         normalizeDirector,
+        migrateLegacyMinimaxNode,
         clipEndMs,
         clipMidpoint,
         compareClipExportOrder,

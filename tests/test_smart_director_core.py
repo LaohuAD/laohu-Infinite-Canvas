@@ -118,6 +118,40 @@ console.log(JSON.stringify({
         self.assertEqual(data["overlap"], "old")
         self.assertEqual(data["touching"], "")
 
+    def test_migrates_legacy_minimax_to_single_new_data_source(self):
+        data = run_node("""
+const d=require('./static/js/smart-director-core.js');
+const migrated=d.migrateLegacyMinimaxNode({
+  id:'old-director',type:'smart-minimax',x:20,y:30,w:1040,h:640,title:'旧工程',
+  workflow:'MiniMax_H3.json',minimaxEngine:'runninghub',minimaxRunningHubWorkflowId:'rh-1',
+  materials:[{id:'mat-1',kind:'image',url:'/api/materials/mat-1'}],
+  refs:{image:[{id:'ref-1',kind:'image',url:'/api/materials/ref-1'}],video:[],audio:[]},
+  segments:[{
+    id:'seg-1',start:1.5,duration:8,prompt:'镜头一',aspectRatio:'16:9 (Widescreen)',megapixels:0.8,
+    refItems:[{id:'ref-1',kind:'image',url:'/api/materials/ref-1'}],
+    results:[{id:'result-1',url:'/api/results/result-1.mp4'}],result:{id:'result-1',url:'/api/results/result-1.mp4'}
+  }],selectedSegmentId:'seg-1',created_at:123
+});
+console.log(JSON.stringify(migrated));
+""")
+
+        self.assertEqual(data["type"], "smart-minimax-director")
+        self.assertEqual(data["directorKind"], "minimax-h3")
+        self.assertEqual(data["id"], "old-director")
+        self.assertEqual(data["projectName"], "旧工程")
+        self.assertEqual(data["selectedClipId"], "seg-1")
+        self.assertEqual(data["clips"][0]["startMs"], 1500)
+        self.assertEqual(data["clips"][0]["durationMs"], 8000)
+        self.assertEqual(data["clips"][0]["prompt"], "镜头一")
+        self.assertEqual(data["clips"][0]["results"][0]["id"], "result-1")
+        self.assertEqual(data["clips"][0]["currentResultId"], "result-1")
+        self.assertEqual(data["adapter"]["engine"], "runninghub")
+        self.assertEqual(data["adapter"]["runningHubWorkflowId"], "rh-1")
+        self.assertEqual({item["id"] for item in data["assets"]}, {"mat-1", "ref-1"})
+        self.assertNotIn("segments", data)
+        self.assertNotIn("materials", data)
+        self.assertNotIn("refs", data)
+
 
 if __name__ == "__main__":
     unittest.main()
