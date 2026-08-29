@@ -11804,19 +11804,20 @@ function smartMinimaxIconForKind(kind){
     if(kind === 'video') return 'film';
     return 'file-audio';
 }
-function smartMinimaxRefsForKind(node, kind){
-    const selected = smartMinimaxSelectedSegment(node);
+function smartMinimaxRefsForKind(node, kind, selectedOverride=null){
+    const selected = selectedOverride || smartMinimaxSelectedSegment(node);
     const clipRefs = (selected?.refItems || []).filter(ref => ref?.url);
-    const local = clipRefs.filter(ref => mediaKindForItem(ref) === kind);
+    const timelineRefs = (selected?.runtimeTimelineRefs || []).filter(ref => ref?.url);
+    const local = [...clipRefs, ...timelineRefs].filter(ref => mediaKindForItem(ref) === kind);
     const nodeRefs = node?.refs?.[kind] || [];
     const upstream = inputImagesFor(node).filter(ref => ref?.url && mediaKindForItem(ref) === kind);
     // Explicit clip refs own the request. Global/upstream refs are only a migration fallback
     // for older MiniMax nodes that did not store references per timeline segment.
-    const refs = clipRefs.length ? local : (nodeRefs.length ? nodeRefs : upstream);
+    const refs = (clipRefs.length || timelineRefs.length) ? local : (nodeRefs.length ? nodeRefs : upstream);
     return smartDirectorUniqueRefs(refs, smartMinimaxMaxForKind(kind)).filter(ref => ref?.url && mediaKindForItem(ref) === kind);
 }
-function smartMinimaxAllRefs(node){
-    return ['image','video','audio'].flatMap(kind => smartMinimaxRefsForKind(node, kind));
+function smartMinimaxAllRefs(node, selectedOverride=null){
+    return ['image','video','audio'].flatMap(kind => smartMinimaxRefsForKind(node, kind, selectedOverride));
 }
 function smartMinimaxAddSegmentRefs(node, seg, refs){
     if(!isSmartDirectorNode(node) || !seg) return false;
@@ -11906,7 +11907,12 @@ function smartDirectorApplyConnectionDerivation(node, seg, {applyFrameSnap=false
     if(!isSmartDirectorNode(node) || seg?.type !== 'connection') return null;
     const ordinary = (node.segments || []).filter(item => item.type !== 'connection');
     const derived = SMART_DIRECTOR_CORE.deriveConnectionInputs(seg, ordinary);
-    seg.timelineInputs = derived.inputs;
+    const recorded = new Map((seg.timelineInputs || []).map(input => [`${input.side}:${input.sourceClipId}:${input.operation}`, input]));
+    seg.timelineInputs = derived.inputs.map(input => ({
+        ...(recorded.get(`${input.side}:${input.sourceClipId}:${input.operation}`) || {}),
+        ...input
+    }));
+    derived.inputs = seg.timelineInputs;
     if(applyFrameSnap && derived.endMs - derived.startMs >= 500){
         seg.startMs = derived.startMs;
         seg.durationMs = Math.max(1, derived.endMs - derived.startMs);
@@ -11914,6 +11920,24 @@ function smartDirectorApplyConnectionDerivation(node, seg, {applyFrameSnap=false
         seg.trimOutMs = seg.durationMs;
     }
     return derived;
+}
+function smartDirectorCapabilityRefs(seg){
+    const manual = (seg?.refItems || []).filter(ref => ref?.url && ['image','video','audio'].includes(mediaKindForItem(ref))).map(ref => ({...ref, kind:mediaKindForItem(ref)}));
+    const automatic = (seg?.timelineInputs || []).map(input => {
+        if(input.operation === 'last_frame') return {kind:'image', role:'first_frame', url:`timeline://${input.sourceClipId}/last-frame`};
+        if(input.operation === 'first_frame') return {kind:'image', role:'last_frame', url:`timeline://${input.sourceClipId}/first-frame`};
+        if(input.operation === 'video_segment') return {kind:'video', role:'source_video', url:`timeline://${input.sourceClipId}/${input.side}`};
+        return null;
+    }).filter(Boolean);
+    return [...manual, ...automatic];
+}
+function smartDirectorCapabilityState(seg){
+    const refs = smartDirectorCapabilityRefs(seg);
+    const inputCounts = {text:1, image:imageRefsOnly(refs).length, video:videoRefsOnly(refs).length, audio:audioRefsOnly(refs).length};
+    const inputRoles = capabilityInputRoles(refs, true);
+    const parameters = {...(seg?.generation?.params || {})};
+    if(seg?.generation?.mode) parameters.__execution_mode = seg.generation.mode;
+    return {refs, inputCounts, inputRoles, parameters};
 }
 function smartMinimaxLightMediaHtml(item, label = 'Reference'){
     const kind = mediaKindForItem(item);
@@ -12454,11 +12478,34 @@ function smartMinimaxBodyHtml(node){
         </section>`;
     }).join('');
     const generation = selected?.generation || {providerId:'',model:'',mode:''};
-    const directorProviders = isMiniMaxDirectorNode(node) ? [] : videoApiProviders();
-    const generationProviderId = generation.providerId || directorProviders[0]?.id || '';
-    const directorModels = generationProviderId ? providerVideoModels(generationProviderId) : [];
+    const capabilityState = smartDirectorCapabilityState(selected);
+    const directorProviderCatalog = [...videoApiProviders(), ...((apiProviders || []).filter(provider => provider.id === 'volcengine' && provider.enabled !== false && (provider.video_models || []).length))]
+        .filter((provider, index, list) => list.findIndex(item => item.id === provider.id) === index);
+    const directorProviders = isMiniMaxDirectorNode(node) ? [] : directorProviderCatalog.map(provider => ({
+        ...provider,
+        compatibleModels:capabilityModelsForProvider(provider.id, 'video_generation', capabilityState.inputCounts, [], capabilityState.inputRoles, capabilityState.parameters)
+    }));
+    const firstCompatibleProvider = directorProviders.find(provider => provider.compatibleModels.length);
+    if(selected && !generation.providerId && firstCompatibleProvider) generation.providerId = firstCompatibleProvider.id;
+    const generationProviderId = generation.providerId || '';
+    const currentDirectorProvider = directorProviders.find(provider => provider.id === generationProviderId) || null;
+    const directorModels = currentDirectorProvider?.compatibleModels || [];
+    if(selected && !generation.model && directorModels.length){
+        generation.model = directorModels[0].model_id;
+        generation.mode = directorModels[0].operation || '';
+    }
+    const selectedModelProfile = directorModels.find(profile => profile.model_id === generation.model) || capabilityProfileFor(generationProviderId, generation.model, 'video_generation');
+    const selectedModelIncompatible = Boolean(generation.model && !directorModels.some(profile => profile.model_id === generation.model));
+    const runModes = [...new Set([selectedModelProfile?.operation].filter(Boolean))];
+    const connectionDependency = selected?.type === 'connection' ? SMART_DIRECTOR_CORE.connectionDependencyState(selected, node.segments) : null;
+    const connectionStatusHtml = connectionDependency?.missing?.length
+        ? `<div class="director-connection-status is-error"><i data-lucide="circle-alert"></i><span>${escapeHtml(capabilityUiText(`还缺少 ${connectionDependency.missing.length} 个来源 Clip 结果`,`Missing ${connectionDependency.missing.length} source Clip result(s)`))}</span></div>`
+        : connectionDependency?.needsRegeneration
+            ? `<div class="director-connection-status is-stale"><i data-lucide="refresh-cw"></i><span>${escapeHtml(capabilityUiText('来源结果已变化，需要重新生成连接 Clip','Source results changed; regenerate this connection Clip'))}</span></div>`
+            : '';
     const connectionInputHtml = selected?.type === 'connection' ? `<div class="director-connection-inputs">
         <div class="director-connection-inputs-head"><i data-lucide="lock-keyhole"></i><span>${escapeHtml(capabilityUiText('时间线自动输入（只读）','Automatic timeline inputs (read-only)'))}</span></div>
+        ${connectionStatusHtml}
         ${(selected.timelineInputs || []).length ? (selected.timelineInputs || []).map(input => {
             const sourceIndex = Math.max(0, node.segments.findIndex(item => item.id === input.sourceClipId));
             const side = input.side === 'left' ? capabilityUiText('左侧','Left') : capabilityUiText('右侧','Right');
@@ -12471,6 +12518,7 @@ function smartMinimaxBodyHtml(node){
             <div class="minimax-brand">
                 <i data-lucide="clapperboard"></i>
                 <span>${escapeHtml(isMiniMaxDirectorNode(node) ? tr('smart.createMinimaxDirector') : tr('smart.createVideoDirector'))}</span>
+                <input type="text" data-director-project-name value="${escapeAttr(node.projectName || '')}" placeholder="${escapeAttr(capabilityUiText('工程名称','Project name'))}" maxlength="120" aria-label="${escapeAttr(capabilityUiText('工程名称','Project name'))}">
                 <b data-minimax-time-label="1">${timeLabel(playhead)} / ${timeLabel(total)}</b>
             </div>
             <div class="minimax-transport"></div>
@@ -12528,14 +12576,14 @@ function smartMinimaxBodyHtml(node){
                                 <option value="comfyui" ${minimaxEngine === 'comfyui' ? 'selected' : ''}>ComfyUI</option>
                                 <option value="runninghub" ${minimaxEngine === 'runninghub' ? 'selected' : ''}>RunningHub</option>
                             </select></label>` : `<div class="director-generation-primary">
-                                <label><span>${escapeHtml(capabilityUiText('平台','Platform'))}</span><select data-director-generation="providerId">${directorProviders.map(provider => `<option value="${escapeAttr(provider.id)}" ${provider.id === generationProviderId ? 'selected' : ''}>${escapeHtml(provider.name || provider.id)}</option>`).join('')}</select></label>
-                                <label><span>${escapeHtml(capabilityUiText('模型','Model'))}</span><select data-director-generation="model"><option value="">${escapeHtml(capabilityUiText('请选择','Select'))}</option>${directorModels.map(model => `<option value="${escapeAttr(model)}" ${model === generation.model ? 'selected' : ''}>${escapeHtml(model)}</option>`).join('')}</select></label>
-                                <label><span>${escapeHtml(capabilityUiText('运行模式','Run mode'))}</span><select data-director-generation="mode"><option value="">${escapeHtml(capabilityUiText('由模型能力判断','Capability-based'))}</option>${generation.mode ? `<option value="${escapeAttr(generation.mode)}" selected>${escapeHtml(generation.mode)}</option>` : ''}</select></label>
+                                <label><span>${escapeHtml(capabilityUiText('平台','Platform'))}</span><select data-director-generation="providerId">${directorProviders.map(provider => `<option value="${escapeAttr(provider.id)}" ${provider.id === generationProviderId ? 'selected' : ''} ${provider.compatibleModels.length ? '' : 'disabled'}>${escapeHtml(provider.name || provider.id)} · ${provider.compatibleModels.length}</option>`).join('')}</select></label>
+                                <label class="${selectedModelIncompatible ? 'is-invalid' : ''}"><span>${escapeHtml(capabilityUiText('模型','Model'))}</span><select data-director-generation="model"><option value="">${escapeHtml(capabilityUiText('请选择','Select'))}</option>${selectedModelIncompatible ? `<option value="${escapeAttr(generation.model)}" selected disabled>${escapeHtml(`${generation.model} · ${capabilityUiText('当前输入不兼容','Incompatible inputs')}`)}</option>` : ''}${directorModels.map(profile => `<option value="${escapeAttr(profile.model_id)}" ${profile.model_id === generation.model ? 'selected' : ''}>${escapeHtml(capabilityModelLabel(profile, profile.model_id))}</option>`).join('')}</select></label>
+                                <label><span>${escapeHtml(capabilityUiText('运行模式','Run mode'))}</span><select data-director-generation="mode"><option value="">${escapeHtml(capabilityUiText('由模型能力判断','Capability-based'))}</option>${runModes.map(mode => `<option value="${escapeAttr(mode)}" ${mode === generation.mode ? 'selected' : ''}>${escapeHtml(mode)}</option>`).join('')}</select></label>
                             </div>`}
                             <label><span>Duration</span><input type="number" min="0.5" max="60" step="0.1" data-minimax-seg-number="duration" value="${escapeAttr(segDuration)}"><b>s</b></label>
                             <label><span>Megapixels</span><input type="number" min="0.1" max="2" step="0.1" data-minimax-seg-number="megapixels" value="${escapeAttr(megapixels)}"><b>MP</b></label>
                             <label class="minimax-wide-setting"><span>Aspect ratio</span><select data-minimax-select="aspectRatio">${['16:9 (Widescreen)','9:16 (Portrait)','1:1 (Square)','4:3 (Standard)','3:4 (Portrait)','21:9 (Ultrawide)'].map(value => `<option value="${escapeAttr(value)}" ${value === aspectRatio ? 'selected' : ''}>${escapeHtml(value.split(' ')[0])}</option>`).join('')}</select></label>
-                            <button class="minimax-run ${node.running ? 'is-stop' : ''}" type="button" data-minimax-run="${escapeAttr(node.id)}" ${node.running ? 'disabled' : ''} title="${escapeAttr(capabilityUiText('生成当前 Clip','Generate selected Clip'))}"><i data-lucide="${node.running ? 'loader-2' : 'sparkles'}"></i><span>${escapeHtml(node.running ? capabilityUiText('运行中','Running') : capabilityUiText('生成 Clip','Generate Clip'))}</span></button>
+                            <button class="minimax-run ${selected?.running ? 'is-stop' : ''}" type="button" data-minimax-run="${escapeAttr(node.id)}" ${selected?.running ? 'disabled' : ''} title="${escapeAttr(capabilityUiText('生成当前 Clip','Generate selected Clip'))}"><i data-lucide="${selected?.running ? 'loader-2' : 'sparkles'}"></i><span>${escapeHtml(selected?.running ? capabilityUiText('运行中','Running') : capabilityUiText('生成 Clip','Generate Clip'))}</span></button>
                         </div>
                     </div>
                 </div>
@@ -14420,11 +14468,19 @@ function bindMinimaxNodeControls(el, node){
                 render();
             } else if(key === 'model') {
                 seg.generation.model = select.value;
-                seg.generation.mode = '';
+                seg.generation.mode = capabilityProfileFor(seg.generation.providerId, select.value, 'video_generation')?.operation || '';
                 render();
             } else if(key === 'mode') {
                 seg.generation.mode = select.value;
             }
+            scheduleSave();
+        };
+    });
+    el.querySelectorAll('[data-director-project-name]').forEach(input => {
+        input.oninput = e => {
+            e.stopPropagation();
+            focusMinimaxNode();
+            node.projectName = input.value.slice(0, 120);
             scheduleSave();
         };
     });
@@ -23780,6 +23836,7 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, runNode
                 url:ref?.url,
                 name:ref.name || `图${i + 1}`,
                 kind:'image',
+                role:ref.role || '',
                 width:Number(ref.width || ref.w || ref.natural_w || 0),
                 height:Number(ref.height || ref.h || ref.natural_h || 0),
                 natural_w:Number(ref.natural_w || ref.width || ref.w || 0),
@@ -24104,31 +24161,31 @@ async function comfyNameForRef(ref){
     ref.comfy_name = name;
     return name;
 }
-function smartMinimaxPrompt(node){
-    const seg = smartMinimaxSelectedSegment(node);
+function smartMinimaxPrompt(node, selectedOverride=null){
+    const seg = selectedOverride || smartMinimaxSelectedSegment(node);
     return String(seg?.prompt || '').trim() || String(node.promptDraftText || '').trim() || inputPromptTextFor(node) || 'Generate a cinematic video clip.';
 }
-async function smartMinimaxDynamicParams(node){
-    const seg = smartMinimaxSelectedSegment(node);
+async function smartMinimaxDynamicParams(node, selectedOverride=null){
+    const seg = selectedOverride || smartMinimaxSelectedSegment(node);
     const duration = Math.max(0.5, Number(seg?.duration || node.duration || 8) || 8);
     const params = {
         "136":{},
         "115":{aspect_ratio:seg?.aspectRatio || node.aspectRatio || '16:9 (Widescreen)', megapixels:Number(seg?.megapixels || node.megapixels || 0.4)},
         "132":{value:duration},
-        "138":{value:smartMinimaxPrompt(node)},
+        "138":{value:smartMinimaxPrompt(node, seg)},
         "129":{noise_seed:Math.floor(Math.random() * 4294967295)}
     };
     for(let i = 0; i < SMART_MINIMAX_REF_IMAGE_MAX; i++) params["136"][`ref_images.ref_image_${i}`] = null;
     for(let i = 0; i < SMART_MINIMAX_REF_VIDEO_MAX; i++) params["136"][`ref_videos.ref_video_${i}`] = null;
     for(let i = 0; i < SMART_MINIMAX_REF_AUDIO_MAX; i++) params["136"][`ref_audios.ref_audio_${i}`] = null;
-    const images = smartMinimaxRefsForKind(node, 'image');
+    const images = smartMinimaxRefsForKind(node, 'image', seg);
     if(images.length > SMART_MINIMAX_REF_IMAGE_MAX) throw new Error(`MiniMax H3 最多支持 ${SMART_MINIMAX_REF_IMAGE_MAX} 张参考图`);
     for(let i = 0; i < images.length; i++){
         const name = await comfyNameForRef(images[i]);
         params[String(9000 + i)] = {class_type:'LoadImage', inputs:{image:name}, _meta:{title:`MiniMax image ${i + 1}`}};
         params["136"][`ref_images.ref_image_${i}`] = [String(9000 + i), 0];
     }
-    const videos = smartMinimaxRefsForKind(node, 'video');
+    const videos = smartMinimaxRefsForKind(node, 'video', seg);
     if(videos.length > SMART_MINIMAX_REF_VIDEO_MAX) throw new Error(`MiniMax H3 最多支持 ${SMART_MINIMAX_REF_VIDEO_MAX} 段参考视频`);
     for(let i = 0; i < videos.length; i++){
         const name = await comfyNameForRef(videos[i]);
@@ -24138,7 +24195,7 @@ async function smartMinimaxDynamicParams(node){
         params[componentsNodeId] = {class_type:'GetVideoComponents', inputs:{video:[loadNodeId, 0]}, _meta:{title:`MiniMax video frames ${i + 1}`}};
         params["136"][`ref_videos.ref_video_${i}`] = [componentsNodeId, 0];
     }
-    const audios = smartMinimaxRefsForKind(node, 'audio');
+    const audios = smartMinimaxRefsForKind(node, 'audio', seg);
     if(audios.length > SMART_MINIMAX_REF_AUDIO_MAX) throw new Error(`MiniMax H3 最多支持 ${SMART_MINIMAX_REF_AUDIO_MAX} 段参考音频`);
     for(let i = 0; i < audios.length; i++){
         const name = await comfyNameForRef(audios[i]);
@@ -24200,12 +24257,77 @@ function smartMinimaxAspectForRunningHub(value, field=null){
     const option = options.find(item => String(item).replace(/\s+/g, '').startsWith(ratio));
     return option || ratio;
 }
-function smartMinimaxRunRefs(node){
-    return smartMinimaxAllRefs(node).map(ref => ({...ref, kind:mediaKindForItem(ref)}));
+function smartMinimaxRunRefs(node, selectedOverride=null){
+    return smartMinimaxAllRefs(node, selectedOverride).map(ref => ({...ref, kind:mediaKindForItem(ref)}));
 }
-function smartMinimaxRunSnapshot(node, extraSettings={}){
-    const seg = smartMinimaxSelectedSegment(node);
-    const refs = smartMinimaxRunRefs(node);
+async function smartDirectorMaterializeTimelineRefs(node, seg){
+    if(seg?.type !== 'connection'){
+        delete seg.runtimeTimelineRefs;
+        return [];
+    }
+    const derived = smartDirectorApplyConnectionDerivation(node, seg);
+    const refs = [];
+    for(const input of derived?.inputs || []){
+        const source = (node.segments || []).find(item => item.id === input.sourceClipId && item.type !== 'connection');
+        const result = source?.result;
+        if(!result?.url){
+            const sourceIndex = Math.max(0, (node.segments || []).findIndex(item => item.id === input.sourceClipId));
+            throw new Error(capabilityUiText(`连接 Clip 缺少来源：请先生成 Clip ${sourceIndex + 1}`,`Connection Clip source is missing: generate Clip ${sourceIndex + 1} first`));
+        }
+        const body = {source_url:result.url, operation:input.operation};
+        if(input.operation === 'video_segment'){
+            body.start_ms = Math.max(0, Math.round(Number(input.startMs || 0) - Number(source.startMs || 0)));
+            body.end_ms = Math.max(body.start_ms + 1, Math.round(Number(input.endMs || 0) - Number(source.startMs || 0)));
+        }
+        const response = await fetch('/api/smart-canvas/director-reference', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+        });
+        if(!response.ok) throw new Error(await smartResponseErrorMessage(response, capabilityUiText('无法准备连接 Clip 的时间线输入','Failed to prepare timeline inputs for the connection Clip')));
+        const materialized = await response.json();
+        input.sourceResultId = String(result.id || result.resultId || result.url || '');
+        input.referenceUrl = materialized.url || '';
+        refs.push({
+            ...materialized,
+            url:materialized.url,
+            name:input.side === 'left' ? capabilityUiText('上一 Clip 时间线输入','Previous Clip timeline input') : capabilityUiText('下一 Clip 时间线输入','Next Clip timeline input'),
+            kind:materialized.kind || (input.operation === 'video_segment' ? 'video' : 'image'),
+            role:input.operation === 'last_frame' ? 'first_frame' : input.operation === 'first_frame' ? 'last_frame' : 'reference_video',
+            timelineLocked:true,
+            sourceClipId:input.sourceClipId,
+            sourceResultId:input.sourceResultId,
+            operation:input.operation,
+            side:input.side
+        });
+    }
+    seg.runtimeTimelineRefs = refs;
+    return refs;
+}
+function smartDirectorGenericRunSettings(node, seg, refs=[]){
+    const generation = seg?.generation || {};
+    const providerId = String(generation.providerId || '');
+    const modelId = String(generation.model || '');
+    if(!providerId || !modelId) throw new Error(capabilityUiText('请先选择通用导演台的平台和模型','Select a platform and model for the generic director first'));
+    const profile = capabilityProfileFor(providerId, modelId, 'video_generation');
+    if(!profile) throw new Error(capabilityUiText(`当前能力档案中没有视频模型 ${modelId}`,`Video model ${modelId} is missing from the capability catalog`));
+    const params = generation.params && typeof generation.params === 'object' ? generation.params : {};
+    const ratio = String(params.aspect_ratio || seg?.aspectRatio || '16:9').match(/\d+\s*:\s*\d+/)?.[0]?.replace(/\s+/g, '') || '16:9';
+    const base = smartSettingsForNode({type:SMART_NODE_TYPES.videoGenerator, runSettings:{}});
+    return {
+        ...base,
+        ...params,
+        engine:'api', apiKind:'video',
+        videoProvider:providerId,
+        videoFamilyId:String(profile.family_id || ''),
+        videoModel:modelId,
+        videoDuration:Math.max(1, Math.round(Number(seg?.duration || 5))),
+        videoAspect:ratio,
+        videoUseFrameRoles:refs.filter(ref => ref.kind === 'image' && ['first_frame','last_frame'].includes(ref.role)).length > 0,
+        _directorExecutionMode:String(generation.mode || '')
+    };
+}
+function smartMinimaxRunSnapshot(node, extraSettings={}, selectedOverride=null){
+    const seg = selectedOverride || smartMinimaxSelectedSegment(node);
+    const refs = smartMinimaxRunRefs(node, seg);
     const engine = smartMinimaxEngine(node);
     const duration = Math.max(0.5, Number(seg?.duration || node?.duration || 8) || 8);
     const aspectRatio = seg?.aspectRatio || node?.aspectRatio || '16:9 (Widescreen)';
@@ -24214,7 +24336,7 @@ function smartMinimaxRunSnapshot(node, extraSettings={}){
         nodeId:node?.id || '',
         nodeType:node.type,
         kind:'video',
-        prompt:smartMinimaxPrompt(node),
+        prompt:smartMinimaxPrompt(node, seg),
         refs:refs.map(ref => ({url:ref.url || '', name:ref.name || 'media', kind:ref.kind || mediaKindForItem(ref)})).filter(ref => ref.url),
         settings:{
             engine:engine === 'runninghub' ? 'runninghub' : 'comfy',
@@ -24245,40 +24367,52 @@ function smartMinimaxLogError(error, engine='comfyui'){
     if(details.raw) lines.push(`raw: ${smartCompactJson(details.raw, 4200)}`);
     return lines.filter(Boolean).join('\n');
 }
-async function runMinimaxRunningHub(node){
-    const seg = smartMinimaxSelectedSegment(node);
+async function runMinimaxRunningHub(node, selectedOverride=null){
+    const seg = selectedOverride || smartMinimaxSelectedSegment(node);
     const runSettings = await smartMinimaxRunningHubSettings(node);
     const fields = runSettings.rhFields || [];
     const duration = Math.max(0.5, Number(seg?.duration || node.duration || 8) || 8);
     const aspectField = fields.find(item => smartMinimaxRunningHubFieldMatches(item, [/aspect[_\s-]?ratio|\bratio\b|画面比例|比例/], ['115::aspect_ratio']));
     const aspect = smartMinimaxAspectForRunningHub(seg?.aspectRatio || node.aspectRatio || '16:9', aspectField);
-    const prompt = smartMinimaxPrompt(node);
+    const prompt = smartMinimaxPrompt(node, seg);
     smartMinimaxSetRunningHubParam(runSettings, fields, [/prompt|positive|text|caption|description|关键词|提示词|正向/], ['138::value'], prompt);
     smartMinimaxSetRunningHubParam(runSettings, fields, [/duration|seconds|时长|秒/], ['132::value'], duration);
     smartMinimaxSetRunningHubParam(runSettings, fields, [/aspect[_\s-]?ratio|\bratio\b|画面比例|比例/], ['115::aspect_ratio'], aspect);
     smartMinimaxSetRunningHubParam(runSettings, fields, [/megapixels?|百万像素/], ['115::megapixels'], Number(seg?.megapixels || node.megapixels || 0.4));
-    const refs = smartMinimaxRunRefs(node);
+    const refs = smartMinimaxRunRefs(node, seg);
     const urls = await runLegacyRunningHubWorkflowGeneration(prompt, refs, runSettings);
     if(!urls.length) throw new Error(tr('smart.errNoOutVideos'));
     return {urls, kind:mediaKindForUrls(urls, 'video'), runSettings};
 }
 async function runMinimaxNode(nodeId){
     const node = nodes.find(n => n.id === nodeId && isSmartDirectorNode(n));
-    if(!node || node.running) return;
+    if(!node) return;
+    const activeSegment = smartMinimaxSelectedSegment(node);
+    if(!activeSegment || activeSegment.running) return;
     savePromptDraftForCurrent();
-    node.runStartedAt = nowMs();
-    delete node.runFinishedAt;
-    delete node.runElapsedMs;
-    node.runTimerHidden = false;
-    node.running = true;
-    const startedAt = node.runStartedAt;
-    let runLog = smartMinimaxRunSnapshot(node);
+    activeSegment.runStartedAt = nowMs();
+    delete activeSegment.runFinishedAt;
+    delete activeSegment.runElapsedMs;
+    activeSegment.runTimerHidden = false;
+    activeSegment.running = true;
+    const startedAt = activeSegment.runStartedAt;
+    let runLog = smartMinimaxRunSnapshot(node, {}, activeSegment);
     render();
     try {
         let urls = [];
         let resultKind = 'video';
-        if(smartMinimaxEngine(node) === 'runninghub'){
-            const rhResult = await runMinimaxRunningHub(node);
+        await smartDirectorMaterializeTimelineRefs(node, activeSegment);
+        if(!isMiniMaxDirectorNode(node)){
+            const refs = smartMinimaxRunRefs(node, activeSegment);
+            const runSettings = smartDirectorGenericRunSettings(node, activeSegment, refs);
+            runLog = {
+                ...smartMinimaxRunSnapshot(node, {}, activeSegment),
+                refs:refs.map(ref => ({url:ref.url || '', name:ref.name || 'media', kind:ref.kind || mediaKindForItem(ref)})).filter(ref => ref.url),
+                settings:runSettings
+            };
+            urls = await runApiVideoGeneration(smartMinimaxPrompt(node, activeSegment), refs, runSettings, activeSegment, createCanvasOperationId(`${node.id}:${activeSegment.id}`));
+        } else if(smartMinimaxEngine(node) === 'runninghub'){
+            const rhResult = await runMinimaxRunningHub(node, activeSegment);
             urls = rhResult.urls || [];
             resultKind = rhResult.kind || 'video';
             if(rhResult.runSettings) runLog = smartMinimaxRunSnapshot(node, {
@@ -24286,11 +24420,11 @@ async function runMinimaxNode(nodeId){
                 rhAppId:rhResult.runSettings.rhAppId || '',
                 rhTaskId:rhResult.runSettings.rhTaskId || '',
                 rhMode:rhResult.runSettings.rhMode || 'workflow'
-            });
+            }, activeSegment);
         } else {
-            const params = await smartMinimaxDynamicParams(node);
+            const params = await smartMinimaxDynamicParams(node, activeSegment);
             const result = await runQueuedSmartComfyGenerate({
-                prompt:smartMinimaxPrompt(node),
+                prompt:smartMinimaxPrompt(node, activeSegment),
                 workflow_json:node.workflow || 'MiniMax_H3.json',
                 params,
                 type:'minimax-h3',
@@ -24307,63 +24441,66 @@ async function runMinimaxNode(nodeId){
             const ext = itemKind === 'audio' ? 'mp3' : itemKind === 'image' ? 'png' : 'mp4';
             return { ...(typeof item === 'object' ? item : {}), url, name:(typeof item === 'object' && item.name) || `minimax-${i + 1}.${ext}`, kind:itemKind };
         }).filter(item => item.url);
-        const seg = smartMinimaxSelectedSegment(node);
+        const seg = activeSegment;
         out.forEach(item => smartMinimaxSetSegmentResult(node, seg, item));
         addSmartGenerationLog({run:runLog, outputs:out, runMs:Math.max(0, nowMs() - Number(startedAt || nowMs()))});
         selectedId = node.id;
         selectedIds = [];
         selectedImage = {nodeId:'', index:-1};
-        toast(`MiniMax segment ${Math.max(1, node.segments.findIndex(item => item.id === seg?.id) + 1)} done`);
+        toast(capabilityUiText(`Clip ${Math.max(1, node.segments.findIndex(item => item.id === seg?.id) + 1)} 已生成`,`Clip ${Math.max(1, node.segments.findIndex(item => item.id === seg?.id) + 1)} generated`));
         scheduleSave();
     } catch(e) {
-        const readable = smartMinimaxReadableError(e, smartMinimaxEngine(node));
+        const readable = smartMinimaxReadableError(e, isMiniMaxDirectorNode(node) ? smartMinimaxEngine(node) : 'api');
         const details = e?.smartDetails || {};
         runLog = smartMinimaxRunSnapshot(node, {
             rhTaskId:details.taskId || runLog.settings.rhTaskId || '',
             rhWorkflowId:details.workflowId || runLog.settings.rhWorkflowId || '',
             rhAppId:details.webappId || runLog.settings.rhAppId || '',
             rhMode:details.webappId ? 'app' : (runLog.settings.rhMode || 'workflow')
-        });
-        addSmartGenerationLog({run:runLog, outputs:[], runMs:Math.max(0, nowMs() - Number(startedAt || nowMs())), error:smartMinimaxLogError(e, smartMinimaxEngine(node))});
+        }, activeSegment);
+        addSmartGenerationLog({run:runLog, outputs:[], runMs:Math.max(0, nowMs() - Number(startedAt || nowMs())), error:smartMinimaxLogError(e, isMiniMaxDirectorNode(node) ? smartMinimaxEngine(node) : 'api')});
         toast(readable.slice(0, 320));
     } finally {
-        node.runFinishedAt = nowMs();
-        node.runElapsedMs = Math.max(0, node.runFinishedAt - Number(node.runStartedAt || startedAt));
-        node.runTimerHidden = false;
-        node.running = false;
+        delete activeSegment.runtimeTimelineRefs;
+        activeSegment.runFinishedAt = nowMs();
+        activeSegment.runElapsedMs = Math.max(0, activeSegment.runFinishedAt - Number(activeSegment.runStartedAt || startedAt));
+        activeSegment.runTimerHidden = false;
+        activeSegment.running = false;
         scheduleSave();
         render();
     }
 }
 async function exportMinimaxTimeline(node, options={}){
     smartMinimaxEnsureSegment(node);
-    const sourceSegments = options.selectedOnly ? [smartMinimaxSelectedSegment(node)].filter(Boolean) : (node.segments || []);
-    const clips = sourceSegments.filter(seg => seg?.result?.url).map((seg, index) => ({
-        url:seg.result.url,
-        name:seg.result.name || `minimax-${index + 1}.mp4`,
-        start:Number(seg.trimIn || 0) || 0,
-        end:Number(seg.trimOut || seg.duration || 0) || Number(seg.duration || 0),
-        duration:Number(seg.duration || 0) || 0
-    })).filter(item => item.url);
-    if(!clips.length){
-        toast('No generated clips to export.');
+    const selected = smartMinimaxSelectedSegment(node);
+    if(options.selectedOnly){
+        if(selected?.result?.url) downloadPreviewFile(selected.result);
+        else toast(capabilityUiText('当前 Clip 还没有生成结果','The selected Clip has no generated result'));
         return;
     }
-    if(clips.length === 1 && clips[0].start <= 0 && (!clips[0].end || clips[0].end >= clips[0].duration)){
-        const only = (node.segments || []).find(seg => seg?.result?.url)?.result;
-        if(only?.url) downloadPreviewFile(only);
+    const clips = (node.segments || []).map(seg => ({
+        id:String(seg.id || ''),
+        type:seg.type === 'connection' ? 'connection' : 'ordinary',
+        start_ms:Math.max(0, Math.round(Number(seg.startMs || 0))),
+        duration_ms:Math.max(1, Math.round(Number(seg.durationMs || 1))),
+        created_at:Number(seg.createdAt || 0),
+        result_id:String(seg.currentResultId || seg.result?.id || ''),
+        url:String(seg.result?.url || '')
+    }));
+    if(!clips.some(clip => clip.url)){
+        toast(capabilityUiText('导演台还没有生成任何 Clip','The director has no generated Clips yet'));
         return;
     }
     try {
-        toast('Exporting timeline...');
-        const result = await fetch('/api/smart-canvas/minimax-export', {
+        toast(capabilityUiText('正在打包独立 Clip…','Packaging independent Clips…'));
+        const result = await fetch('/api/smart-canvas/director-export', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({clips, filename:`minimax-timeline-${Date.now()}.mp4`})
-        }).then(async r => { if(!r.ok) throw new Error(await smartResponseErrorMessage(r, 'Export failed')); return r.json(); });
-        if(result?.url) downloadPreviewFile({url:result.url, name:result.name || 'minimax-timeline.mp4', kind:'video'});
+            body:JSON.stringify({project_name:node.projectName || capabilityUiText('导演台工程','Director project'), clips})
+        }).then(async r => { if(!r.ok) throw new Error(await smartResponseErrorMessage(r, capabilityUiText('导出失败','Export failed'))); return r.json(); });
+        if(result?.url) downloadPreviewFile({url:result.url, name:result.name || 'director-clips.zip', kind:'file'});
     } catch(e) {
-        toast((e.message || 'Export failed').slice(0, 180));
+        toast((e.message || capabilityUiText('导出失败','Export failed')).slice(0, 220));
     }
 }
 

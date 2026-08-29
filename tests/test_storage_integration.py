@@ -1,11 +1,14 @@
 import io
+import json
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException, Request, UploadFile
+from pydantic import ValidationError
 
 import main
 from project_storage import ProjectStorage
@@ -508,6 +511,95 @@ class StorageIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(response["media_transform"])
         self.assertEqual(response["message"], "缺少FFmpeg和FFprobe，播放预览仍可用，但媒体处理暂不可用")
+
+    async def test_director_reference_rejects_unknown_operation_and_remote_source(self):
+        with self.assertRaises(ValidationError):
+            main.DirectorReferenceRequest(source_url="/api/results/a", operation="middle_frame")
+
+        with self.assertRaises(HTTPException) as caught:
+            await main.create_director_reference(main.DirectorReferenceRequest(
+                source_url="https://example.com/video.mp4",
+                operation="first_frame",
+            ))
+
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertIn("本地", caught.exception.detail)
+
+    async def test_director_reference_rejects_invalid_or_out_of_bounds_segment(self):
+        source = self.root / "source.mp4"
+        source.write_bytes(b"video-source")
+
+        with patch.object(main, "director_reference_duration_ms", return_value=5000):
+            with self.assertRaises(HTTPException) as caught:
+                await main.create_director_reference(main.DirectorReferenceRequest(
+                    source_url=str(source), operation="video_segment", start_ms=-1, end_ms=1000,
+                ))
+            self.assertEqual(caught.exception.status_code, 400)
+
+            with self.assertRaises(HTTPException) as caught:
+                await main.create_director_reference(main.DirectorReferenceRequest(
+                    source_url=str(source), operation="video_segment", start_ms=4500, end_ms=5100,
+                ))
+            self.assertEqual(caught.exception.status_code, 400)
+            self.assertIn("超出", caught.exception.detail)
+
+    async def test_director_reference_uses_stable_rebuildable_cache(self):
+        source = self.root / "source.mp4"
+        source.write_bytes(b"same-video-source")
+        builds = []
+
+        def fake_build(source_path, target_path, request, duration_ms):
+            builds.append((source_path, target_path, request.operation, duration_ms))
+            Path(target_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(target_path).write_bytes(b"frame")
+
+        request = main.DirectorReferenceRequest(source_url=str(source), operation="last_frame")
+        with patch.object(main, "director_reference_duration_ms", return_value=5000), patch.object(main, "build_director_reference_file", side_effect=fake_build):
+            first = await main.create_director_reference(request)
+            second = await main.create_director_reference(request)
+
+        self.assertEqual(first["url"], second["url"])
+        self.assertEqual(first["cache_key"], second["cache_key"])
+        self.assertEqual(len(builds), 1)
+        self.assertTrue(main.local_media_reference_path(first["url"]))
+
+    async def test_director_export_orders_all_clip_types_by_midpoint_and_writes_manifest(self):
+        sources = {}
+        for name in ("first.mp4", "ordinary.mp4", "bridge.mp4"):
+            path = self.root / name
+            path.write_bytes(name.encode("utf-8"))
+            sources[name] = str(path)
+        payload = main.DirectorExportRequest(project_name="制作/A", clips=[
+            main.DirectorExportClip(id="ordinary", type="ordinary", start_ms=5000, duration_ms=2000, created_at=2, result_id="r2", url=sources["ordinary.mp4"]),
+            main.DirectorExportClip(id="bridge", type="connection", start_ms=3000, duration_ms=2000, created_at=2, result_id="r3", url=sources["bridge.mp4"]),
+            main.DirectorExportClip(id="first", type="ordinary", start_ms=0, duration_ms=3000, created_at=1, result_id="r1", url=sources["first.mp4"]),
+        ])
+
+        result = await main.export_director_clips(payload)
+        archive_path = main.local_media_reference_path(result["url"])
+
+        self.assertTrue(archive_path)
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            names = archive.namelist()
+            self.assertEqual(names[:3], ["制作_A-clip-001.mp4", "制作_A-clip-002.mp4", "制作_A-clip-003.mp4"])
+            manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+        self.assertEqual([item["clip_id"] for item in manifest["clips"]], ["first", "bridge", "ordinary"])
+        self.assertEqual(manifest["clips"][1]["type"], "connection")
+
+    async def test_director_export_rejects_missing_or_remote_results(self):
+        with self.assertRaises(HTTPException) as caught:
+            await main.export_director_clips(main.DirectorExportRequest(project_name="A", clips=[
+                main.DirectorExportClip(id="missing", type="ordinary", start_ms=0, duration_ms=1000, url="")
+            ]))
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertIn("结果", caught.exception.detail)
+
+        with self.assertRaises(HTTPException) as caught:
+            await main.export_director_clips(main.DirectorExportRequest(project_name="A", clips=[
+                main.DirectorExportClip(id="remote", type="connection", start_ms=0, duration_ms=1000, url="https://example.com/a.mp4")
+            ]))
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertIn("本地", caught.exception.detail)
 
 
 if __name__ == "__main__":

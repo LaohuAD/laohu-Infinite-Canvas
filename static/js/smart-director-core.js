@@ -319,10 +319,10 @@
             .map(normalizeClip)
             .sort((a, b) => a.startMs - b.startMs || a.id.localeCompare(b.id));
         const left = ordinary
-            .filter(item => item.startMs <= originalStartMs && overlaps(originalStartMs, originalEndMs, item.startMs, clipEndMs(item)))
+            .filter(item => item.startMs <= originalStartMs && (overlaps(originalStartMs, originalEndMs, item.startMs, clipEndMs(item)) || clipEndMs(item) === originalStartMs))
             .sort((a, b) => clipEndMs(b) - clipEndMs(a))[0];
         const right = ordinary
-            .filter(item => item.startMs > originalStartMs && overlaps(originalStartMs, originalEndMs, item.startMs, clipEndMs(item)))
+            .filter(item => item.startMs > originalStartMs && (overlaps(originalStartMs, originalEndMs, item.startMs, clipEndMs(item)) || item.startMs === originalEndMs))
             .sort((a, b) => a.startMs - b.startMs)[0];
         const inputs = [];
         let startMs = originalStartMs;
@@ -331,7 +331,7 @@
         if(left){
             const sourceEndMs = clipEndMs(left);
             const overlapMs = Math.max(0, Math.min(originalEndMs, sourceEndMs) - Math.max(originalStartMs, left.startMs));
-            if(overlapMs > 0 && overlapMs < thresholdMs){
+            if((overlapMs > 0 && overlapMs < thresholdMs) || (overlapMs === 0 && sourceEndMs === originalStartMs)){
                 inputs.push({side:'left', sourceClipId:left.id, operation:'last_frame', atMs:sourceEndMs, overlapMs});
                 startMs = sourceEndMs;
             }else if(overlapMs >= thresholdMs){
@@ -344,7 +344,7 @@
         if(right){
             const sourceEndMs = clipEndMs(right);
             const overlapMs = Math.max(0, Math.min(originalEndMs, sourceEndMs) - Math.max(originalStartMs, right.startMs));
-            if(overlapMs > 0 && overlapMs < thresholdMs){
+            if((overlapMs > 0 && overlapMs < thresholdMs) || (overlapMs === 0 && right.startMs === originalEndMs)){
                 inputs.push({side:'right', sourceClipId:right.id, operation:'first_frame', atMs:right.startMs, overlapMs});
                 endMs = right.startMs;
             }else if(overlapMs >= thresholdMs){
@@ -366,6 +366,33 @@
         };
     }
 
+    function connectionDependencyState(connectionClip, clips){
+        const ordinary = (Array.isArray(clips) ? clips : []).filter(clip => clip?.type !== 'connection');
+        const derived = deriveConnectionInputs(connectionClip, ordinary);
+        const recorded = new Map((connectionClip?.timelineInputs || []).map(input => [
+            `${input.side}:${input.sourceClipId}:${input.operation}`,
+            input
+        ]));
+        const missing = [];
+        const stale = [];
+        derived.inputs.forEach(input => {
+            const source = ordinary.find(clip => String(clip.id) === String(input.sourceClipId));
+            const result = resultForClip(source);
+            const currentResultId = String(result?.id || source?.currentResultId || result?.url || '');
+            const previous = recorded.get(`${input.side}:${input.sourceClipId}:${input.operation}`) || {};
+            if(!result?.url){
+                missing.push({side:input.side, sourceClipId:input.sourceClipId});
+                return;
+            }
+            if(connectionClip?.results?.length || connectionClip?.result?.url){
+                if(!previous.sourceResultId || String(previous.sourceResultId) !== currentResultId){
+                    stale.push({side:input.side, sourceClipId:input.sourceClipId, previousResultId:String(previous.sourceResultId || ''), currentResultId});
+                }
+            }
+        });
+        return {ready:missing.length === 0, needsRegeneration:stale.length > 0, missing, stale, derived};
+    }
+
     return Object.freeze({
         SCHEMA_VERSION,
         CONNECTION_FRAME_THRESHOLD_MS,
@@ -382,6 +409,7 @@
         compareClipExportOrder,
         exportEntries,
         connectionClipConflict,
-        deriveConnectionInputs
+        deriveConnectionInputs,
+        connectionDependencyState
     });
 });

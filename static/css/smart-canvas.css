@@ -509,6 +509,8 @@ body.smart-prompt-split-resize .prompt-node-llm select { pointer-events:none !im
 .minimax-workbench { gap:8px; background:#202124; color:#e5e7eb; border-radius:8px; padding:0; overflow:hidden; }
 .minimax-workbench .minimax-brand { color:#f8fafc; }
 .minimax-workbench .minimax-brand b { color:#94a3b8; font-size:11px; font-variant-numeric:tabular-nums; }
+.minimax-workbench .minimax-brand input[data-director-project-name] { width:150px; height:25px; padding:0 7px; border:1px solid #343941; border-radius:5px; background:#111315; color:#e5e7eb; font-size:10px; font-weight:750; outline:none; }
+.minimax-workbench .minimax-brand input[data-director-project-name]:focus { border-color:#4f8ee8; box-shadow:0 0 0 2px rgba(59,130,246,.16); }
 .minimax-engine-select { width:100%; height:26px; line-height:26px; min-width:0; border-radius:5px; border:0; background:transparent; color:#f8fafc; outline:none; padding:0 2px; font-size:11px; font-weight:850; cursor:pointer; }
 .minimax-engine-select:focus { border-color:#64748b; box-shadow:0 0 0 1px rgba(148,163,184,.14); }
 .minimax-workbench select option { background:#202328; color:#f8fafc; }
@@ -692,6 +694,11 @@ body.smart-prompt-split-resize .prompt-node-llm select { pointer-events:none !im
 .director-connection-input b { color:#93c5fd; }
 .director-connection-input em { color:#dbeafe; font-style:normal; }
 .director-connection-input-empty { padding:8px; color:#7c91ad; font-size:9px; }
+.director-connection-status { min-height:28px; padding:5px 7px; display:flex; align-items:center; gap:6px; font-size:9px; font-weight:750; border-bottom:1px solid rgba(59,130,246,.2); }
+.director-connection-status i,.director-connection-status svg { width:11px !important; height:11px !important; }
+.director-connection-status.is-error { color:#fecaca; background:rgba(127,29,29,.24); }
+.director-connection-status.is-stale { color:#fde68a; background:rgba(120,53,15,.22); }
+.director-generation-primary label.is-invalid select { border-color:#ef4444; color:#fecaca; }
 .minimax-asset-bin { grid-template-rows:30px minmax(0, 1fr); }
 
 .create-menu { position:fixed; z-index:75; display:none; width:286px; max-width:calc(100vw - 28px); max-height:calc(100vh - 28px); padding:12px; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; border-radius:14px; background:var(--card); border:1px solid var(--line); box-shadow:0 22px 58px var(--shadow); backdrop-filter:none; -webkit-backdrop-filter:none; isolation:isolate; }

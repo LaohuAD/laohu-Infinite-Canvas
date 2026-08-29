@@ -30,7 +30,7 @@ import ipaddress
 import socket
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Literal
 from threading import Lock, RLock, Thread
 import httpx
 import qrcode
@@ -3756,6 +3756,25 @@ class MiniMaxTimelineClip(BaseModel):
 class MiniMaxTimelineExportRequest(BaseModel):
     clips: List[MiniMaxTimelineClip] = []
     filename: str = "minimax-timeline.mp4"
+
+class DirectorReferenceRequest(BaseModel):
+    source_url: str = Field(min_length=1, max_length=4096)
+    operation: Literal["first_frame", "last_frame", "video_segment"]
+    start_ms: Optional[int] = None
+    end_ms: Optional[int] = None
+
+class DirectorExportClip(BaseModel):
+    id: str = Field(min_length=1, max_length=200)
+    type: Literal["ordinary", "connection"] = "ordinary"
+    start_ms: int = 0
+    duration_ms: int = 1
+    created_at: int = 0
+    result_id: str = ""
+    url: str = ""
+
+class DirectorExportRequest(BaseModel):
+    project_name: str = Field(default="导演台工程", max_length=180)
+    clips: List[DirectorExportClip] = Field(default_factory=list)
 
 class CanvasMediaTransformRequest(BaseModel):
     url: str = Field(min_length=1, max_length=4096)
@@ -8545,6 +8564,12 @@ def output_file_from_url(url):
         return str(PROJECT_STORAGE.material_path(clean.rsplit("/", 1)[-1]) or "") or None
     if clean.startswith("/api/results/"):
         return str(PROJECT_STORAGE.result_path(clean.rsplit("/", 1)[-1]) or "") or None
+    if clean.startswith("/api/smart-canvas/director-reference/"):
+        filename = clean.rsplit("/", 1)[-1]
+        if filename != os.path.basename(filename):
+            return None
+        path = Path(PROJECT_STORAGE.root) / "cache" / "director-references" / filename
+        return str(path) if path.is_file() else None
     if clean.startswith("/api/storage-files/"):
         rest = clean[len("/api/storage-files/"):].lstrip("/")
         kind, _, rel = rest.partition("/")
@@ -8581,6 +8606,7 @@ def output_file_from_url(url):
 LOCAL_MEDIA_ROUTE_PREFIXES = (
     "/api/materials/",
     "/api/results/",
+    "/api/smart-canvas/director-reference/",
     "/api/storage-files/",
     "/workflow-files/",
     "/output/",
@@ -14437,6 +14463,192 @@ def download_output(request: Request, url: str, name: str = "", inline: bool = F
             upstream.close()
 
     return StreamingResponse(stream_remote(), media_type=content_type, headers=headers, status_code=upstream.status_code)
+
+def director_reference_cache_dir() -> Path:
+    path = Path(PROJECT_STORAGE.root) / "cache" / "director-references"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def director_reference_source_digest(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def director_reference_duration_ms(path: str) -> int:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        raise HTTPException(status_code=500, detail="未找到 ffprobe，无法校验导演台视频时间范围")
+    command = [
+        ffprobe, "-v", "error", "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1", path,
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=500, detail=f"读取视频时长失败：{exc}")
+    if result.returncode != 0:
+        raise HTTPException(status_code=400, detail=(result.stderr or "无法读取视频时长").strip()[:300])
+    try:
+        duration_ms = round(float((result.stdout or "").strip()) * 1000)
+    except (TypeError, ValueError):
+        duration_ms = 0
+    if duration_ms <= 0:
+        raise HTTPException(status_code=400, detail="无法读取有效的视频时长")
+    return duration_ms
+
+
+def validate_director_reference_range(payload: DirectorReferenceRequest, duration_ms: int) -> tuple[int, int]:
+    if payload.operation != "video_segment":
+        if payload.start_ms is not None and payload.start_ms < 0:
+            raise HTTPException(status_code=400, detail="时间不能为负数")
+        if payload.end_ms is not None and payload.end_ms < 0:
+            raise HTTPException(status_code=400, detail="时间不能为负数")
+        return 0, duration_ms
+    if payload.start_ms is None or payload.end_ms is None:
+        raise HTTPException(status_code=400, detail="视频片段必须提供开始和结束时间")
+    start_ms = int(payload.start_ms)
+    end_ms = int(payload.end_ms)
+    if start_ms < 0 or end_ms < 0:
+        raise HTTPException(status_code=400, detail="时间不能为负数")
+    if end_ms <= start_ms:
+        raise HTTPException(status_code=400, detail="结束时间必须晚于开始时间")
+    if start_ms >= duration_ms or end_ms > duration_ms:
+        raise HTTPException(status_code=400, detail=f"请求时间范围超出源视频时长（{duration_ms}ms）")
+    return start_ms, end_ms
+
+
+def build_director_reference_file(source_path: str, target_path: str, payload: DirectorReferenceRequest, duration_ms: int) -> None:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise HTTPException(status_code=500, detail="未找到 ffmpeg，无法生成导演台时间线引用")
+    if payload.operation == "first_frame":
+        command = [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", "0", "-i", source_path, "-map", "0:v:0", "-frames:v", "1", target_path,
+        ]
+    elif payload.operation == "last_frame":
+        seek_seconds = max(0, duration_ms - 50) / 1000
+        command = [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", f"{seek_seconds:.3f}", "-i", source_path, "-map", "0:v:0", "-frames:v", "1", target_path,
+        ]
+    else:
+        start_ms, end_ms = validate_director_reference_range(payload, duration_ms)
+        command = [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", f"{start_ms / 1000:.3f}", "-t", f"{(end_ms - start_ms) / 1000:.3f}", "-i", source_path,
+            "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
+            "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", target_path,
+        ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=500, detail=f"生成导演台引用失败：{exc}")
+    if result.returncode != 0 or not os.path.isfile(target_path) or os.path.getsize(target_path) <= 0:
+        try:
+            os.remove(target_path)
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail=(result.stderr or "生成导演台引用失败").strip()[:300])
+
+
+@app.post("/api/smart-canvas/director-reference")
+async def create_director_reference(payload: DirectorReferenceRequest):
+    source_path = local_media_reference_path(payload.source_url)
+    if not source_path or not os.path.isfile(source_path):
+        raise HTTPException(status_code=400, detail="导演台时间线引用只支持当前项目可访问的本地视频")
+    if not content_type_for_path(source_path).startswith("video/"):
+        raise HTTPException(status_code=400, detail="来源文件不是可识别的视频")
+    duration_ms = director_reference_duration_ms(source_path)
+    start_ms, end_ms = validate_director_reference_range(payload, duration_ms)
+    digest = director_reference_source_digest(source_path)
+    cache_source = f"{digest}:{payload.operation}:{start_ms}:{end_ms}".encode("utf-8")
+    cache_key = hashlib.sha256(cache_source).hexdigest()
+    suffix = ".mp4" if payload.operation == "video_segment" else ".png"
+    filename = f"{cache_key}-{payload.operation}{suffix}"
+    target_path = director_reference_cache_dir() / filename
+    if not target_path.is_file() or target_path.stat().st_size <= 0:
+        await asyncio.to_thread(build_director_reference_file, source_path, str(target_path), payload, duration_ms)
+    return {
+        "url": f"/api/smart-canvas/director-reference/{filename}",
+        "kind": "video" if payload.operation == "video_segment" else "image",
+        "operation": payload.operation,
+        "start_ms": start_ms if payload.operation == "video_segment" else None,
+        "end_ms": end_ms if payload.operation == "video_segment" else None,
+        "duration_ms": end_ms - start_ms if payload.operation == "video_segment" else None,
+        "cache_key": cache_key,
+    }
+
+
+@app.get("/api/smart-canvas/director-reference/{filename}")
+async def read_director_reference(filename: str):
+    safe_filename = os.path.basename(str(filename or ""))
+    if not safe_filename or safe_filename != filename:
+        raise HTTPException(status_code=400, detail="非法导演台引用路径")
+    path = director_reference_cache_dir() / safe_filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="导演台引用不存在或已清理，可重新运行连接 Clip 生成")
+    return FileResponse(path, media_type=content_type_for_path(str(path)))
+
+
+def director_export_project_name(value: str) -> str:
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", str(value or "").strip()).strip(" ._")
+    return (name or "导演台工程")[:120]
+
+
+def director_export_sort_key(clip: DirectorExportClip):
+    start_ms = max(0, int(clip.start_ms or 0))
+    duration_ms = max(1, int(clip.duration_ms or 1))
+    return (start_ms + duration_ms / 2, start_ms, int(clip.created_at or 0), str(clip.id))
+
+
+@app.post("/api/smart-canvas/director-export")
+async def export_director_clips(payload: DirectorExportRequest):
+    if not payload.clips:
+        raise HTTPException(status_code=400, detail="导演台还没有可导出的 Clip")
+    ordered = sorted(payload.clips, key=director_export_sort_key)
+    missing = [clip.id for clip in ordered if not str(clip.url or "").strip()]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"以下 Clip 还没有生成结果：{', '.join(missing[:8])}")
+    sources = []
+    for clip in ordered:
+        path = local_media_reference_path(clip.url)
+        if not path or not os.path.isfile(path):
+            raise HTTPException(status_code=400, detail=f"Clip {clip.id} 不是当前项目可访问的本地结果，无法打包")
+        if not content_type_for_path(path).startswith("video/"):
+            raise HTTPException(status_code=400, detail=f"Clip {clip.id} 的结果不是视频")
+        sources.append(path)
+    project_name = director_export_project_name(payload.project_name)
+    archive_name = f"{project_name}-clips-{uuid.uuid4().hex[:8]}.zip"
+    archive_path = output_path_for(archive_name, "output")
+    manifest_clips = []
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for index, (clip, source_path) in enumerate(zip(ordered, sources), start=1):
+            suffix = Path(source_path).suffix.lower()
+            if suffix not in {".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv"}:
+                suffix = ".mp4"
+            filename = f"{project_name}-clip-{index:03d}{suffix}"
+            archive.write(source_path, filename)
+            start_ms = max(0, int(clip.start_ms or 0))
+            duration_ms = max(1, int(clip.duration_ms or 1))
+            manifest_clips.append({
+                "clip_id":clip.id,
+                "type":clip.type,
+                "start_ms":start_ms,
+                "end_ms":start_ms + duration_ms,
+                "midpoint_ms":start_ms + duration_ms / 2,
+                "duration_ms":duration_ms,
+                "result_id":clip.result_id,
+                "filename":filename,
+            })
+        manifest = {"version":1, "project_name":payload.project_name, "export_name":project_name, "clips":manifest_clips}
+        archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+    return {"url":output_url_for(archive_name, "output"), "name":archive_name, "kind":"file", "clips":manifest_clips}
+
 
 @app.post("/api/smart-canvas/minimax-export")
 async def export_minimax_timeline(payload: MiniMaxTimelineExportRequest):

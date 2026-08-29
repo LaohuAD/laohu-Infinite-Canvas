@@ -90,6 +90,20 @@ console.log(JSON.stringify({
         self.assertIn('"smart.createVideoDirector": { zh: "通用导演台", en: "Video Director" }', i18n)
         self.assertIn('"smart.createMinimaxDirector": { zh: "MiniMax H3 导演台", en: "MiniMax H3 Director" }', i18n)
 
+    def test_director_reuses_video_capabilities_and_exports_independent_clips(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        runner = source[source.index("async function runMinimaxNode"):source.index("async function exportMinimaxTimeline")]
+        exporter = source[source.index("async function exportMinimaxTimeline"):source.index("function smartPendingTasks")]
+
+        self.assertIn("capabilityModelsForProvider(provider.id, 'video_generation'", source)
+        self.assertIn("await smartDirectorMaterializeTimelineRefs(node, activeSegment)", runner)
+        self.assertIn("runApiVideoGeneration", runner)
+        self.assertIn("smartMinimaxDynamicParams(node, activeSegment)", runner)
+        self.assertIn("activeSegment.running = true", runner)
+        self.assertNotIn("node.running = true", runner)
+        self.assertIn("/api/smart-canvas/director-export", exporter)
+        self.assertNotIn("/api/smart-canvas/minimax-export", exporter)
+
     def test_runninghub_upload_source_covers_all_project_media_routes(self):
         script = """
 const c=require('./static/js/smart-node-contract.js');

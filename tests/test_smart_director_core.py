@@ -69,7 +69,8 @@ const ordinary=[
 ];
 const below=d.deriveConnectionInputs({id:'c1',type:'connection',startMs:4001,durationMs:2798}, ordinary);
 const exact=d.deriveConnectionInputs({id:'c2',type:'connection',startMs:4000,durationMs:3000}, ordinary);
-console.log(JSON.stringify({below,exact}));
+const snapped=d.deriveConnectionInputs({id:'c3',type:'connection',startMs:5000,durationMs:1000}, ordinary);
+console.log(JSON.stringify({below,exact,snapped}));
 """)
 
         self.assertEqual(data["below"]["inputs"][0]["operation"], "last_frame")
@@ -82,6 +83,7 @@ console.log(JSON.stringify({below,exact}));
         self.assertEqual(data["exact"]["inputs"][1]["operation"], "video_segment")
         self.assertEqual(data["exact"]["inputs"][1]["startMs"], 6000)
         self.assertEqual(data["exact"]["inputs"][1]["endMs"], 7000)
+        self.assertEqual([item["operation"] for item in data["snapped"]["inputs"]], ["last_frame", "first_frame"])
 
     def test_connection_inputs_support_one_sided_and_mixed_overlap(self):
         data = run_node("""
@@ -117,6 +119,30 @@ console.log(JSON.stringify({
 
         self.assertEqual(data["overlap"], "old")
         self.assertEqual(data["touching"], "")
+
+    def test_connection_dependency_reports_missing_and_changed_source_results(self):
+        data = run_node("""
+const d=require('./static/js/smart-director-core.js');
+const ordinary=[
+  {id:'left',type:'ordinary',startMs:0,durationMs:5000,currentResultId:'left-v2',results:[{id:'left-v2',url:'/left-v2.mp4'}]},
+  {id:'right',type:'ordinary',startMs:6000,durationMs:5000,results:[]}
+];
+const bridge={
+  id:'bridge',type:'connection',startMs:4000,durationMs:3000,
+  results:[{id:'bridge-v1',url:'/bridge.mp4'}],currentResultId:'bridge-v1',
+  timelineInputs:[
+    {side:'left',sourceClipId:'left',operation:'video_segment',sourceResultId:'left-v1'},
+    {side:'right',sourceClipId:'right',operation:'video_segment',sourceResultId:''}
+  ]
+};
+console.log(JSON.stringify(d.connectionDependencyState(bridge,[...ordinary,bridge])));
+""")
+
+        self.assertFalse(data["ready"])
+        self.assertTrue(data["needsRegeneration"])
+        self.assertEqual(data["missing"][0]["sourceClipId"], "right")
+        self.assertEqual(data["stale"][0]["previousResultId"], "left-v1")
+        self.assertEqual(data["stale"][0]["currentResultId"], "left-v2")
 
     def test_migrates_legacy_minimax_to_single_new_data_source(self):
         data = run_node("""
