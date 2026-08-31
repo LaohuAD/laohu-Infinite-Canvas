@@ -196,7 +196,7 @@ function ensureRunningHubRegions(item){
             ...(source[region] && typeof source[region] === 'object' ? source[region] : {})
         };
         if(region === selected && !source[region]) regions[region] = {...regions[region], ...legacy};
-        regions[region].base_url = normalizeRunningHubBaseUrl(regions[region].base_url || RUNNINGHUB_REGIONS[region].baseUrl);
+        regions[region].base_url = RUNNINGHUB_REGIONS[region].baseUrl;
         ['image_models','chat_models','video_models','audio_models'].forEach(key => {
             regions[region][key] = unique(regions[region][key] || []);
         });
@@ -229,7 +229,7 @@ function persistActiveRunningHubRegion(item){
     const region = runningHubRegionFromItem(item);
     const regions = ensureRunningHubRegions(item);
     const active = regions[region] || runningHubEmptyRegion(region);
-    active.base_url = normalizeRunningHubBaseUrl(item.base_url || RUNNINGHUB_REGIONS[region].baseUrl);
+    active.base_url = RUNNINGHUB_REGIONS[region].baseUrl;
     active.image_models = unique(item.image_models || []);
     active.chat_models = unique(item.chat_models || []);
     active.video_models = unique(item.video_models || []);
@@ -479,6 +479,7 @@ function changeRunningHubRegion(region){
         baseInput.value = RUNNINGHUB_REGIONS[region].baseUrl;
     }
     if(rhRegionInput) rhRegionInput.value = region;
+    clearFetchedModelState();
     renderEditor();
     updateApimartDomesticHint(item);
 }
@@ -656,7 +657,7 @@ async function copyProviderAgentPrompt(){
             setTimeout(() => { label.textContent = tr('api.copyAgentPrompt'); }, 1600);
         }
     } catch(error){
-        alert(tr('api.copyAgentPromptFailed'));
+        await StudioDialog.alert(tr('api.copyAgentPromptFailed'), {type:'warning'});
     }
 }
 function unique(values){
@@ -1083,9 +1084,9 @@ function changeOnboardingRunningHubRegion(region){
     refreshProviderOnboarding();
 }
 async function saveOnboardingRunningHubKey(){
-    if(!onboardingRunningHubRegion){ alert(tr('api.rhChooseRegionAlert')); return; }
+    if(!onboardingRunningHubRegion){ await StudioDialog.alert(tr('api.rhChooseRegionAlert'), {type:'warning'}); return; }
     const freeKey = rhFreeKeyInput?.value.trim() || '';
-    if(!freeKey){ alert(tr('api.rhEnterCoinAlert')); return; }
+    if(!freeKey){ await StudioDialog.alert(tr('api.rhEnterCoinAlert'), {type:'warning'}); return; }
     const item = provider();
     if(!item || item.id !== 'runninghub') return;
     item.base_url = RUNNINGHUB_REGIONS[onboardingRunningHubRegion].baseUrl;
@@ -1145,6 +1146,7 @@ function applyProviderOnboardingDefaults(id){
     } else if(id === 'gemini-cli'){
         applyCliProtocolDefaults(item, 'gemini-cli');
     }
+    clearFetchedModelState();
     selectedId = item.id;
     renderEditor();
     setStatus('已显示默认配置，填写 Key 后点击保存生效');
@@ -1181,7 +1183,7 @@ function syncEditor(){
         : CLI_PROTOCOLS.has(selectedProtocol)
         ? ''
         : selectedProtocol === 'runninghub'
-        ? normalizeRunningHubBaseUrl(baseInput.value)
+        ? RUNNINGHUB_REGIONS[runningHubRegionFromItem(item)].baseUrl
         : baseInput.value.trim();
     // 固定平台不从协议下拉读取
     item.protocol = selectedProtocol;
@@ -1205,7 +1207,7 @@ function syncEditor(){
     if(key) item.api_key = key;
     if(item.id === 'runninghub'){
         const activeRegion = runningHubRegionFromItem(item);
-        item.base_url = normalizeRunningHubBaseUrl(baseInput.value);
+        item.base_url = RUNNINGHUB_REGIONS[activeRegion].baseUrl;
         const active = persistActiveRunningHubRegion(item);
         activateRunningHubRegion(item, activeRegion);
         const freeKey = rhFreeKeyInput?.value.trim() || '';
@@ -1507,7 +1509,7 @@ function pickRhThumbnail(kind, index){
             renderRunningHubCards();
             setStatus('缩略图已更新，点保存生效');
         } catch(e) {
-            alert(e.message || '上传缩略图失败');
+            await StudioDialog.alert(e.message || '上传缩略图失败', {type:'warning'});
         }
     };
     input.click();
@@ -1891,7 +1893,7 @@ function setRhWorkflowSaveButtonState(state, text){
 async function saveRhWorkflowEditor(){
     const state = rhWorkflowEditorState;
     const config = state.config;
-    if(!config){ alert(rhEditorMode === 'app' ? '请先加载应用参数' : '请先加载工作流'); return; }
+    if(!config){ await StudioDialog.alert(rhEditorMode === 'app' ? '请先加载应用参数' : '请先加载工作流', {type:'warning'}); return; }
     setRhWorkflowSaveButtonState('saving', '保存中...');
     config.title = rhWorkflowEditName?.value.trim() || config.title || config.workflowId;
     config.description = rhWorkflowEditNote?.value.trim() || config.description || '';
@@ -1950,7 +1952,7 @@ async function saveRhWorkflowEditor(){
         renderRhWorkflowEditor();
     } catch(err) {
         setRhWorkflowSaveButtonState('idle', '保存');
-        alert(err.message || '保存失败');
+        await StudioDialog.alert(err.message || '保存失败', {type:'warning'});
     }
 }
 function renderRhWorkflowEditor(){
@@ -2115,7 +2117,7 @@ async function pickRhPreviewMedia(key, kind){
         } catch(err) {
             rhWorkflowEditorState.previewParams[key] = {...(rhWorkflowEditorState.previewParams[key] || {}), uploading:false};
             withRhEditorScrollPreserved(() => renderRhMappedPreview());
-            alert(err.message || '上传失败');
+            await StudioDialog.alert(err.message || '上传失败', {type:'warning'});
         }
     };
     input.click();
@@ -2278,7 +2280,7 @@ async function testRhMappedPreview(){
     } catch(err) {
         rhWorkflowEditorState.previewStatus = err.message || String(err);
         setStatus(rhWorkflowEditorState.previewStatus);
-        alert(rhWorkflowEditorState.previewStatus);
+        await StudioDialog.alert(rhWorkflowEditorState.previewStatus, {type:'warning'});
     } finally {
         rhWorkflowEditorState.previewRunning = false;
         renderRhMappedPreview();
@@ -2707,7 +2709,7 @@ function renderRhEntryList(target, list, kind, syncState=null){
             <div class="rh-card-actions">
                 ${kind === 'workflow'
                     ? `<button class="rh-card-action" type="button" onclick="openRhWorkflowEditor(${entry._rhIndex ?? index})" title="编辑工作流"><i data-lucide="settings-2" class="w-3.5 h-3.5"></i></button>`
-                    : `<button class="rh-card-action" type="button" onclick="syncRhAppFromOfficial(${entry._rhIndex ?? index}).catch(error => alert(error.message || '同步失败'))" title="重新同步官方应用信息"><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i></button>`}
+                    : `<button class="rh-card-action" type="button" onclick="syncRhAppFromOfficial(${entry._rhIndex ?? index}).catch(error => StudioDialog.alert(error.message || '同步失败', {type:'warning'}))" title="重新同步官方应用信息"><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i></button>`}
                 <button class="rh-card-action danger" type="button" onclick="removeRhEntry('${kind}', ${entry._rhIndex ?? index})" title="删除"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
             </div>
         </div>
@@ -2894,6 +2896,7 @@ async function addRecommendedApi(index){
     const previousProviders = JSON.parse(JSON.stringify(providers));
     const previousSelectedId = selectedId;
     const item = recommendedProviderForApi(api);
+    clearFetchedModelState();
     selectedId = item.id;
     recommendInlineOpen = false;
     syncRecommendView();
@@ -2916,11 +2919,12 @@ async function saveRecommendedApi(index){
     if(!api) return;
     const input = recommendPanel?.querySelector(`[data-recommend-key="${index}"]`);
     const key = input?.value.trim() || '';
-    if(!key){ alert(tr('api.enterApiKey')); return; }
+    if(!key){ await StudioDialog.alert(tr('api.enterApiKey'), {type:'warning'}); return; }
     syncEditor();
     const previousProviders = JSON.parse(JSON.stringify(providers));
     const previousSelectedId = selectedId;
     const item = recommendedProviderForApi(api);
+    clearFetchedModelState();
     selectedId = item.id;
     recommendInlineOpen = false;
     syncRecommendView();
@@ -3133,7 +3137,7 @@ function renderEditor(){
     const isGeminiCli = String(protocolInput?.value || item.protocol || '').toLowerCase() === 'gemini-cli';
     const showCustomGuide = isCustomApiProvider(item);
     nameInput.disabled = isAiMoney || isAgnes;
-    baseInput.disabled = isAiMoney || isAgnes;
+    baseInput.disabled = isRunningHub || isAiMoney || isAgnes;
     if(isRunningHub){
         ensureRunningHubLists(item);
         activateRunningHubRegion(item, runningHubRegionFromItem(item));
@@ -3417,7 +3421,7 @@ async function refreshJimengCredit(){
     }
 }
 async function logoutJimeng(){
-    if(!confirm('确认退出即梦 CLI 登录？')) return;
+    if(!await StudioDialog.confirm('确认退出即梦 CLI 登录？', {type:'danger'})) return;
     try {
         const data = await fetch('/api/jimeng/logout', {method:'POST'}).then(async r => {
             const json = await r.json();
@@ -3654,23 +3658,21 @@ function applyDetectedProtocol(protocol){
 function runninghubModelSourceNote(data){
     const raw = data?.raw || {};
     const source = String(raw.source || '').toLowerCase();
-    const sourceLabel = source === 'openapi'
-        ? '官方 OpenAPI'
-        : source === 'github'
-        ? 'GitHub 注册表'
-        : source === 'local'
-        ? '本地注册表'
-        : source === 'llm'
-        ? 'LLM 网关'
-        : source === 'fallback'
-        ? '内置兜底'
+    const sourceLabel = source === 'official-remote'
+        ? tr('api.rhOfficialRegistryOnline')
+        : source === 'official-snapshot'
+        ? tr('api.rhOfficialRegistrySnapshot')
+        : source === 'emergency-fallback'
+        ? tr('api.rhEmergencyFallback')
         : '';
     const parts = [];
     if(sourceLabel) parts.push(`来源：${sourceLabel}`);
-    if(raw.openapi_count !== undefined) parts.push(`直连 ${Number(raw.openapi_count || 0)}`);
+    if(raw.registry_count !== undefined) parts.push(`Schema ${Number(raw.registry_count || 0)}`);
+    if(raw.confirmed_count !== undefined) parts.push(`${tr('api.rhModelConfirmed')} ${Number(raw.confirmed_count || 0)}`);
+    if(raw.unverified_count !== undefined) parts.push(`${tr('api.rhModelUnverified')} ${Number(raw.unverified_count || 0)}`);
     if(raw.llm_count !== undefined) parts.push(`LLM ${Number(raw.llm_count || 0)}`);
     const text = parts.join(' · ');
-    const warning = source === 'fallback' ? ' · 官方模型列表未拉到完整数据' : '';
+    const warning = source === 'emergency-fallback' ? ` · ${tr('api.rhCatalogFallbackWarning')}` : '';
     return text ? ` · ${text}${warning}` : '';
 }
 
@@ -3692,7 +3694,7 @@ async function probeAsync(){
         imageRequestModeInput.value = 'tudou-async';
     }
     const isCliProtocol = CLI_PROTOCOLS.has(String(protocolInput?.value || item.protocol || '').toLowerCase());
-    if(!baseUrl && !isCliProtocol){ alert('请先填写请求地址'); return; }
+    if(!baseUrl && !isCliProtocol){ await StudioDialog.alert('请先填写请求地址', {type:'warning'}); return; }
     if(btn){ btn.disabled = true; btn.querySelector('span').textContent = '检测中...'; }
     showVerifyResult(`<span style="color:var(--muted);font-size:11px;font-weight:700">正在检测协议类型...</span>`);
     try {
@@ -3717,7 +3719,7 @@ async function probeAsync(){
             setFetchedModelState(data);
             const openBtn = document.getElementById('openPickerBtn');
             if(openBtn){ openBtn.disabled = false; openBtn.style.opacity = '1'; }
-            showVerifyResult(`<span style="color:#15803d;font-size:11px;font-weight:800">✓ RunningHub OpenAPI 验证通过 · 找到 ${data.model_count || data.total || 0} 个模型${runninghubModelSourceNote(data)}</span>`);
+            showVerifyResult(`<span style="color:#15803d;font-size:11px;font-weight:800">✓ ${escapeHtml(trf('api.rhCatalogLoaded', {count:data.model_count || data.total || 0}))}${runninghubModelSourceNote(data)}</span>`);
             return;
         }
         const data = await fetch('/api/providers/probe-async', {
@@ -3781,7 +3783,7 @@ async function testConnection(){
     const isJimeng = (protocolInput?.value || '') === 'jimeng';
     const currentProtocol = String(protocolInput?.value || item.protocol || '').toLowerCase();
     const isCliProtocol = CLI_PROTOCOLS.has(currentProtocol);
-    if(!baseUrl && !isJimeng && !isCliProtocol){ alert('请先填写请求地址'); return; }
+    if(!baseUrl && !isJimeng && !isCliProtocol){ await StudioDialog.alert('请先填写请求地址', {type:'warning'}); return; }
     if(btn){ btn.disabled = true; btn.querySelector('span').textContent = tr('api.testingUrl') || '验证中...'; }
     showVerifyResult(`<span style="color:var(--muted);font-size:11px;font-weight:700">验证中...</span>`);
     try {
@@ -3838,6 +3840,20 @@ async function testConnection(){
 let lastFetchedAll = [];          // 全部模型 id 列表
 let lastFetchedSuggestion = null; // 后端自动分类建议
 let lastFetchedModelNames = {};   // {模型 id: 展示名}
+let lastFetchedModelAvailability = {}; // RunningHub: confirmed | unverified
+
+function clearFetchedModelState(){
+    lastFetchedAll = [];
+    lastFetchedSuggestion = null;
+    lastFetchedModelNames = {};
+    lastFetchedModelAvailability = {};
+    const openBtn = document.getElementById('openPickerBtn');
+    if(openBtn){
+        openBtn.disabled = true;
+        openBtn.style.opacity = '0.55';
+    }
+    closeModelPicker();
+}
 
 function setFetchedModelState(data){
     lastFetchedAll = Array.isArray(data?.all) ? data.all : [];
@@ -3848,6 +3864,7 @@ function setFetchedModelState(data){
         audio: new Set(data?.audio_models || []),
     };
     lastFetchedModelNames = (data?.model_names && typeof data.model_names === 'object') ? {...data.model_names} : {};
+    lastFetchedModelAvailability = (data?.model_availability && typeof data.model_availability === 'object') ? {...data.model_availability} : {};
 }
 const RH_KNOWN_MODEL_LABELS = {
     'gpt-image-2.0/text-to-image-channel-low-price':'全能图片G2 · 文生图 · 低价渠道版',
@@ -3934,6 +3951,14 @@ function providerModelBadge(model, label){
     return 'RH';
 }
 
+function runningHubAvailabilityBadge(model, item){
+    if(!isRunningHubLike(item)) return '';
+    const status = lastFetchedModelAvailability?.[model] === 'confirmed' ? 'confirmed' : 'unverified';
+    const label = status === 'confirmed' ? tr('api.rhModelConfirmed') : tr('api.rhModelUnverified');
+    const hint = status === 'confirmed' ? tr('api.rhModelConfirmedHint') : tr('api.rhModelUnverifiedHint');
+    return `<span class="picker-model-availability picker-availability-${status}" title="${escapeAttr(hint)}">${escapeHtml(label)}</span>`;
+}
+
 async function fetchModels(){
     const item = provider();
     if(!item) return;
@@ -3949,7 +3974,7 @@ async function fetchModels(){
     const apiKey = currentProviderApiKey(item);
     const isJimeng = (protocolInput?.value || '') === 'jimeng';
     const isCliProtocol = CLI_PROTOCOLS.has(String(protocolInput?.value || item.protocol || '').toLowerCase());
-    if(!baseUrl && !isJimeng && !isCliProtocol){ alert('请先填写请求地址'); return; }
+    if(!baseUrl && !isJimeng && !isCliProtocol){ await StudioDialog.alert('请先填写请求地址', {type:'warning'}); return; }
     fetchModelsController = new AbortController();
     if(btn){ btn.disabled = false; btn.classList.add('is-cancel'); btn.querySelector('span').textContent = '取消拉取'; }
     setStatus(tr('api.fetchingModels') || '正在从上游拉取模型列表...');
@@ -3980,7 +4005,7 @@ async function fetchModels(){
         const openBtn = document.getElementById('openPickerBtn');
         if(openBtn){ openBtn.disabled = false; openBtn.style.opacity = '1'; }
         const extra = (runninghubContext || detectedProtocol === 'runninghub' || item.id === 'runninghub')
-            ? ` · RunningHub OpenAPI${runninghubModelSourceNote(data)}`
+            ? ` · RunningHub${runninghubModelSourceNote(data)}`
             : (detectedProtocol === 'volcengine' || isVolcengineProvider(item)) ? ' · 已识别方舟协议，火山聊天建议改填 ep-... 接入点' : '';
         const imageModeExtra = normalizeImageRequestMode(imageRequestModeInput?.value || item.image_request_mode) === 'openai-json' ? ' · 图片接口已设为 OpenAI JSON' : '';
         setStatus(`已拉取 ${data.total} 个模型 · 点「选择模型」勾选要导入的${extra}${imageModeExtra}`);
@@ -3988,7 +4013,7 @@ async function fetchModels(){
     } catch(e){
         if(e?.name === 'AbortError') setStatus('已取消拉取模型');
         else {
-            alert('拉取失败：' + (e.message || e));
+            await StudioDialog.alert('拉取失败：' + (e.message || e), {type:'warning'});
             setStatus('拉取失败');
         }
     } finally {
@@ -4003,7 +4028,7 @@ let pickerState = { category: {}, selected: {} };
 let pickerVisibleIds = [];
 function openModelPicker(){
     const item = provider();
-    if(!item || !lastFetchedAll.length){ alert('没有拉取到模型'); return; }
+    if(!item || !lastFetchedAll.length){ StudioDialog.alert('没有拉取到模型', {type:'warning'}); return; }
     const overlay = document.getElementById('modelPickerOverlay');
     // API 设置页会按用户界面缩放 body；弹层提升到 html 根层后才真正相对视口定位。
     if(overlay && overlay.parentElement !== document.documentElement){
@@ -4057,6 +4082,8 @@ function renderModelPicker(){
         return pickerState.category[id] === currentTab;
     });
     pickerVisibleIds = list;
+    const availabilityGuide = document.getElementById('pickerAvailabilityGuide');
+    if(availabilityGuide) availabilityGuide.hidden = !isRunningHubLike(item);
     document.getElementById('pickerCount').textContent = `共 ${totals.all} 个模型 · 当前显示 ${list.length} 个`;
     document.querySelectorAll('.picker-cat-tab').forEach(tab => {
         const cat = tab.dataset.cat;
@@ -4074,7 +4101,7 @@ function renderModelPicker(){
                 </div>
                 <div class="picker-model-badge">${escapeHtml(badge)}</div>
                 <div class="picker-model-name" title="${escapeAttr(id)}">
-                    <div class="picker-model-label">${escapeHtml(label || id)}</div>
+                    <div class="picker-model-label">${escapeHtml(label || id)} ${runningHubAvailabilityBadge(id, item)}</div>
                     ${label && label !== id ? `<div class="picker-model-id">${escapeHtml(id)}</div>` : ''}
                 </div>
             </div>
@@ -4102,6 +4129,27 @@ function togglePickerRowByIndex(index){
     if(typeof id !== 'string') return;
     togglePickerRow(id);
 }
+function buildPickerBulkSelection(ids, current, availability, mode, requireConfirmed){
+    const next = {...(current || {})};
+    (ids || []).forEach(id => {
+        if(mode === 'clear') next[id] = false;
+        else if(mode === 'all') next[id] = true;
+        else if(mode === 'recommended') next[id] = !requireConfirmed || availability?.[id] === 'confirmed';
+    });
+    return next;
+}
+function selectPickerModels(mode){
+    const item = provider();
+    const ids = Object.keys(pickerState.category);
+    pickerState.selected = buildPickerBulkSelection(
+        ids,
+        pickerState.selected,
+        lastFetchedModelAvailability,
+        mode,
+        isRunningHubLike(item)
+    );
+    renderModelPicker();
+}
 function selectPickerCat(cat){
     document.querySelectorAll('.picker-cat-tab').forEach(t => t.classList.toggle('active', t.dataset.cat === cat));
     renderModelPicker();
@@ -4110,6 +4158,11 @@ async function applyModelPicker(){
     const item = provider(); if(!item) return;
     const image = [], chat = [], video = [], audio = [];
     const modelNames = {};
+    const previouslyEnabled = new Set([
+        ...(item.image_models || []), ...(item.chat_models || []),
+        ...(item.video_models || []), ...(item.audio_models || [])
+    ]);
+    const newlySelectedUnverified = [];
     Object.entries(pickerState.selected).forEach(([id, sel]) => {
         if(!sel) return;
         const cat = pickerState.category[id];
@@ -4119,7 +4172,13 @@ async function applyModelPicker(){
         else chat.push(id);
         const label = modelDisplayName(id, item);
         if(label && label !== id) modelNames[id] = label;
+        if(isRunningHubLike(item) && !previouslyEnabled.has(id) && lastFetchedModelAvailability?.[id] !== 'confirmed'){
+            newlySelectedUnverified.push(label || id);
+        }
     });
+    if(newlySelectedUnverified.length && !await StudioDialog.confirm(trf('api.rhEnableUnverifiedConfirm', {count:newlySelectedUnverified.length}), {type:'warning'})){
+        return;
+    }
     const previousModels = {
         image_models:[...(item.image_models || [])],
         chat_models:[...(item.chat_models || [])],
@@ -4149,7 +4208,7 @@ async function saveKeyOnly(){
     const item = provider();
     if(!item) return;
     const key = keyInput.value.trim();
-    if(!key){ alert(tr('api.enterKeyAlert') || '请输入 Key'); return; }
+    if(!key){ await StudioDialog.alert(tr('api.enterKeyAlert') || '请输入 Key', {type:'warning'}); return; }
     if(item.id === 'agnes') item.enabled = true;
     item.api_key = key;
     const ok = await saveProviders();
@@ -4159,7 +4218,7 @@ async function clearKeyOnly(){
     const item = provider();
     if(!item) return;
     if(!item.has_key && !keyInput.value){ return; }
-    if(!confirm(tr('api.confirmClearKey') || '确认清除当前 Key？')) return;
+    if(!await StudioDialog.confirm(tr('api.confirmClearKey') || '确认清除当前 Key？', {type:'danger'})) return;
     const previousEnabled = item.enabled;
     const previousClearKey = item._clearKey;
     if(item.id === 'agnes') item.enabled = false;
@@ -4373,6 +4432,7 @@ function selectProvider(id){
     syncRecommendView();
     renderRecommendApi();
     syncEditor();
+    clearFetchedModelState();
     selectedId = id;
     renderEditor();
 }
@@ -4385,6 +4445,7 @@ function addProvider(){
     let index = 2;
     while(providers.some(item => item.id === id)) id = `custom-api-${index++}`;
     providers.push({id, name:'API', base_url:'', protocol:'openai', image_request_mode:'openai', image_edit_route:'general', image_generation_endpoint:'', image_edit_endpoint:'', enabled:true, primary:false, image_models:[], chat_models:[], video_models:[], audio_models:[], has_key:false, key_preview:''});
+    clearFetchedModelState();
     selectedId = id;
     renderEditor();
 }
@@ -4428,6 +4489,7 @@ async function addCliProvider(kind){
     item.base_url = '';
     item.protocol = preset.protocol;
     applyCliProtocolDefaults(item, preset.protocol, created);
+    clearFetchedModelState();
     selectedId = item.id;
     renderProviderList();
     renderEditor();
@@ -4448,13 +4510,14 @@ async function addCliProvider(kind){
 async function deleteProvider(){
     const item = provider();
     if(!item) return;
-    if(isFixedProvider(item)){ alert(tr('api.defaultNoDelete') || '默认平台不能删除'); return; }
-    if(providers.length <= 1){ alert(tr('api.keepOne')); return; }
-    if(!confirm(`确认删除平台「${item.name || item.id}」？`)) return;
+    if(isFixedProvider(item)){ await StudioDialog.alert(tr('api.defaultNoDelete') || '默认平台不能删除', {type:'warning'}); return; }
+    if(providers.length <= 1){ await StudioDialog.alert(tr('api.keepOne'), {type:'warning'}); return; }
+    if(!await StudioDialog.confirm(`确认删除平台「${item.name || item.id}」？`, {type:'danger'})) return;
     syncEditor();
     const previousProviders = providers;
     const previousSelectedId = selectedId;
     providers = providers.filter(p => p.id !== item.id);
+    clearFetchedModelState();
     selectedId = providers[0]?.id || '';
     renderProviderList();
     renderEditor();
@@ -4470,7 +4533,7 @@ async function saveRhKeyOnly(kind){
     if(!item || item.id !== 'runninghub') return;
     const input = kind === 'wallet' ? rhWalletKeyInput : rhFreeKeyInput;
     const key = input?.value.trim() || '';
-    if(!key){ alert('请输入 Key'); return; }
+    if(!key){ await StudioDialog.alert('请输入 Key', {type:'warning'}); return; }
     syncEditor();
     const ok = await saveProviders();
     if(ok && input) input.value = '';
@@ -4478,7 +4541,7 @@ async function saveRhKeyOnly(kind){
 async function clearRhKeyOnly(kind){
     const item = provider();
     if(!item || item.id !== 'runninghub') return;
-    if(!confirm(tr('api.confirmClearKey') || '确认清除当前 Key？')) return;
+    if(!await StudioDialog.confirm(tr('api.confirmClearKey') || '确认清除当前 Key？', {type:'danger'})) return;
     const region = runningHubRegionFromItem(item);
     const previousApiClears = [...(item._clearRhApiKeys || [])];
     const previousWalletClears = [...(item._clearRhWalletKeys || [])];
@@ -4498,7 +4561,7 @@ async function saveVolcengineAssetKeys(){
     if(!item || item.id !== 'volcengine') return;
     const ak = volcAkInput?.value.trim() || '';
     const sk = volcSkInput?.value.trim() || '';
-    if(!ak && !sk){ alert('请输入火山素材库 AK 或 SK'); return; }
+    if(!ak && !sk){ await StudioDialog.alert('请输入火山素材库 AK 或 SK', {type:'warning'}); return; }
     syncEditor();
     const ok = await saveProviders();
     if(ok){
@@ -4509,7 +4572,7 @@ async function saveVolcengineAssetKeys(){
 async function clearVolcengineAssetKeys(){
     const item = provider();
     if(!item || item.id !== 'volcengine') return;
-    if(!confirm('确认清除火山素材库 AK/SK？')) return;
+    if(!await StudioDialog.confirm('确认清除火山素材库 AK/SK？', {type:'danger'})) return;
     const previousAccessClear = item._clearVolcengineAccessKey;
     const previousSecretClear = item._clearVolcengineSecretKey;
     item._clearVolcengineAccessKey = true;
@@ -4601,6 +4664,7 @@ async function loadProviders(){
         providers = data.providers || [];
         const capabilityData = await capabilityRequest;
         if(capabilityData?.providers) modelCapabilityCatalog = capabilityData;
+        clearFetchedModelState();
         selectedId = sortedProviders()[0]?.id || '';
         renderEditor();
         closeRecommendApi();
@@ -4680,7 +4744,7 @@ async function saveProviders(){
         if(item.id === 'runninghub') persistActiveRunningHubRegion(item);
     });
     if(new Set(providers.map(item => item.id)).size !== providers.length){
-        alert(tr('api.duplicateId'));
+        await StudioDialog.alert(tr('api.duplicateId'), {type:'warning'});
         return false;
     }
     setStatus(tr('api.saving'));

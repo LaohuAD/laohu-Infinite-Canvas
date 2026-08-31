@@ -237,7 +237,6 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 STATIC_RUNNINGHUB_DIR = os.path.join(STATIC_DIR, "runninghub")
 STATIC_RUNNINGHUB_THUMBNAIL_DIR = os.path.join(STATIC_RUNNINGHUB_DIR, "thumbnails")
 STATIC_RUNNINGHUB_API_PROVIDERS_FILE = os.path.join(STATIC_RUNNINGHUB_DIR, "api_providers.json")
-STATIC_RUNNINGHUB_MODEL_REGISTRY_FILE = os.path.join(STATIC_RUNNINGHUB_DIR, "models_registry.json")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 MATERIALS_DIR = str(PROJECT_STORAGE.materials_dir)
@@ -348,15 +347,25 @@ RUNNINGHUB_REGION_DEFAULTS = {
         "wallet_env": "RUNNINGHUB_GLOBAL_WALLET_API_KEY",
     },
 }
-RUNNINGHUB_MODEL_REGISTRY_URL = "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/main/models_registry.json"
-RUNNINGHUB_LLM_BASE_URL = "https://llm.runninghub.ai/v1"
+RUNNINGHUB_MODEL_REGISTRY_URL = "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/main/developer-kit/model-registry.public.json"
+RUNNINGHUB_OFFICIAL_REGISTRY_SNAPSHOT_FILE = os.path.join(
+    DATA_DIR,
+    "model_capabilities",
+    "snapshots",
+    "runninghub-official-public.json",
+)
+RUNNINGHUB_PUBLIC_CATALOG_URLS = {
+    "cn": "https://www.runninghub.cn/call-api/search-api/standard-model",
+    "global": "https://www.runninghub.ai/call-api/search-api/standard-model",
+}
+RUNNINGHUB_LLM_BASE_URLS = {
+    "cn": "https://llm.runninghub.cn/v1",
+    "global": "https://llm.runninghub.ai/v1",
+}
 RUNNINGHUB_FILE_HOST_REWRITES = {
     "rh-images-1252422369.cos.ap-beijing.myqcloud.com": "rh-images.xiaoyaoyou.com",
 }
 LINGJING_DEFAULT_BASE_URL = "https://apistudio.vip"
-RUNNINGHUB_LLM_MODELS_URLS = [
-    "https://llm.runninghub.ai/v1/models",
-]
 RUNNINGHUB_FALLBACK_CHAT_MODELS = [
     "google/gemini-3.1-flash-lite-preview",
     "qwen/qwen3-vl-235b-a22b-instruct",
@@ -775,6 +784,22 @@ def runninghub_region_from_base_url(base_url, fallback="global"):
         host = ""
     return "cn" if host == "runninghub.cn" or host.endswith(".runninghub.cn") else runninghub_normalize_region(fallback)
 
+def runninghub_provider_region(provider=None):
+    provider = provider or {}
+    return runninghub_normalize_region(
+        provider.get("rh_region"),
+        runninghub_region_from_base_url(provider.get("base_url"), "global"),
+    )
+
+def runninghub_public_catalog_url(region="global"):
+    return RUNNINGHUB_PUBLIC_CATALOG_URLS[runninghub_normalize_region(region)]
+
+def runninghub_llm_base_url(provider=None):
+    return RUNNINGHUB_LLM_BASE_URLS[runninghub_provider_region(provider)]
+
+def runninghub_llm_models_url(provider=None):
+    return f"{runninghub_llm_base_url(provider)}/models"
+
 def runninghub_key_env(region="global", use_wallet=False):
     config = RUNNINGHUB_REGION_DEFAULTS[runninghub_normalize_region(region)]
     return config["wallet_env"] if use_wallet else config["api_env"]
@@ -826,7 +851,16 @@ def runninghub_region_key_value(region="global", use_wallet=False) -> str:
         return value
     if region == "global":
         legacy_env = "RUNNINGHUB_WALLET_API_KEY" if use_wallet else "RUNNINGHUB_API_KEY"
-        return os.getenv(legacy_env, "") or read_api_env_value(legacy_env)
+        legacy_value = os.getenv(legacy_env, "") or read_api_env_value(legacy_env)
+        if not legacy_value:
+            return ""
+        # 旧版保存逻辑曾把当前国内站 Key 同时写入通用变量。国际站只在该
+        # legacy 值不等于国内专用 Key 时才兼容读取，避免把国内凭证带到国际站。
+        cn_env = runninghub_key_env("cn", use_wallet=use_wallet)
+        cn_value = os.getenv(cn_env, "") or read_api_env_value(cn_env)
+        if cn_value and hmac.compare_digest(str(legacy_value), str(cn_value)):
+            return ""
+        return legacy_value
     return ""
 
 def runninghub_wallet_key_value(region="global") -> str:
@@ -1519,7 +1553,9 @@ def normalize_runninghub_regions(item):
                 config[key] = raw.get(key)
         if region == selected and not raw:
             config.update(legacy)
-        config["base_url"] = str(config.get("base_url") or RUNNINGHUB_REGION_DEFAULTS[region]["base_url"]).strip().rstrip("/")
+        # RunningHub 两个站点的凭证不互通，区域必须与官方域名强绑定。
+        # 忽略历史或手工写入的错配地址，避免用国内 Key 请求国际站（反之亦然）。
+        config["base_url"] = RUNNINGHUB_REGION_DEFAULTS[region]["base_url"]
         config["image_models"] = model_list_from_values(config.get("image_models") or [])
         config["chat_models"] = model_list_from_values(config.get("chat_models") or [])
         config["video_models"] = model_list_from_values(config.get("video_models") or [])
@@ -1537,7 +1573,7 @@ def runninghub_region_config(provider, region=None):
     config = regions.get(selected) if isinstance(regions.get(selected), dict) else {}
     fallback = runninghub_empty_region_config(selected)
     fallback.update(config)
-    fallback["base_url"] = str(fallback.get("base_url") or RUNNINGHUB_REGION_DEFAULTS[selected]["base_url"]).strip().rstrip("/")
+    fallback["base_url"] = RUNNINGHUB_REGION_DEFAULTS[selected]["base_url"]
     return fallback
 
 def runninghub_provider_for_region(provider, region=None):
@@ -4959,7 +4995,7 @@ def resolve_chat_provider(provider: str, model: str, ms_model: str):
     elif protocol == "volcengine":
         base = base_root if base_root.endswith("/api/v3") else base_root + "/api/v3"
     elif protocol == "runninghub":
-        base = RUNNINGHUB_LLM_BASE_URL
+        base = runninghub_llm_base_url(api_provider)
     else:
         base = base_root if base_root.endswith("/v1") else base_root + "/v1"
     hdrs = api_headers(provider=api_provider, model=mdl)
@@ -12685,6 +12721,46 @@ def runninghub_fail_reason(raw):
         return f"RunningHub errorCode={raw.get('errorCode')}"
     return ""
 
+RUNNINGHUB_COMPLIANCE_ERROR_CODE = "40310"
+
+def runninghub_rejection_detail(raw, media_label="任务"):
+    if not isinstance(raw, dict):
+        return None
+    data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+    code = str(raw.get("errorCode") or data.get("errorCode") or "").strip()
+    message = str(
+        raw.get("errorMessage")
+        or data.get("errorMessage")
+        or runninghub_fail_reason(raw)
+        or ""
+    ).strip()
+    status = str(raw.get("status") or data.get("status") or "").strip().lower()
+    failed_status = status in {"failed", "fail", "error", "rejected", "cancel", "canceled", "cancelled", "4"}
+    failed_message = bool(re.search(r"\b(error|failed|unavailable|not available|rejected)\b", message, re.I))
+    if code in {"", "0"} and not failed_status and not failed_message:
+        return None
+    if code == RUNNINGHUB_COMPLIANCE_ERROR_CODE:
+        user_message = "该模型因合规要求已不在当前站点提供。国内站请更换可用模型；如需尝试国际站，请切换到国际站并使用对应的国际站 Key。"
+        user_message_en = "This model is no longer available on the current site due to compliance requirements. Choose another model on the China site, or switch to the international site and use the matching international-site key."
+    else:
+        reason = message or (f"错误码 {code}" if code else "上游拒绝了本次请求")
+        reason_en = message or (f"error code {code}" if code else "the upstream service rejected this request")
+        user_message = f"RunningHub {media_label}请求被拒绝：{reason}"
+        user_message_en = f"RunningHub request was rejected: {reason_en}"
+    return {
+        "message": user_message,
+        "message_en": user_message_en,
+        "errorCode": code,
+        "upstreamMessage": message[:500],
+    }
+
+def raise_for_runninghub_rejection(raw, media_label="任务"):
+    detail = runninghub_rejection_detail(raw, media_label)
+    if not detail:
+        return
+    status_code = 400 if detail.get("errorCode") == RUNNINGHUB_COMPLIANCE_ERROR_CODE else 502
+    raise HTTPException(status_code=status_code, detail=detail)
+
 def runninghub_error_detail(message, raw=None, **extra):
     detail = {"message": str(message or "RunningHub 请求失败")}
     detail.update({k: v for k, v in extra.items() if v not in (None, "")})
@@ -12804,31 +12880,108 @@ def runninghub_registry_fallback():
     ]
     return image + video
 
-def runninghub_registry_items_from_raw(raw):
-    candidates = [raw]
-    if isinstance(raw, dict):
-        candidates.extend([
-            raw.get("data"),
-            raw.get("models"),
-            raw.get("list"),
-            raw.get("items"),
-            raw.get("records"),
-            raw.get("result"),
-        ])
-    for candidate in candidates:
-        if isinstance(candidate, list):
-            return [item for item in candidate if isinstance(item, dict)]
-        if isinstance(candidate, dict):
-            nested = (
-                candidate.get("models")
-                or candidate.get("list")
-                or candidate.get("items")
-                or candidate.get("records")
-                or candidate.get("data")
-            )
-            if isinstance(nested, list):
-                return [item for item in nested if isinstance(item, dict)]
-    return []
+def runninghub_official_registry_items(raw):
+    """Strictly parse the public developer-kit registry.
+
+    A generic OpenAI ``data`` list is deliberately not accepted here: LLM
+    discovery must never masquerade as the standard image/video/audio catalog.
+    """
+    models = raw.get("models") if isinstance(raw, dict) else None
+    if not isinstance(models, list):
+        return []
+    parsed = []
+    for item in models:
+        if not isinstance(item, dict):
+            continue
+        endpoint = str(item.get("endpoint") or "").strip().strip("/")
+        output_type = str(item.get("output_type") or "").strip().lower()
+        params = item.get("params")
+        if not endpoint or not output_type or not isinstance(params, list):
+            continue
+        parsed.append(item)
+    return parsed
+
+def runninghub_public_catalog_names_from_html(document):
+    """Read model names from the official site's SSR payload.
+
+    The public page uses Nuxt's reference-array serialization.  We only follow
+    the documented page-record path and extract ``name``; no endpoint or Schema
+    is inferred from this page.
+    """
+    match = re.search(
+        r'<script[^>]+id=["\']__NUXT_DATA__["\'][^>]*>(.*?)</script>',
+        str(document or ""),
+        flags=re.I | re.S,
+    )
+    if not match:
+        return set()
+    try:
+        values = json.loads(match.group(1))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return set()
+    if not isinstance(values, list):
+        return set()
+
+    def dereference(value):
+        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < len(values):
+            return values[value]
+        return value
+
+    data_root = next((
+        item for item in values
+        if isinstance(item, dict) and any(str(key).startswith("api-list-search-STANDARD_MODEL-") for key in item)
+    ), None)
+    if not data_root:
+        return set()
+    payload_ref = next((
+        value for key, value in data_root.items()
+        if str(key).startswith("api-list-search-STANDARD_MODEL-")
+    ), None)
+    payload = dereference(payload_ref)
+    page = dereference(payload.get("page")) if isinstance(payload, dict) else None
+    records = dereference(page.get("records")) if isinstance(page, dict) else None
+    if not isinstance(records, list):
+        return set()
+    names = set()
+    for record_ref in records:
+        record = dereference(record_ref)
+        name = dereference(record.get("name")) if isinstance(record, dict) else ""
+        name = re.sub(r"\s+", " ", str(name or "")).strip()
+        if name:
+            names.add(name)
+    return names
+
+def runninghub_region_availability(items, public_names):
+    normalized_names = {
+        re.sub(r"\s+", " ", str(name or "")).strip().casefold()
+        for name in public_names or []
+        if str(name or "").strip()
+    }
+    result = {}
+    for item in items or []:
+        model_id = runninghub_model_id(item)
+        if not model_id:
+            continue
+        candidates = {
+            re.sub(r"\s+", " ", str(item.get(key) or "")).strip().casefold()
+            for key in ("endpoint", "name_en", "name_cn", "display_name")
+            if str(item.get(key) or "").strip()
+        }
+        result[model_id] = "confirmed" if candidates & normalized_names else "unverified"
+    return result
+
+async def fetch_runninghub_public_catalog_names(provider=None):
+    region = runninghub_provider_region(provider)
+    url = runninghub_public_catalog_url(region)
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            response = await client.get(url, headers={"Accept": "text/html", "User-Agent": "Mozilla/5.0"})
+        if response.status_code >= 400:
+            return set(), {"source": url, "count": 0, "error": f"HTTP {response.status_code}"}
+        names = runninghub_public_catalog_names_from_html(response.text)
+        return names, {"source": url, "count": len(names), "error": "" if names else "empty"}
+    except Exception as exc:
+        return set(), {"source": url, "count": 0, "error": str(exc)[:180]}
 
 def runninghub_registry_model_from_id(model_id, output_type=""):
     model_id = str(model_id or "").strip()
@@ -12838,72 +12991,65 @@ def runninghub_registry_model_from_id(model_id, output_type=""):
     return {"name_en": model_id, "endpoint": model_id, "output_type": output_type}
 
 async def fetch_runninghub_llm_models(provider=None):
-    headers = runninghub_api_headers(provider)
     errors = []
+    url = runninghub_llm_models_url(provider)
+    try:
+        headers = runninghub_api_headers(provider)
+    except HTTPException as exc:
+        return [], {"source": url, "count": 0, "errors": [str(exc.detail or "RunningHub LLM key unavailable")[:180]]}
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-        for url in RUNNINGHUB_LLM_MODELS_URLS:
-            try:
-                resp = await client.get(url, headers=headers)
-                if resp.status_code >= 400 or looks_like_html_response(resp.text):
-                    errors.append(f"{url}: HTTP {resp.status_code} {resp.text[:180]}")
-                    continue
+        try:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code >= 400 or looks_like_html_response(resp.text):
+                errors.append(f"{url}: HTTP {resp.status_code} {resp.text[:180]}")
+            else:
                 raw = resp.json() if resp.text else {}
                 grouped, ids = parse_upstream_models(raw, "openai")
                 if ids:
                     return [runninghub_registry_model_from_id(mid, "chat") for mid in ids], {"source": url, "count": len(ids)}
                 errors.append(f"{url}: empty")
-            except Exception as exc:
-                errors.append(f"{url}: {str(exc)[:180]}")
+        except Exception as exc:
+            errors.append(f"{url}: {str(exc)[:180]}")
     return [], {"source": "", "count": 0, "errors": errors[-3:]}
 
-async def fetch_runninghub_model_registry(provider=None, include_fallback=True, include_meta=False):
+async def fetch_runninghub_model_registry(provider=None, include_fallback=True, include_meta=False, include_llm=True):
     urls = [
-        ("openapi", runninghub_openapi_url(provider, "models")),
-        ("github", RUNNINGHUB_MODEL_REGISTRY_URL),
+        ("official-remote", RUNNINGHUB_MODEL_REGISTRY_URL),
+        ("official-snapshot", RUNNINGHUB_OFFICIAL_REGISTRY_SNAPSHOT_FILE),
     ]
-    if os.path.exists(STATIC_RUNNINGHUB_MODEL_REGISTRY_FILE):
-        urls.append(("local", STATIC_RUNNINGHUB_MODEL_REGISTRY_FILE))
-    headers = runninghub_api_headers(provider)
     errors = []
     source = ""
+    registry_version = ""
     items = []
-    openapi_status = 0
-    openapi_authenticated = None
-    openapi_message = ""
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
         for source_name, url in urls:
             try:
-                if source_name == "local":
+                if source_name == "official-snapshot":
+                    if not os.path.exists(url):
+                        errors.append(f"{source_name}: missing")
+                        continue
                     with open(url, "r", encoding="utf-8") as f:
                         raw = json.load(f)
                 else:
-                    req_headers = headers if source_name == "openapi" else {"Accept": "application/json"}
-                    resp = await client.get(url, headers=req_headers)
+                    resp = await client.get(url, headers={"Accept": "application/json"})
                     if resp.status_code >= 400 or looks_like_html_response(resp.text):
-                        if source_name == "openapi":
-                            openapi_status = resp.status_code
-                            openapi_authenticated = False
                         errors.append(f"{source_name}: HTTP {resp.status_code} {resp.text[:180]}")
                         continue
-                    raw = resp.json() if resp.text else []
-                    if source_name == "openapi" and isinstance(raw, dict):
-                        openapi_status = resp.status_code
-                        openapi_message = str(raw.get("msg") or raw.get("message") or "").strip()
-                        upstream_code = str(raw.get("code") or "").strip()
-                        if upstream_code == "412" or "TOKEN_INVALID" in openapi_message.upper():
-                            openapi_authenticated = False
-                        elif upstream_code:
-                            openapi_authenticated = True
-                parsed = runninghub_registry_items_from_raw(raw)
+                    raw = resp.json() if resp.text else {}
+                parsed = runninghub_official_registry_items(raw)
                 if parsed:
                     items = parsed
                     source = source_name
+                    registry_version = str(raw.get("version") or "").strip() if isinstance(raw, dict) else ""
                     break
                 errors.append(f"{source_name}: empty")
             except Exception as exc:
                 errors.append(f"{source_name}: {str(exc)[:180]}")
                 continue
-    llm_items, llm_meta = await fetch_runninghub_llm_models(provider)
+    if not items and include_fallback:
+        items = runninghub_registry_fallback()
+        source = "emergency-fallback"
+    llm_items, llm_meta = await fetch_runninghub_llm_models(provider) if include_llm else ([], {"source": "", "count": 0, "errors": []})
     combined = [*items]
     seen = {runninghub_model_id(item) for item in combined if runninghub_model_id(item)}
     for item in llm_items:
@@ -12911,31 +13057,17 @@ async def fetch_runninghub_model_registry(provider=None, include_fallback=True, 
         if mid and mid not in seen:
             combined.append(item)
             seen.add(mid)
-    if combined:
+    if items:
         meta = {
-            "source": source or "llm",
-            "openapi_count": len(items),
+            "source": source,
+            "registry_count": len(items),
+            "registry_version": registry_version,
             "llm_count": len(llm_items),
             "llm_source": llm_meta.get("source") or "",
-            "openapi_status": openapi_status,
-            "openapi_authenticated": openapi_authenticated,
-            "openapi_message": openapi_message,
+            "auth_verified": False,
             "errors": [*errors[-3:], *((llm_meta.get("errors") or [])[-3:])],
         }
         return (combined, meta) if include_meta else combined
-    if include_fallback:
-        fallback = runninghub_registry_fallback()
-        meta = {
-            "source": "fallback",
-            "openapi_count": 0,
-            "llm_count": 0,
-            "llm_source": "",
-            "openapi_status": openapi_status,
-            "openapi_authenticated": openapi_authenticated,
-            "openapi_message": openapi_message,
-            "errors": [*errors[-3:], *((llm_meta.get("errors") or [])[-3:])],
-        }
-        return (fallback, meta) if include_meta else fallback
     raise HTTPException(status_code=502, detail=f"拉取 RunningHub 模型注册表失败：{'; '.join(errors[-4:]) or 'unknown error'}")
 
 def runninghub_model_id(item):
@@ -12960,7 +13092,7 @@ def runninghub_model_display_name(item, model_id=""):
     return ""
 
 def runninghub_registry_payload(items):
-    grouped = {"image": [], "chat": RUNNINGHUB_FALLBACK_CHAT_MODELS[:], "video": [], "audio": []}
+    grouped = {"image": [], "chat": [], "video": [], "audio": []}
     model_names = {}
     all_ids = []
     for item in items or []:
@@ -12971,20 +13103,9 @@ def runninghub_registry_payload(items):
         if display_name:
             model_names[mid] = display_name
         output_type = str(item.get("output_type") or item.get("outputType") or "").strip().lower()
-        if output_type in ("image", "video", "audio"):
+        if output_type in ("image", "chat", "video", "audio"):
             grouped[output_type].append(mid)
             all_ids.append(mid)
-    for model in RUNNINGHUB_DEFAULT_IMAGE_MODELS:
-        if model not in grouped["image"]:
-            grouped["image"].append(model)
-            all_ids.append(model)
-    for model in RUNNINGHUB_DEFAULT_VIDEO_MODELS:
-        if model not in grouped["video"]:
-            grouped["video"].append(model)
-            all_ids.append(model)
-    for model in RUNNINGHUB_FALLBACK_CHAT_MODELS:
-        if model not in all_ids:
-            all_ids.append(model)
     for key in grouped:
         grouped[key] = sorted(set(grouped[key]))
     return {
@@ -13000,10 +13121,15 @@ def runninghub_registry_payload(items):
 
 async def runninghub_models_payload(provider=None):
     registry, meta = await fetch_runninghub_model_registry(provider, include_fallback=True, include_meta=True)
-    region = runninghub_normalize_region(
-        (provider or {}).get("rh_region"),
-        runninghub_region_from_base_url((provider or {}).get("base_url"), "global"),
-    )
+    region = runninghub_provider_region(provider)
+    public_names, public_meta = await fetch_runninghub_public_catalog_names(provider)
+    registry_count = int(meta.get("registry_count") or 0)
+    standard_registry = registry[:registry_count]
+    availability = runninghub_region_availability(standard_registry, public_names)
+    for item in registry[registry_count:]:
+        model_id = runninghub_model_id(item)
+        if model_id:
+            availability[model_id] = "confirmed"
     save_runninghub_registry_snapshot(
         Path(BASE_DIR),
         region,
@@ -13011,16 +13137,34 @@ async def runninghub_models_payload(provider=None):
         source=str(meta.get("source") or ""),
     )
     payload = runninghub_registry_payload(registry)
-    payload["raw"] = {"registry_count": len(registry), **meta}
-    if meta.get("source") == "fallback":
-        payload["message"] = "RunningHub 模型接口未返回完整列表，当前显示内置兜底模型。"
+    visible_model_ids = set(payload.get("all") or [])
+    availability = {
+        model_id: status for model_id, status in availability.items()
+        if model_id in visible_model_ids
+    }
+    confirmed_count = sum(1 for status in availability.values() if status == "confirmed")
+    payload["region"] = region
+    payload["model_availability"] = availability
+    payload["raw"] = {
+        **meta,
+        "public_catalog_source": public_meta.get("source") or "",
+        "public_catalog_count": public_meta.get("count") or 0,
+        "public_catalog_error": public_meta.get("error") or "",
+        "confirmed_count": confirmed_count,
+        "unverified_count": max(0, len(availability) - confirmed_count),
+    }
+    if meta.get("source") == "emergency-fallback":
+        payload["message"] = "RunningHub 官方注册表与本地快照均不可用，当前仅显示紧急兜底项。"
     else:
-        payload["message"] = f"RunningHub 模型列表来自 {meta.get('source')}"
+        payload["message"] = (
+            f"RunningHub 官方注册表 {meta.get('registry_version') or ''}："
+            f"当前站点公开目录已列出 {confirmed_count} 个，其余未在该目录中列出。"
+        )
     return payload
 
 async def runninghub_model_definition(provider, model):
     requested = str(model or "").strip().strip("/")
-    registry = await fetch_runninghub_model_registry(provider, include_fallback=True)
+    registry = await fetch_runninghub_model_registry(provider, include_fallback=True, include_llm=False)
     for item in registry:
         mid = runninghub_model_id(item)
         endpoint = str(item.get("endpoint") or "").strip().strip("/")
@@ -13232,6 +13376,7 @@ async def wait_for_runninghub_image_task(client, provider, task_id):
         response = await client.post(query_url, headers=runninghub_api_headers(provider), json={"taskId": task_id})
         response.raise_for_status()
         raw = response.json()
+        raise_for_runninghub_rejection(raw, "图片")
         last_payload = raw
         status = runninghub_query_status(raw)
         if status in {"success", "succeeded", "completed", "complete", "finished", "finish", "done", "3"}:
@@ -13561,7 +13706,12 @@ async def runninghub_upload_local_to_filename(client, provider, url, use_wallet=
     upload_url = runninghub_endpoint_url(provider, "/task/openapi/upload")
     files = {"file": (filename, content, content_type)}
     data = {"apiKey": api_key, "fileType": "input"}
-    response = await client.post(upload_url, headers=runninghub_app_headers(False, use_wallet), data=data, files=files)
+    response = await client.post(
+        upload_url,
+        headers=runninghub_app_headers(False, use_wallet, provider=provider, api_key=api_key),
+        data=data,
+        files=files,
+    )
     raw = response.json()
     if isinstance(raw, dict) and raw.get("code") in (0, "0") and isinstance(raw.get("data"), dict) and raw["data"].get("fileName"):
         return raw["data"]["fileName"]
@@ -13646,7 +13796,11 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
             submit_url = runninghub_endpoint_url(provider, "/task/openapi/ai-app/run")
             body = {"apiKey": api_key, "webappId": entry_id, "nodeInfoList": node_info_list}
 
-        response = await client.post(submit_url, headers=runninghub_app_headers(True, use_wallet), json=body)
+        response = await client.post(
+            submit_url,
+            headers=runninghub_app_headers(True, use_wallet, provider=provider, api_key=api_key),
+            json=body,
+        )
         raw = response.json()
         if not (isinstance(raw, dict) and raw.get("code") in (0, "0")):
             raise HTTPException(status_code=502, detail=(raw.get("msg") if isinstance(raw, dict) else "") or f"RunningHub 提交失败：{raw}")
@@ -13659,7 +13813,11 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
         last_payload = None
         while time.monotonic() < deadline:
             await asyncio.sleep(2.5)
-            query_response = await client.post(query_url, headers=runninghub_app_headers(True), json={"apiKey": api_key, "taskId": task_id})
+            query_response = await client.post(
+                query_url,
+                headers=runninghub_app_headers(True, provider=provider, api_key=api_key),
+                json={"apiKey": api_key, "taskId": task_id},
+            )
             query_raw = query_response.json()
             last_payload = query_raw
             code = query_raw.get("code") if isinstance(query_raw, dict) else None
@@ -13720,6 +13878,7 @@ async def generate_runninghub_provider_image(prompt, size, model, reference_imag
         response = await client.post(endpoint, headers=runninghub_json_headers(provider), json=body)
         response.raise_for_status()
         raw = response.json()
+        raise_for_runninghub_rejection(raw, "图片")
         try:
             return runninghub_extract_image(raw), raw
         except HTTPException:
@@ -13738,6 +13897,7 @@ async def wait_for_runninghub_openapi_task(client, provider, task_id, output_kin
         response = await client.post(query_url, headers=runninghub_json_headers(provider), json={"taskId": task_id})
         response.raise_for_status()
         raw = response.json()
+        raise_for_runninghub_rejection(raw, output_kind or "任务")
         last_payload = raw
         status = runninghub_query_status(raw).upper()
         if status in {"SUCCESS", "SUCCEEDED", "COMPLETED", "COMPLETE", "FINISHED", "DONE", "3"}:
@@ -13832,6 +13992,7 @@ async def generate_runninghub_video(payload, provider, capability_parameters=Non
         response = await client.post(endpoint, headers=runninghub_json_headers(provider), json=body)
         response.raise_for_status()
         raw = response.json()
+        raise_for_runninghub_rejection(raw, "视频")
         task_id = runninghub_extract_task_id(raw)
         if not task_id:
             fail_reason = runninghub_fail_reason(raw)
@@ -13870,6 +14031,7 @@ async def generate_runninghub_audio(payload, provider, capability_parameters=Non
         response = await client.post(endpoint, headers=runninghub_json_headers(provider), json=body)
         response.raise_for_status()
         raw = response.json()
+        raise_for_runninghub_rejection(raw, "音频")
         task_id = runninghub_extract_task_id(raw)
         result = raw
         if task_id and not runninghub_extract_outputs(raw):
@@ -16618,11 +16780,15 @@ async def save_providers(payload: List[ApiProviderPayload]):
         if any(existing["id"] == provider["id"] for existing in providers):
             raise HTTPException(status_code=400, detail=f"API 平台 ID 重复：{provider['id']}")
         providers.append(provider)
-        key_env = provider_key_env(provider["id"])
-        if item.clear_key:
-            env_updates[key_env] = ""
-        elif item.api_key is not None and item.api_key.strip():
-            env_updates[key_env] = item.api_key.strip()
+        # RunningHub 的国内站与国际站使用独立 Key。旧 RUNNINGHUB_API_KEY 只保留为
+        # 国际站历史配置的读取兼容，新的保存/清除操作不得再写它，否则国内 Key 会
+        # 被国际站的 legacy fallback 误读。
+        if provider["id"] != "runninghub":
+            key_env = provider_key_env(provider["id"])
+            if item.clear_key:
+                env_updates[key_env] = ""
+            elif item.api_key is not None and item.api_key.strip():
+                env_updates[key_env] = item.api_key.strip()
         if provider["id"] == "runninghub":
             selected_region = runninghub_normalize_region(provider.get("rh_region"), "global")
             api_keys = item.rh_api_keys if isinstance(item.rh_api_keys, dict) else {}
@@ -16754,8 +16920,17 @@ def upstream_models_url(base_url: str, protocol: str):
     if protocol == "volcengine":
         return f"{base_url}/models" if base_url.endswith("/api/v3") else f"{base_url}/api/v3/models"
     if protocol == "runninghub":
-        return runninghub_openapi_url({"base_url": base_url}, "models")
+        raise ValueError("RunningHub 标准模型必须从官方 developer-kit 注册表读取")
     return f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
+
+def upstream_models_endpoint_label(protocol: str):
+    if protocol == "gemini":
+        return "/v1beta/models"
+    if protocol == "volcengine":
+        return "/api/v3/models"
+    if protocol == "runninghub":
+        return "developer-kit/model-registry.public.json"
+    return "/v1/models"
 
 def upstream_model_headers(api_key: str, protocol: str):
     if protocol == "gemini":
@@ -16973,7 +17148,7 @@ def apply_agnes_model_defaults(base_url, grouped, ids):
 
 @app.post("/api/providers/test-connection")
 async def test_provider_connection(payload: TestConnectionPayload):
-    """测试请求地址是否可用：调上游 /v1/models。验证通过时同时把模型清单按类别返回，避免再调一次拉取接口。"""
+    """检查当前平台的官方接入入口，并在可能时同步返回模型目录。"""
     protocol = protocol_from_payload(payload)
     if protocol == "codex":
         status = await codex_status()
@@ -17009,8 +17184,6 @@ async def test_provider_connection(payload: TestConnectionPayload):
         }
     if protocol == "runninghub":
         api_key = api_key_from_payload(payload, protocol)
-        if not api_key:
-            raise HTTPException(status_code=400, detail="请先填写或保存 RunningHub API Key")
         provider = {"id": "runninghub", "name": "RunningHub", "base_url": (payload.base_url or RUNNINGHUB_DEFAULT_BASE_URL).strip().rstrip("/"), "protocol": "runninghub", "rh_region": getattr(payload, "region", ""), "api_key": api_key, "wallet_api_key": api_key}
         try:
             payload_models = await runninghub_models_payload(provider)
@@ -17019,27 +17192,7 @@ async def test_provider_connection(payload: TestConnectionPayload):
         except Exception as exc:
             log_runninghub_error("test-connection", error_type=type(exc).__name__, message=str(exc)[:300])
             raise HTTPException(status_code=502, detail=f"RunningHub 连接失败：{str(exc)[:300]}") from exc
-        source = ((payload_models.get("raw") or {}).get("source") or "")
-        authenticated = ((payload_models.get("raw") or {}).get("openapi_authenticated"))
-        if authenticated is False:
-            return {
-                "ok": False,
-                "status": 401,
-                "message": "RunningHub API Key 未通过鉴权，请确认 Key 与所选国内/国外站点匹配。",
-                "model_count": payload_models["total"],
-                "image_models": payload_models["image_models"],
-                "chat_models": payload_models["chat_models"],
-                "video_models": payload_models["video_models"],
-                "audio_models": payload_models.get("audio_models") or [],
-                "all": payload_models["all"],
-                "protocol": "runninghub",
-                "raw": payload_models.get("raw"),
-            }
-        message = "RunningHub Key 已验证"
-        if source == "fallback":
-            message += "，模型列表接口未返回完整清单，已使用内置兜底模型。"
-        elif source:
-            message += f"，模型列表来源：{source}。"
+        message = "RunningHub 官方模型目录已读取；官方未提供无计费 Key 预验接口，Key 将在首次真实任务时验证。"
         return {
             "ok": True,
             "status": 200,
@@ -17050,6 +17203,9 @@ async def test_provider_connection(payload: TestConnectionPayload):
             "video_models": payload_models["video_models"],
             "audio_models": payload_models.get("audio_models") or [],
             "all": payload_models["all"],
+            "model_names": payload_models.get("model_names") or {},
+            "model_availability": payload_models.get("model_availability") or {},
+            "region": payload_models.get("region") or runninghub_provider_region(provider),
             "protocol": "runninghub",
             "raw": payload_models.get("raw"),
         }
@@ -17069,10 +17225,10 @@ async def test_provider_connection(payload: TestConnectionPayload):
             if resp.status_code in (301, 302, 303, 307, 308):
                 location = resp.headers.get("Location") or resp.headers.get("location") or ""
                 suffix = f"：{location}" if location else ""
-                endpoint_label = "/v1beta/models" if protocol == "gemini" else "/api/v3/models" if protocol == "volcengine" else "/openapi/v2/models" if protocol == "runninghub" else "/v1/models"
+                endpoint_label = upstream_models_endpoint_label(protocol)
                 return {"ok": False, "status": resp.status_code, "message": f"上游 {endpoint_label} 发生跳转{suffix}，请填写 API Base URL，不要填写网页登录地址"}
             if looks_like_html_response(resp.text):
-                endpoint_label = "/v1beta/models" if protocol == "gemini" else "/api/v3/models" if protocol == "volcengine" else "/openapi/v2/models" if protocol == "runninghub" else "/v1/models"
+                endpoint_label = upstream_models_endpoint_label(protocol)
                 return {"ok": False, "status": resp.status_code, "message": f"上游 {endpoint_label} 返回网页 HTML，请检查请求地址是否为 API Base URL"}
             if resp.status_code >= 400:
                 if protocol == "volcengine":
@@ -17310,8 +17466,6 @@ async def fetch_models_from_upstream(base_url: str, api_key: str, protocol: str 
             "all": [*JIMENG_DEFAULT_IMAGE_MODELS, *JIMENG_DEFAULT_VIDEO_MODELS],
         }
     if protocol == "runninghub":
-        if not api_key:
-            raise HTTPException(status_code=400, detail="请先填写或保存 RunningHub API Key")
         provider = {"id": "runninghub", "name": "RunningHub", "base_url": base_url or RUNNINGHUB_DEFAULT_BASE_URL, "protocol": "runninghub", "rh_region": region, "api_key": api_key, "wallet_api_key": api_key}
         return await runninghub_models_payload(provider)
     base_url = (base_url or "").strip().rstrip("/")
@@ -17327,7 +17481,7 @@ async def fetch_models_from_upstream(base_url: str, api_key: str, protocol: str 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(url, headers=upstream_model_headers(api_key, protocol))
-            endpoint_label = "/v1beta/models" if protocol == "gemini" else "/api/v3/models" if protocol == "volcengine" else "/openapi/v2/models" if protocol == "runninghub" else "/v1/models"
+            endpoint_label = upstream_models_endpoint_label(protocol)
             if resp.status_code in (301, 302, 303, 307, 308):
                 location = resp.headers.get("Location") or resp.headers.get("location") or ""
                 suffix = f"：{location}" if location else ""
@@ -17883,7 +18037,11 @@ async def query_image_task(payload: ImageTaskQueryRequest):
         url = runninghub_endpoint_url(provider, "/task/openapi/outputs")
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=240.0, write=30.0, pool=20.0)) as client:
-                response = await client.post(url, headers=runninghub_app_headers(True), json={"apiKey": api_key, "taskId": task_id})
+                response = await client.post(
+                    url,
+                    headers=runninghub_app_headers(True, provider=provider, api_key=api_key),
+                    json={"apiKey": api_key, "taskId": task_id},
+                )
                 response.raise_for_status()
                 raw = response.json()
                 code = raw.get("code") if isinstance(raw, dict) else None
@@ -23101,10 +23259,57 @@ def run_workflow(name: str, payload: WorkflowRunRequest):
     )
     return generate(req)
 
+LOCAL_AUTO_RELOAD_FALSE_VALUES = {"0", "false", "no", "off"}
+LOCAL_RELOAD_EXCLUDED_DIRECTORIES = (
+    ".venv",
+    "python",
+    ".git",
+    "assets",
+    "data",
+    "cache",
+    "backups",
+    "output",
+    "results",
+)
+
+
+def local_auto_reload_enabled(env=None) -> bool:
+    """本地直接启动默认自动重载；可用环境变量显式关闭。"""
+    values = os.environ if env is None else env
+    raw = str(values.get("INFINITE_CANVAS_AUTO_RELOAD", "1") or "").strip().lower()
+    return raw not in LOCAL_AUTO_RELOAD_FALSE_VALUES
+
+
+def local_server_uvicorn_options(root=None, env=None) -> Dict[str, Any]:
+    """生成 macOS/Windows 共用的本地 Uvicorn 启动配置。"""
+    project_root = Path(root or BASE_DIR).resolve()
+    reload_enabled = local_auto_reload_enabled(env)
+    kwargs: Dict[str, Any] = {
+        "host": "0.0.0.0",
+        "port": 3000,
+        "ws_ping_interval": None,
+        "ws_ping_timeout": None,
+        "reload": reload_enabled,
+    }
+    if reload_enabled:
+        kwargs.update({
+            "reload_dirs": [str(project_root)],
+            "reload_includes": ["*.py"],
+            # Uvicorn 会把排除项交给 Path.cwd().glob；绝对路径在部分 Python
+            # 版本中会直接报错，因此这里统一使用相对项目根目录的目录名。
+            "reload_excludes": list(LOCAL_RELOAD_EXCLUDED_DIRECTORIES),
+        })
+    return {"app": "main:app", "kwargs": kwargs}
+
+
 if __name__ == "__main__":
     import uvicorn
     # 关闭服务端协议级 WebSocket ping：部分客户端（如 PS UXP 面板）不会自动回 pong，
     # 默认 20s ping/20s 超时会把这些连接每隔一会儿就踢掉造成"频繁断连"。
     # 客户端有自己的应用层心跳 + 断线重连兜底，这里禁用协议 ping 更稳。
-    uvicorn.run(app, host="0.0.0.0", port=3000,
-                ws_ping_interval=None, ws_ping_timeout=None)
+    launch = local_server_uvicorn_options()
+    if launch["kwargs"]["reload"]:
+        print("本地自动重载：已启用（监控项目 Python 源码；静态资源刷新直接生效）")
+    else:
+        print("本地自动重载：已关闭（INFINITE_CANVAS_AUTO_RELOAD=0）")
+    uvicorn.run(launch["app"], **launch["kwargs"])

@@ -1039,7 +1039,7 @@
                  // If timeout status, ask user
                  if (data.status === 'timeout') {
                      const taskId = data.task_id;
-                     const userContinue = confirm("Cloud generation is taking longer than expected (300s). The queue might be full.\n\nDo you want to continue waiting?");
+                     const userContinue = await StudioDialog.confirm("Cloud generation is taking longer than expected (300s). The queue might be full.\n\nDo you want to continue waiting?", {type:'warning'});
                      
                      if (userContinue) {
                          // Call poll endpoint
@@ -1102,7 +1102,7 @@
             }
             
             if (!uploadedFile && currentEngine === 'cloud') {
-                 alert("Please upload an image first");
+                 await StudioDialog.alert("Please upload an image first", {type:'warning'});
                  return;
             }
 
@@ -1191,7 +1191,7 @@
                 document.getElementById('emptyState').classList.remove('hidden');
                 btn.disabled = false;
                 if (!err.silent) {
-                    alert(err.message);
+                    await StudioDialog.alert(err.message, {type:'warning'});
                 }
             }
         }

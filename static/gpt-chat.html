@@ -1102,7 +1102,7 @@
 
         async function deleteConversation(id, event){
             event.stopPropagation();
-            if(!confirm(tr('chat.deleteConfirm'))) return;
+            if(!await StudioDialog.confirm(tr('chat.deleteConfirm'), {type:'danger'})) return;
             await fetch(`/api/conversations/${id}`, {method:'DELETE', headers:{'X-User-ID':userId}});
             const deletedCurrent = currentConversation?.id === id;
             if(deletedCurrent){ currentConversation = null; rememberConversation(''); setChatTitle(''); renderMessages([]); }
@@ -1454,7 +1454,7 @@
                 refs.push(...(data.files || []));
                 renderRefs();
             } catch(e) {
-                alert(e.message || '上传失败');
+                await StudioDialog.alert(e.message || '上传失败', {type:'warning'});
             }
         }
 

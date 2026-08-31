@@ -507,7 +507,7 @@
         }
 
         async function submitLocal() {
-            if (!uploadedNames[1]) { alert("Please upload Main Image (Slot 1)"); return; }
+            if (!uploadedNames[1]) { await StudioDialog.alert("Please upload Main Image (Slot 1)", {type:'warning'}); return; }
             const btn = document.getElementById('genBtn');
             const loader = document.getElementById('loader');
             const placeholder = document.getElementById('placeholder');
@@ -551,11 +551,11 @@
                     downloadBtn.href = result.images[0];
                     renderImageCard(result, true);
                 } else if (result.error) {
-                    alert("Generation failed: " + result.error);
+                    await StudioDialog.alert("Generation failed: " + result.error, {type:'warning'});
                     placeholder.classList.remove('hidden');
                 }
             } catch (err) {
-                alert("Generation failed: " + err.message);
+                await StudioDialog.alert("Generation failed: " + err.message, {type:'warning'});
                 placeholder.classList.remove('hidden');
             } finally {
                 loader.classList.add('hidden');
@@ -584,8 +584,8 @@
 
         async function submitCloud() {
             const prompt = document.getElementById('promptInput').value.trim();
-            if (!prompt) { alert("Please enter a prompt"); return; }
-            if (!base64Images[1]) { alert("Please upload Main Image (Slot 1) for cloud generation"); return; }
+            if (!prompt) { await StudioDialog.alert("Please enter a prompt", {type:'warning'}); return; }
+            if (!base64Images[1]) { await StudioDialog.alert("Please upload Main Image (Slot 1) for cloud generation", {type:'warning'}); return; }
 
             const btn = document.getElementById('genBtn');
             const loader = document.getElementById('loader');
@@ -650,7 +650,7 @@
                 }
             } catch (err) {
                 setCloudStatus(err.message, false);
-                alert("Cloud generation failed: " + err.message);
+                await StudioDialog.alert("Cloud generation failed: " + err.message, {type:'warning'});
                 placeholder.classList.remove('hidden');
             } finally {
                 loader.classList.add('hidden');
@@ -835,7 +835,7 @@
 
         async function deleteHistoryItem(ts, ev) {
             ev.stopPropagation();
-            if (!confirm("Delete this archive?")) return;
+            if (!await StudioDialog.confirm("Delete this archive?", {type:'danger'})) return;
             try {
                 const res = await fetch('/api/history/delete', {
                     method: 'POST',
@@ -845,7 +845,7 @@
                 if ((await res.json()).success) {
                     document.getElementById(`history-${ts}`).remove();
                 }
-            } catch (e) { alert("Delete failed"); }
+            } catch (e) { await StudioDialog.alert("Delete failed", {type:'warning'}); }
         }
 
         const observer = new IntersectionObserver((entries) => {

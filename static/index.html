@@ -2618,7 +2618,7 @@
             try {
                 const list = await fetch('/api/update-backups').then(r => r.json());
                 const backups = list.backups || [];
-                if(!backups.length){ alert(isEn ? 'No backups available.' : '没有可用的备份'); return; }
+                if(!backups.length){ await StudioDialog.alert(isEn ? 'No backups available.' : '没有可用的备份', {type:'warning'}); return; }
                 const lines = backups.slice(0, 10).map((b, i) => {
                     const d = new Date((b.created_at || 0) * 1000);
                     const ts = d.toLocaleString();
@@ -2636,11 +2636,11 @@
                 const promptMsg = (isEn
                     ? 'Select a backup to restore (enter the number):\n'
                     : '选择要还原的备份（输入序号）：\n') + lines.join('\n');
-                const answer = prompt(promptMsg, '1');
+                const answer = await StudioDialog.prompt(promptMsg, {defaultValue:'1'});
                 const idx = Number(answer) - 1;
                 if(!(idx >= 0 && idx < backups.length)) return;
                 const target = backups[idx];
-                if(!confirm(isEn ? `Restore "${target.name}"? Backend will restart.` : `要还原 "${target.name}" 吗？后端会自动重启。`)) return;
+                if(!await StudioDialog.confirm(isEn ? `Restore "${target.name}"? Backend will restart.` : `要还原 "${target.name}" 吗？后端会自动重启。`, {type:'danger'})) return;
                 const res = await fetch('/api/update-rollback', {
                     method:'POST',
                     headers:{'Content-Type':'application/json'},
@@ -2648,12 +2648,12 @@
                 });
                 const data = await res.json().catch(() => ({}));
                 if(!res.ok) throw new Error(data.detail || (isEn ? 'Rollback failed' : '回滚失败'));
-                alert(isEn
+                await StudioDialog.alert(isEn
                     ? `Restored ${data.count || 0} files. A safety restore point was created, and the backend is restarting.`
-                    : `已还原 ${data.count || 0} 个文件，当前版本已自动保存为新的恢复点。后端正在重启。`);
+                    : `已还原 ${data.count || 0} 个文件，当前版本已自动保存为新的恢复点。后端正在重启。`, {type:'info'});
                 if(data.restart_scheduled) waitForBackendAndReload();
             } catch(e) {
-                alert((isEn ? 'Rollback failed: ' : '回滚失败：') + describeNetworkError(e, isEn));
+                await StudioDialog.alert((isEn ? 'Rollback failed: ' : '回滚失败：') + describeNetworkError(e, isEn), {type:'warning'});
             }
         }
         window.rollbackProjectUpdate = rollbackProjectUpdate;
@@ -2706,14 +2706,14 @@
                     if(hasUpdate) {
                         openProjectUpdateModal();
                     } else if(reachable) {
-                        alert(isEn ? `You are on the latest version (${versionLabel(current)}).` : `已是最新版本（${versionLabel(current)}）。`);
+                        await StudioDialog.alert(isEn ? `You are on the latest version (${versionLabel(current)}).` : `已是最新版本（${versionLabel(current)}）。`, {type:'info'});
                     } else {
-                        alert(isEn ? 'Could not reach GitHub or ModelScope. Check your network/proxy and try again.' : '无法连接 GitHub 或 ModelScope 更新源，请检查网络或代理后重试。');
+                        await StudioDialog.alert(isEn ? 'Could not reach GitHub or ModelScope. Check your network/proxy and try again.' : '无法连接 GitHub 或 ModelScope 更新源，请检查网络或代理后重试。', {type:'warning'});
                     }
                 }
             } catch(e) {
                 // 离线包里没有网络时保持安静，不影响本地使用。
-                if(manual) alert(isEn ? 'Update check failed.' : '检测更新失败。');
+                if(manual) await StudioDialog.alert(isEn ? 'Update check failed.' : '检测更新失败。', {type:'warning'});
             } finally {
                 if(badge) badge.classList.remove('checking');
             }

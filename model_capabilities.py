@@ -2073,19 +2073,41 @@ class ModelCapabilityRegistry:
                 profiles[provider_id] = profile
         return {"registry": registry, "profiles": profiles}
 
-    def runninghub_snapshot_profiles(self, region: str = "global") -> Dict[str, Dict[str, Any]]:
-        safe_region = "cn" if str(region or "").strip().lower() == "cn" else "global"
-        path = self.root / "data" / "model_capabilities" / "snapshots" / f"runninghub-{safe_region}.json"
+    def runninghub_official_snapshot_profiles(self) -> Dict[str, Dict[str, Any]]:
+        path = self.root / "data" / "model_capabilities" / "snapshots" / "runninghub-official-public.json"
         if not path.is_file():
             return {}
         try:
             raw = _read_json(path)
         except (OSError, ValueError, TypeError):
             return {}
-        items = raw.get("items") if isinstance(raw, dict) else raw
+        items = raw.get("models") if isinstance(raw, dict) else None
         if not isinstance(items, list):
             return {}
         profiles: Dict[str, Dict[str, Any]] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                profile = runninghub_profile_from_registry_item(item)
+            except ModelCapabilityError:
+                continue
+            profiles[profile["model_id"]] = profile
+        return profiles
+
+    def runninghub_snapshot_profiles(self, region: str = "global") -> Dict[str, Dict[str, Any]]:
+        safe_region = "cn" if str(region or "").strip().lower() == "cn" else "global"
+        path = self.root / "data" / "model_capabilities" / "snapshots" / f"runninghub-{safe_region}.json"
+        profiles: Dict[str, Dict[str, Any]] = self.runninghub_official_snapshot_profiles()
+        if not path.is_file():
+            return profiles
+        try:
+            raw = _read_json(path)
+        except (OSError, ValueError, TypeError):
+            return profiles
+        items = raw.get("items") if isinstance(raw, dict) else raw
+        if not isinstance(items, list):
+            return profiles
         for item in items:
             if not isinstance(item, dict):
                 continue

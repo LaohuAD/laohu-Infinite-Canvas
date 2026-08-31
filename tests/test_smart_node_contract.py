@@ -20,6 +20,17 @@ def run_node(source):
 
 
 class SmartNodeContractTests(unittest.TestCase):
+    def test_smart_canvas_reads_structured_runninghub_error_message(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        block = source[
+            source.index("async function smartResponseErrorMessage"):
+            source.index("function smartDropDataTypes")
+        ]
+
+        self.assertIn("detail.message", block)
+        self.assertIn("detail.message_en", block)
+        self.assertIn("capabilityUiText", block)
+
     def test_queue_progress_only_exposes_trustworthy_positive_positions(self):
         script = """
 const c=require('./static/js/smart-node-contract.js');
@@ -1318,6 +1329,66 @@ console.log(JSON.stringify({
         self.assertIn("RunningHub 官方应用", source)
         self.assertIn("syncRhAppFromOfficial", source)
         self.assertIn(".rh-card-columns { display:grid; grid-template-columns:minmax(0,1fr);", css)
+
+    def test_runninghub_model_picker_distinguishes_region_availability(self):
+        source = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
+        css = (ROOT / "static/css/api-settings.css").read_text(encoding="utf-8")
+        i18n = (ROOT / "static/js/i18n/api-settings.js").read_text(encoding="utf-8")
+
+        self.assertIn("let lastFetchedModelAvailability = {};", source)
+        self.assertIn("data?.model_availability", source)
+        self.assertIn("runningHubAvailabilityBadge", source)
+        self.assertIn("picker-availability-${status}", source)
+        self.assertIn(".picker-availability-confirmed", css)
+        self.assertIn(".picker-availability-unverified", css)
+        self.assertIn("api.rhModelConfirmed", i18n)
+        self.assertIn("api.rhModelUnverified", i18n)
+        self.assertIn(".picker-model-availability", css)
+
+    def test_model_picker_bulk_selection_replaces_the_complete_selection_state(self):
+        source = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
+        helper = source[
+            source.index("function buildPickerBulkSelection"):
+            source.index("function selectPickerModels")
+        ]
+        data = run_node(
+            helper
+            + "\nconst ids=['listed','unknown'];"
+            + "\nconst current={listed:false,unknown:true};"
+            + "\nconst availability={listed:'confirmed',unknown:'unverified'};"
+            + "\nconsole.log(JSON.stringify({"
+            + "recommended:buildPickerBulkSelection(ids,current,availability,'recommended',true),"
+            + "all:buildPickerBulkSelection(ids,current,availability,'all',true),"
+            + "clear:buildPickerBulkSelection(ids,current,availability,'clear',true)"
+            + "}));"
+        )
+
+        self.assertEqual(data["recommended"], {"listed": True, "unknown": False})
+        self.assertEqual(data["all"], {"listed": True, "unknown": True})
+        self.assertEqual(data["clear"], {"listed": False, "unknown": False})
+
+    def test_runninghub_connection_copy_does_not_claim_catalog_fetch_verified_key(self):
+        source = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
+
+        self.assertNotIn("RunningHub Key 已验证", source)
+        self.assertNotIn("✓ RunningHub OpenAPI 验证通过", source)
+        self.assertIn("api.rhCatalogLoaded", source)
+
+    def test_runninghub_region_switch_clears_stale_picker_catalog(self):
+        source = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
+        switch_block = source[source.index("function changeRunningHubRegion"):source.index("function broadcastStudioApiChange")]
+
+        self.assertIn("clearFetchedModelState();", switch_block)
+        self.assertIn("function clearFetchedModelState()", source)
+        self.assertIn("lastFetchedModelAvailability = {};", source)
+        self.assertIn("openBtn.disabled = true", source)
+
+    def test_api_provider_switch_cannot_reuse_previous_provider_catalog(self):
+        source = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
+        select_block = source[source.index("function selectProvider"):source.index("function addProvider")]
+
+        self.assertIn("clearFetchedModelState();", select_block)
+        self.assertLess(select_block.index("clearFetchedModelState();"), select_block.index("selectedId = id;"))
 
     def test_runninghub_official_field_data_preserves_labels_and_submit_values(self):
         source = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")

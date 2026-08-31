@@ -625,8 +625,8 @@
 
         async function submitImage(){
             const prompt = document.getElementById('promptInput').value.trim();
-            if(!prompt){ alert(tr('online.promptRequired')); return; }
-            if(!provider || !selectedModel){ alert(tr('online.noConfiguredImageModel')); return; }
+            if(!prompt){ await StudioDialog.alert(tr('online.promptRequired'), {type:'warning'}); return; }
+            if(!provider || !selectedModel){ await StudioDialog.alert(tr('online.noConfiguredImageModel'), {type:'warning'}); return; }
             const btn = document.getElementById('genBtn'), loader = document.getElementById('loader'), placeholder = document.getElementById('placeholder'), out = document.getElementById('outputImg'), dl = document.getElementById('downloadBtn');
             btn.disabled = true; placeholder.classList.add('hidden'); out.classList.add('hidden'); dl.classList.add('hidden'); loader.classList.remove('hidden');
             try {
@@ -638,7 +638,7 @@
                 }).then(async r => { if(!r.ok) throw new Error((await r.json()).detail || '生成失败'); return r.json(); });
                 currentResult = result; out.src = result.images[0]; out.classList.remove('hidden'); dl.href = result.images[0]; dl.classList.remove('hidden'); await loadHistory(0);
             } catch(err) {
-                alert(err.message || 'Generation failed'); placeholder.classList.remove('hidden');
+                await StudioDialog.alert(err.message || 'Generation failed', {type:'warning'}); placeholder.classList.remove('hidden');
             } finally {
                 loader.classList.add('hidden'); btn.disabled = false;
             }
@@ -714,7 +714,7 @@
             const url = currentLightboxData?.images?.[0];
             if(!url) return;
             const res = await fetch(url);
-            if(!res.ok) return alert('下载失败');
+            if(!res.ok){ await StudioDialog.alert('下载失败', {type:'warning'}); return; }
             const blob = await res.blob();
             const clean = url.split('?')[0];
             const ext = clean.includes('.') ? clean.split('.').pop() : 'png';
@@ -756,7 +756,7 @@
         }
         async function deleteHistoryItem(ts, ev){
             ev.stopPropagation();
-            if(!confirm(tr('online.deleteConfirm'))) return;
+            if(!await StudioDialog.confirm(tr('online.deleteConfirm'), {type:'danger'})) return;
             const res = await fetch('/api/results/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids:[ts]})}).then(r=>r.json());
             if(res.removed) document.getElementById(`history-${ts}`)?.remove();
         }

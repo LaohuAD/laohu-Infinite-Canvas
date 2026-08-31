@@ -100,6 +100,8 @@ cd laohu-Infinite-Canvas
 
 服务启动后，在浏览器打开 [本地工作台](http://127.0.0.1:3000/)。API Key 通过页面里的“API 设置”保存。
 
+本地启动默认监控项目中的 Python 源码；保存后后端会自动重载，不需要手工结束并重启服务。HTML、CSS 和 JavaScript 使用动态资源版本，刷新页面即可获取更新。若特殊环境需要关闭 Python 自动重载，可在启动前设置 `INFINITE_CANVAS_AUTO_RELOAD=0`。
+
 不要把本机的 `API/.env`、`data/api_providers.json` 或包含密钥的备份上传到 GitHub。
 
 ## 本地数据怎么保存
@@ -201,6 +203,8 @@ AI MONEY 本来就是我给自己准备的 API 中转站。我做它不是为了
 本地部署给你控制权，RunningHub 给你速度。不是每个任务都值得从零搭 ComfyUI，别人已经跑通的工作流和 AI 应用，直接拿来用、拿来改、拿来接到自己的素材上，效率就是比从空白节点开始高。
 
 无限画布已经支持 RunningHub AI 应用和模型调用。你可以在本地管理画布和素材，把成熟工作流当作执行节点，生成结果再回到自己的本地项目里继续使用。国内网络用国内站，海外网络和海外业务用海外站。两个入口都带我的邀请码，注册会支持我继续维护这个开源项目。
+
+API 设置会分开保存国内站和国际站的 Key、AI 应用与已启用模型。模型 endpoint 和参数以 RunningHub 官方 `developer-kit/model-registry.public.json` 为准；界面分别标记“当前站点目录已列出”和“当前站点目录未列出”，这只是公开目录状态，不等同于当前账号已完成真实调用验证，最终以实际任务结果为准。
 
 - [立即使用 RunningHub 国内站，把成熟工作流接进画布](https://www.runninghub.cn?inviteCode=rh-v1001)
 - [立即使用 RunningHub 海外站，调用全球 AI 创作能力](https://www.runninghub.ai?inviteCode=rh-v1001)

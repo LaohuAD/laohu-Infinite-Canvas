@@ -3,6 +3,305 @@
     const LEGACY_KEY = 'canvas_theme';
     const SCALE_KEY = 'studio_ui_scale_mode';
     const SCALE_OPTIONS = ['auto', '60', '65', '70', '75', '80', '85', '90', '95', '100', '115', '125', '140'];
+    const studioDialogQueue = [];
+    let studioDialogActive = false;
+
+    function studioDialogLanguage(){
+        const value = String(window.StudioI18n?.lang?.() || document.documentElement.lang || 'zh').toLowerCase();
+        return value.startsWith('en') ? 'en' : 'zh';
+    }
+
+    function studioDialogText(key){
+        const copy = {
+            confirm:{zh:'确定', en:'Confirm'},
+            cancel:{zh:'取消', en:'Cancel'},
+            info:{zh:'提示', en:'Notice'},
+            warning:{zh:'请确认', en:'Please confirm'},
+            danger:{zh:'危险操作', en:'Dangerous action'},
+            input:{zh:'请输入内容', en:'Enter a value'}
+        };
+        return copy[key]?.[studioDialogLanguage()] || copy[key]?.zh || '';
+    }
+
+    function ensureStudioDialogStyle(){
+        if(document.getElementById('studio-dialog-style')) return;
+        const style = document.createElement('style');
+        style.id = 'studio-dialog-style';
+        style.textContent = `
+            .studio-dialog-overlay {
+                --studio-dialog-panel: var(--panel, var(--card, #fff));
+                --studio-dialog-card: var(--card, var(--soft, rgba(127, 140, 160, .08)));
+                --studio-dialog-text: var(--text, #172033);
+                --studio-dialog-muted: var(--muted, #667085);
+                --studio-dialog-line: var(--line, rgba(95, 109, 132, .24));
+                --studio-dialog-strong: var(--strong, var(--accent, #172033));
+                --studio-dialog-strong-text: var(--strong-text, #fff);
+                position: fixed;
+                inset: 0;
+                z-index: 2147483000;
+                display: grid;
+                place-items: center;
+                padding: 24px;
+                background: rgba(5, 10, 18, .62);
+                backdrop-filter: blur(10px) saturate(.88);
+                -webkit-backdrop-filter: blur(10px) saturate(.88);
+                animation: studio-dialog-fade-in 150ms ease-out both;
+            }
+            html.studio-theme-dark > .studio-dialog-overlay,
+            html.theme-dark > .studio-dialog-overlay {
+                --studio-dialog-panel: #1c1e26;
+                --studio-dialog-card: #272a33;
+                --studio-dialog-text: #e8e8ea;
+                --studio-dialog-muted: #a4adbf;
+                --studio-dialog-line: #3f424d;
+                --studio-dialog-strong: #f5f6f8;
+                --studio-dialog-strong-text: #0e1014;
+            }
+            .studio-dialog-panel {
+                width: min(440px, calc(100vw - 32px));
+                max-height: min(78vh, 620px);
+                overflow: auto;
+                box-sizing: border-box;
+                color: var(--studio-dialog-text);
+                background: var(--studio-dialog-panel);
+                border: 1px solid var(--studio-dialog-line);
+                border-radius: 18px;
+                box-shadow: 0 24px 72px rgba(4, 10, 22, .28), 0 2px 10px rgba(4, 10, 22, .12);
+                padding: 20px;
+                animation: studio-dialog-panel-in 180ms cubic-bezier(.2,.78,.25,1) both;
+            }
+            .studio-dialog-heading {
+                display: grid;
+                grid-template-columns: 30px minmax(0, 1fr);
+                align-items: center;
+                gap: 11px;
+                margin-bottom: 12px;
+            }
+            .studio-dialog-mark {
+                width: 30px;
+                height: 30px;
+                display: grid;
+                place-items: center;
+                border-radius: 10px;
+                color: var(--studio-dialog-strong-text);
+                background: var(--studio-dialog-strong);
+                font: 700 14px/1 ui-sans-serif, system-ui, sans-serif;
+            }
+            .studio-dialog-overlay[data-type="warning"] .studio-dialog-mark {
+                color: #5c3900;
+                background: #ffd98a;
+            }
+            .studio-dialog-overlay[data-type="danger"] .studio-dialog-mark {
+                color: #fff;
+                background: var(--danger, #d84b55);
+            }
+            .studio-dialog-title {
+                margin: 0;
+                min-width: 0;
+                color: var(--studio-dialog-text);
+                font: 700 15px/1.35 ui-sans-serif, system-ui, -apple-system, "PingFang SC", sans-serif;
+                letter-spacing: -.01em;
+            }
+            .studio-dialog-message {
+                margin: 0;
+                color: var(--studio-dialog-muted);
+                white-space: pre-wrap;
+                overflow-wrap: anywhere;
+                font: 500 13px/1.65 ui-sans-serif, system-ui, -apple-system, "PingFang SC", sans-serif;
+            }
+            .studio-dialog-input {
+                width: 100%;
+                box-sizing: border-box;
+                margin-top: 14px;
+                padding: 10px 12px;
+                color: var(--studio-dialog-text);
+                background: var(--studio-dialog-card);
+                border: 1px solid var(--studio-dialog-line);
+                border-radius: 10px;
+                outline: none;
+                font: 500 13px/1.4 ui-sans-serif, system-ui, -apple-system, "PingFang SC", sans-serif;
+                transition: border-color 140ms ease, box-shadow 140ms ease;
+            }
+            .studio-dialog-input:focus {
+                border-color: var(--studio-dialog-strong);
+                box-shadow: 0 0 0 3px color-mix(in srgb, var(--studio-dialog-strong) 16%, transparent);
+            }
+            .studio-dialog-actions {
+                display: flex;
+                justify-content: flex-end;
+                gap: 9px;
+                margin-top: 18px;
+            }
+            .studio-dialog-btn {
+                min-width: 76px;
+                min-height: 36px;
+                padding: 8px 15px;
+                color: var(--studio-dialog-text);
+                background: transparent;
+                border: 1px solid var(--studio-dialog-line);
+                border-radius: 10px;
+                cursor: pointer;
+                font: 650 13px/1 ui-sans-serif, system-ui, -apple-system, "PingFang SC", sans-serif;
+                transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+            }
+            .studio-dialog-btn:hover { background: var(--studio-dialog-card); }
+            .studio-dialog-btn:active { transform: translateY(1px); }
+            .studio-dialog-btn:focus-visible { outline: 2px solid var(--studio-dialog-strong); outline-offset: 2px; }
+            .studio-dialog-btn.primary {
+                color: var(--studio-dialog-strong-text);
+                background: var(--studio-dialog-strong);
+                border-color: var(--studio-dialog-strong);
+            }
+            .studio-dialog-btn.danger {
+                color: #fff;
+                background: var(--danger, #d84b55);
+                border-color: var(--danger, #d84b55);
+            }
+            @keyframes studio-dialog-fade-in { from { opacity: 0; } to { opacity: 1; } }
+            @keyframes studio-dialog-panel-in { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+            @media (prefers-reduced-motion: reduce) {
+                .studio-dialog-overlay, .studio-dialog-panel { animation: none; }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    function ensureStudioDialogRoot(request, settle){
+        ensureStudioDialogStyle();
+        const type = ['info', 'warning', 'danger'].includes(request.type) ? request.type : 'info';
+        const previousFocus = document.activeElement;
+        const overlay = document.createElement('div');
+        overlay.className = 'studio-dialog-overlay';
+        overlay.dataset.type = type;
+        const panel = document.createElement('section');
+        panel.className = 'studio-dialog-panel';
+        panel.setAttribute('role', request.kind === 'alert' ? 'alertdialog' : 'dialog');
+        panel.setAttribute('aria-modal', 'true');
+        const titleId = `studio-dialog-title-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const messageId = `${titleId}-message`;
+        panel.setAttribute('aria-labelledby', titleId);
+        panel.setAttribute('aria-describedby', messageId);
+
+        const heading = document.createElement('div');
+        heading.className = 'studio-dialog-heading';
+        const mark = document.createElement('span');
+        mark.className = 'studio-dialog-mark';
+        mark.setAttribute('aria-hidden', 'true');
+        mark.textContent = type === 'danger' ? '!' : type === 'warning' ? '!' : 'i';
+        const title = document.createElement('h2');
+        title.id = titleId;
+        title.className = 'studio-dialog-title';
+        title.textContent = String(request.title || studioDialogText(type === 'info' && request.kind === 'prompt' ? 'input' : type));
+        heading.append(mark, title);
+
+        const message = document.createElement('p');
+        message.id = messageId;
+        message.className = 'studio-dialog-message';
+        message.textContent = String(request.message ?? '');
+        panel.append(heading, message);
+
+        let input = null;
+        if(request.kind === 'prompt'){
+            input = document.createElement('input');
+            input.className = 'studio-dialog-input';
+            input.type = 'text';
+            input.value = String(request.defaultValue ?? '');
+            input.placeholder = String(request.placeholder || '');
+            panel.appendChild(input);
+        }
+
+        const actions = document.createElement('div');
+        actions.className = 'studio-dialog-actions';
+        let closed = false;
+        function close(value){
+            if(closed) return;
+            closed = true;
+            document.removeEventListener('keydown', onKeyDown, true);
+            overlay.remove();
+            try { previousFocus?.focus?.({preventScroll:true}); } catch(_) { previousFocus?.focus?.(); }
+            settle(value);
+        }
+        function cancel(){
+            close(request.kind === 'confirm' ? false : request.kind === 'prompt' ? null : undefined);
+        }
+        function confirm(){
+            close(request.kind === 'confirm' ? true : request.kind === 'prompt' ? input.value : undefined);
+        }
+        function onKeyDown(event){
+            if(event.key === 'Escape'){
+                event.preventDefault();
+                cancel();
+                return;
+            }
+            if(event.key === 'Enter' && !event.isComposing){
+                event.preventDefault();
+                confirm();
+                return;
+            }
+            if(event.key === 'Tab'){
+                const focusable = [...panel.querySelectorAll('button:not([disabled]), input:not([disabled])')];
+                if(!focusable.length) return;
+                const first = focusable[0];
+                const last = focusable[focusable.length - 1];
+                if(event.shiftKey && document.activeElement === first){ event.preventDefault(); last.focus(); }
+                else if(!event.shiftKey && document.activeElement === last){ event.preventDefault(); first.focus(); }
+            }
+        }
+
+        if(request.kind !== 'alert'){
+            const cancelButton = document.createElement('button');
+            cancelButton.type = 'button';
+            cancelButton.className = 'studio-dialog-btn';
+            cancelButton.textContent = String(request.cancelText || studioDialogText('cancel'));
+            cancelButton.addEventListener('click', cancel);
+            actions.appendChild(cancelButton);
+        }
+        const confirmButton = document.createElement('button');
+        confirmButton.type = 'button';
+        confirmButton.className = `studio-dialog-btn ${type === 'danger' ? 'danger' : 'primary'}`;
+        confirmButton.textContent = String(request.confirmText || studioDialogText('confirm'));
+        confirmButton.addEventListener('click', confirm);
+        actions.appendChild(confirmButton);
+        panel.appendChild(actions);
+        overlay.appendChild(panel);
+        overlay.addEventListener('pointerdown', event => {
+            if(event.target === overlay) cancel();
+        });
+        document.documentElement.appendChild(overlay);
+        document.addEventListener('keydown', onKeyDown, true);
+        requestAnimationFrame(() => (input || confirmButton).focus());
+        return overlay;
+    }
+
+    function showNextStudioDialog(){
+        if(studioDialogActive || !studioDialogQueue.length) return;
+        studioDialogActive = true;
+        const item = studioDialogQueue.shift();
+        ensureStudioDialogRoot(item.request, value => {
+            studioDialogActive = false;
+            item.resolve(value);
+            showNextStudioDialog();
+        });
+    }
+
+    function enqueueStudioDialog(request){
+        return new Promise(resolve => {
+            studioDialogQueue.push({request, resolve});
+            showNextStudioDialog();
+        });
+    }
+
+    window.StudioDialog = {
+        alert(message, options={}) {
+            return enqueueStudioDialog({kind:'alert', message, ...options});
+        },
+        confirm(message, options={}) {
+            return enqueueStudioDialog({kind:'confirm', message, ...options});
+        },
+        prompt(message, options={}) {
+            return enqueueStudioDialog({kind:'prompt', message, ...options});
+        }
+    };
 
     function currentTheme(){
         return localStorage.getItem(KEY) || localStorage.getItem(LEGACY_KEY) || 'light';

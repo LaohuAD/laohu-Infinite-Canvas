@@ -20921,6 +20921,12 @@ async function smartResponseErrorMessage(response, fallback='请求失败'){
         const detail = data.detail ?? data.error ?? data.message;
         if(typeof detail === 'string') return detail || fallback;
         if(Array.isArray(detail)) return detail.map(item => item?.msg || item?.message || String(item)).join('\n') || fallback;
+        if(detail && typeof detail === 'object'){
+            return capabilityUiText(
+                String(detail.message || detail.message_en || fallback),
+                String(detail.message_en || detail.message || fallback)
+            );
+        }
     } catch(_) {}
     try {
         const text = await response.text();

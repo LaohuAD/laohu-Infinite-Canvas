@@ -240,7 +240,7 @@ function removeComfyInstance(index){
 }
 async function saveComfyInstances(){
     const cleaned = comfyInstances.map(s => String(s||'').trim()).filter(Boolean);
-    if(!cleaned.length){ alert('请至少填一个 ComfyUI 后端地址'); return; }
+    if(!cleaned.length){ await StudioDialog.alert('请至少填一个 ComfyUI 后端地址', {type:'warning'}); return; }
     setStatus('保存中...');
     try {
         const res = await fetch('/api/comfyui/instances', {
@@ -255,7 +255,7 @@ async function saveComfyInstances(){
         broadcastComfyUiChange('comfy-instances-changed');
         setStatus('ComfyUI 后端地址已保存');
     } catch(e){
-        alert(e.message || '保存失败');
+        await StudioDialog.alert(e.message || '保存失败', {type:'warning'});
         setStatus('保存失败');
     }
 }
@@ -1184,7 +1184,7 @@ async function pickMiniImage(nodeId){
         try {
             const data = await fetch('/api/upload', { method:'POST', body:form }).then(r=>r.json());
             node.value = data.files?.[0]?.comfy_name || data.files?.[0]?.filename || file.name;
-        } catch(e){ alert(mediaUploadFailedText(node.type)); }
+        } catch(e){ await StudioDialog.alert(mediaUploadFailedText(node.type), {type:'warning'}); }
     };
     input.click();
 }
@@ -1271,7 +1271,7 @@ async function pickImage(fieldId){
             const data = await fetch('/api/upload', { method:'POST', body:form }).then(r=>r.json());
             const filename = data.files?.[0]?.comfy_name || data.files?.[0]?.filename || file.name;
             previewValues[fieldId] = filename;
-        } catch(e){ alert(mediaUploadFailedText(kind)); }
+        } catch(e){ await StudioDialog.alert(mediaUploadFailedText(kind), {type:'warning'}); }
     };
     input.click();
 }
@@ -1296,7 +1296,7 @@ async function onRun(){
         renderWorkspaceView();
         setStatus(tr('comfy.runSuccess'));
     } catch(e){
-        alert(e.message || tr('comfy.runFailed'));
+        await StudioDialog.alert(e.message || tr('comfy.runFailed'), {type:'warning'});
         setStatus(tr('comfy.runFailed'));
     } finally {
         if(btn){ btn.disabled = false; btn.querySelector('span').textContent = tr('comfy.runTest'); }
@@ -1329,10 +1329,10 @@ async function onUpload(event){
         const text = await file.text();
         let workflow;
         try { workflow = JSON.parse(text); }
-        catch { alert(tr('comfy.invalidJson')); return; }
+        catch { await StudioDialog.alert(tr('comfy.invalidJson'), {type:'warning'}); return; }
         const baseName = file.name.replace(/\.json$/i, '');
-        const inputName = prompt(tr('comfy.namePrompt'), baseName);
-        if(!inputName) return;
+        const inputName = await StudioDialog.prompt(tr('comfy.namePrompt'), {defaultValue:baseName, title:tr('comfy.namePrompt')});
+        if(inputName === null || !inputName.trim()) return;
         const data = await fetch('/api/workflows', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
@@ -1344,7 +1344,7 @@ async function onUpload(event){
         await selectWorkflow(result.name);
         setStatus(tr('comfy.uploaded') + result.name);
         broadcastComfyUiChange('workflows-changed');
-    } catch(e){ alert(e.message || tr('comfy.uploadFailed')); }
+    } catch(e){ await StudioDialog.alert(e.message || tr('comfy.uploadFailed'), {type:'warning'}); }
 }
 
 async function onSave(){
@@ -1352,7 +1352,7 @@ async function onSave(){
     // 校验
     for(const f of currentConfig.fields){
         if(!f.name || !f.name.trim()){
-            alert(tf('comfy.saveMissingName', {field:f.input})); return;
+            await StudioDialog.alert(tf('comfy.saveMissingName', {field:f.input}), {type:'warning'}); return;
         }
     }
     setStatus(tr('comfy.saving'));
@@ -1366,12 +1366,12 @@ async function onSave(){
         setStatus(tr('comfy.saved'));
         await loadList();
         broadcastComfyUiChange('workflows-changed');
-    } catch(e){ alert(e.message || tr('comfy.saveFailed')); setStatus(tr('comfy.saveFailed')); }
+    } catch(e){ await StudioDialog.alert(e.message || tr('comfy.saveFailed'), {type:'warning'}); setStatus(tr('comfy.saveFailed')); }
 }
 
 async function onDelete(){
     if(!selectedName || isBuiltin) return;
-    if(!confirm(tf('comfy.deleteConfirm', {name: currentConfig.title || selectedName}))) return;
+    if(!await StudioDialog.confirm(tf('comfy.deleteConfirm', {name: currentConfig.title || selectedName}), {type:'danger'})) return;
     try {
         const res = await fetch(`/api/workflows/${encodeURIComponent(selectedName)}`, { method:'DELETE' });
         if(!res.ok) throw new Error((await res.json()).detail || tr('comfy.deleteFailed'));
@@ -1383,7 +1383,7 @@ async function onDelete(){
         renderWorkspaceView();
         await loadList();
         broadcastComfyUiChange('workflows-changed');
-    } catch(e){ alert(e.message || tr('comfy.deleteFailed')); }
+    } catch(e){ await StudioDialog.alert(e.message || tr('comfy.deleteFailed'), {type:'warning'}); }
 }
 
 window.addEventListener('message', event => {

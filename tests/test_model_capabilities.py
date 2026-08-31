@@ -1121,7 +1121,6 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
         providers = json.loads((ROOT / "data" / "api_providers.json").read_text(encoding="utf-8"))
         registry = ModelCapabilityRegistry(ROOT)
         expected = {
-            "runninghub": (340, 336),
             "modelscope": (7, 7),
             "jimeng": (15, 15),
         }
@@ -1134,6 +1133,23 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
                 provider.get("rh_region", "global"),
             )
             self.assertEqual((report["total"], report["ready"]), counts, provider_id)
+
+        runninghub_raw = json.loads(
+            (ROOT / "data" / "model_capabilities" / "snapshots" / "runninghub-official-public.json").read_text(encoding="utf-8")
+        )
+        runninghub_catalog = {
+            "chat_models": [], "image_models": [], "video_models": [], "audio_models": [],
+        }
+        output_fields = {"image": "image_models", "video": "video_models", "audio": "audio_models"}
+        for item in runninghub_raw.get("models") or []:
+            field = output_fields.get(item.get("output_type"))
+            model_id = item.get("name_en") or item.get("endpoint")
+            if field and model_id:
+                runninghub_catalog[field].append(model_id)
+        runninghub_report = registry.audit_catalog_coverage("runninghub", runninghub_catalog, "cn")
+        runninghub_total = sum(len(values) for values in runninghub_catalog.values())
+        self.assertEqual(runninghub_report["total"], runninghub_total)
+        self.assertGreaterEqual(runninghub_report["ready"], runninghub_total - 4)
 
         codex = next(item for item in providers if item.get("id") == "codex")
         codex_report = registry.audit_catalog_coverage(
@@ -1613,6 +1629,65 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(submitted["url"].endswith("/openapi/v2/rhart-audio/text-to-audio/speech-2.8-hd"))
         self.assertEqual(submitted["json"], {"text": "你好", "voice_id": "Wise_Woman", "speed": 1.2})
         self.assertEqual(result["audios"], ["/api/results/audio-result"])
+
+    async def test_runninghub_audio_reports_compliance_rejection_instead_of_fake_success(self):
+        payload = main.CanvasAudioRequest(
+            prompt="写一首歌",
+            provider_id="runninghub",
+            model="suno-custom-v5",
+        )
+        provider = {
+            "id": "runninghub",
+            "base_url": "https://www.runninghub.cn",
+            "rh_region": "cn",
+        }
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "taskId": "",
+                    "status": "",
+                    "errorCode": "40310",
+                    "errorMessage": "Due to compliance requirements, this model is no longer available on this site.",
+                }
+
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def post(self, *_args, **_kwargs):
+                return Response()
+
+        model_def = {
+            "endpoint": "suno/music",
+            "params": [{"fieldKey": "text", "type": "STRING", "required": True}],
+        }
+        with patch.object(main, "runninghub_model_definition", new=AsyncMock(return_value=model_def)), \
+             patch.object(main, "runninghub_json_headers", return_value={"Authorization": "Bearer test"}), \
+             patch("main.httpx.AsyncClient", return_value=Client()):
+            with self.assertRaises(main.HTTPException) as raised:
+                await main.generate_runninghub_audio(payload, provider, {})
+
+        self.assertEqual(raised.exception.status_code, 400)
+        detail = raised.exception.detail
+        self.assertEqual(detail["errorCode"], "40310")
+        self.assertIn("当前站点", detail["message"])
+        self.assertIn("国际站 Key", detail["message"])
+        self.assertNotIn("生成成功", detail["message"])
+
+    def test_runninghub_standard_media_share_rejection_parser(self):
+        raw = {"errorCode": "49999", "errorMessage": "model rejected"}
+
+        detail = main.runninghub_rejection_detail(raw, "视频")
+
+        self.assertEqual(detail["errorCode"], "49999")
+        self.assertIn("视频请求被拒绝", detail["message"])
 
     async def test_runninghub_audio_adapter_uploads_reference_audio_into_schema_field(self):
         payload = main.CanvasAudioRequest(

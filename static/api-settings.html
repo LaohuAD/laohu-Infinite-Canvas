@@ -127,6 +127,7 @@
                                 <div class="runninghub-hint">
                                     <span class="ms-line"><span data-i18n="api.rhChinaEndpoint">国内地址：</span><span class="inline-code">https://www.runninghub.cn</span></span>
                                     <span class="ms-line"><span data-i18n="api.rhGlobalEndpoint">国际地址：</span><span class="inline-code">https://www.runninghub.ai</span></span>
+                                    <span class="ms-line" data-i18n="api.rhRegionalCatalogHint">模型参数以官方注册表为准；“当前站点目录未列出”只表示公开目录中没有找到，不等于该模型必然不可用。</span>
                                 </div>
                                 <div class="apimart-hint">
                                     <span class="ms-line">国内请求地址：<span class="inline-code">https://apib.ai</span></span>
@@ -515,6 +516,14 @@
                     <button class="picker-cat-tab" data-cat="chat" onclick="selectPickerCat('chat')">LLM <span class="cat-count">0</span></button>
                     <button class="picker-cat-tab" data-cat="video" onclick="selectPickerCat('video')">视频 <span class="cat-count">0</span></button>
                     <button class="picker-cat-tab" data-cat="audio" onclick="selectPickerCat('audio')">音频 <span class="cat-count">0</span></button>
+                </div>
+            </div>
+            <div class="picker-bulk-bar">
+                <div id="pickerAvailabilityGuide" class="picker-availability-guide" hidden data-i18n="api.rhAvailabilityGuide">“建议选择”表示当前站点公开目录已列出；“可能不可用”表示官方接口存在，但当前站点未公开列出。最终能否运行仍取决于账号权限和余额。</div>
+                <div class="picker-bulk-actions" aria-label="批量选择模型">
+                    <button class="picker-bulk-btn picker-bulk-recommended" type="button" onclick="selectPickerModels('recommended')" data-i18n="api.selectRecommendedModels">全选建议</button>
+                    <button class="picker-bulk-btn" type="button" onclick="selectPickerModels('all')" data-i18n="api.selectAllModels">全选全部</button>
+                    <button class="picker-bulk-btn picker-bulk-clear" type="button" onclick="selectPickerModels('clear')" data-i18n="api.clearModelSelection">清空</button>
                 </div>
             </div>
             <div id="pickerList" class="picker-body"></div>

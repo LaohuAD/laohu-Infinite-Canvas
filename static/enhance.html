@@ -683,7 +683,7 @@
                 console.error("Generation Error at step " + debugStep, error);
                 document.getElementById('emptyState').classList.remove('hidden');
                 document.getElementById('loadingState').classList.add('hidden');
-                alert(`Error at ${debugStep}: ${error.message || JSON.stringify(error)}`);
+                await StudioDialog.alert(`Error at ${debugStep}: ${error.message || JSON.stringify(error)}`, {type:'warning'});
             } finally {
                 btn.disabled = false;
                 btn.style.backgroundColor = '';

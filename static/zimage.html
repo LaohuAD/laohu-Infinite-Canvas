@@ -371,7 +371,7 @@
         // 3. 统一渲染入口
         async function handleRender() {
             const prompt = document.getElementById('prompt').value.trim();
-            if (!prompt) return alert("Please enter a prompt");
+            if (!prompt){ await StudioDialog.alert("Please enter a prompt", {type:'warning'}); return; }
 
             if (currentEngine === 'local') {
                 runLocalTask(prompt);
@@ -395,7 +395,7 @@
             } else {
                 apiKey = localStorage.getItem(MS_TOKEN_KEY) || '';
             }
-            if (!apiKey) return alert(tr('studio.modelscopeTokenRequired'));
+            if (!apiKey){ await StudioDialog.alert(tr('studio.modelscopeTokenRequired'), {type:'warning'}); return; }
 
             const btn = document.getElementById('mainGenBtn');
             setLoading(true);
@@ -422,7 +422,7 @@
                 }
             } catch (e) {
                 placeholder.remove();
-                alert(e.message);
+                await StudioDialog.alert(e.message, {type:'warning'});
             } finally {
                 setLoading(false);
             }
@@ -451,7 +451,7 @@
                 if (data.images?.length > 0) renderImageCard(data, true);
             } catch (e) {
                 placeholder.remove();
-                alert("Local render failed");
+                await StudioDialog.alert("Local render failed", {type:'warning'});
             } finally {
                 setLoading(false);
             }

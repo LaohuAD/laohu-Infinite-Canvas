@@ -457,7 +457,7 @@ function renderStorageSettingsModal(){
 async function deleteSelectedStorageFiles(){
     const selected = storageSettingsState.items.filter(item => storageSettingsState.selected.has(item.id));
     if(!selected.length) return;
-    if(!confirm(`确认删除 ${selected.length} 张图片？此操作会删除磁盘文件。`)) return;
+    if(!await StudioDialog.confirm(`确认删除 ${selected.length} 张图片？此操作会删除磁盘文件。`, {type:'danger'})) return;
     const data = await apiJson('/api/storage-files/delete', {
         method:'POST',
         headers:{'Content-Type':'application/json'},

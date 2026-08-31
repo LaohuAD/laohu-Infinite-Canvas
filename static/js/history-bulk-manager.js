@@ -188,7 +188,7 @@
         async function doDelete(){
             const sel = selectedCards();
             if(sel.length === 0) return;
-            if(!confirm(fmt('bulk.deleteConfirm', { n: sel.length }))) return;
+            if(!await StudioDialog.confirm(fmt('bulk.deleteConfirm', { n: sel.length }), {type:'danger'})) return;
 
             deleteBtn.disabled = true;
             deleteLabel.textContent = tr('bulk.deleting');
@@ -224,7 +224,7 @@
             }
 
             const failed = results.filter(r => r.status === 'rejected').length;
-            if(failed > 0) alert(failed + ' / ' + sel.length + ' ✗');
+            if(failed > 0) await StudioDialog.alert(failed + ' / ' + sel.length + ' ✗', {type:'warning'});
 
             refreshLabels();
             if(selectedCards().length === 0 && cards().length === 0){ exit(); }

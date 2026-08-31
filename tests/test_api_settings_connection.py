@@ -70,6 +70,26 @@ class OpenAICompatibleFixtureHandler(BaseHTTPRequestHandler):
 
 
 class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
+    def test_local_server_auto_reload_is_enabled_by_default_and_can_be_disabled(self):
+        self.assertTrue(main.local_auto_reload_enabled({}))
+        for value in ("0", "false", "FALSE", "no", "off"):
+            self.assertFalse(main.local_auto_reload_enabled({"INFINITE_CANVAS_AUTO_RELOAD": value}))
+        self.assertTrue(main.local_auto_reload_enabled({"INFINITE_CANVAS_AUTO_RELOAD": "1"}))
+
+    def test_local_server_reload_configuration_watches_python_but_not_runtime_data(self):
+        options = main.local_server_uvicorn_options(env={})
+
+        self.assertEqual(options["app"], "main:app")
+        self.assertTrue(options["kwargs"]["reload"])
+        self.assertEqual(options["kwargs"]["reload_includes"], ["*.py"])
+        excluded = "\n".join(options["kwargs"]["reload_excludes"])
+        for directory in (".venv", "python", ".git", "assets", "data", "cache", "backups", "output"):
+            self.assertIn(directory, excluded)
+
+        disabled = main.local_server_uvicorn_options(env={"INFINITE_CANVAS_AUTO_RELOAD": "0"})
+        self.assertEqual(disabled["app"], "main:app")
+        self.assertFalse(disabled["kwargs"]["reload"])
+
     def test_canvas_creation_is_smart_only(self):
         request = main.CanvasCreateRequest()
         self.assertEqual(request.kind, "smart")
@@ -523,10 +543,13 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
             {"id": "rh-image", "output_type": "image"},
             {"id": "rh-video", "output_type": "video"},
             {"id": "rh-audio", "output_type": "audio"},
+            {"id": "rh-chat", "output_type": "chat"},
         ])
 
         self.assertIn("rh-audio", payload["audio_models"])
         self.assertIn("rh-audio", payload["all"])
+        self.assertIn("rh-chat", payload["chat_models"])
+        self.assertIn("rh-chat", payload["all"])
 
     def test_api_settings_new_provider_contract_includes_audio_models(self):
         script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
@@ -639,6 +662,19 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(apply_block.index("const saved = await saveProviders();"), apply_block.index("closeModelPicker();"))
         self.assertIn("if(saved){", apply_block)
         self.assertIn("Object.assign(item, previousModels);", apply_block)
+
+    def test_model_picker_uses_actionable_availability_copy_and_bulk_controls(self):
+        html = (ROOT / "static/api-settings.html").read_text(encoding="utf-8")
+        script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
+        i18n = (ROOT / "static/js/i18n/api-settings.js").read_text(encoding="utf-8")
+
+        self.assertIn('onclick="selectPickerModels(\'recommended\')"', html)
+        self.assertIn('onclick="selectPickerModels(\'all\')"', html)
+        self.assertIn('onclick="selectPickerModels(\'clear\')"', html)
+        self.assertIn('zh: "建议选择"', i18n)
+        self.assertIn('zh: "可能不可用"', i18n)
+        self.assertIn("api.rhModelConfirmedHint", script)
+        self.assertIn("api.rhModelUnverifiedHint", script)
 
     def test_connection_check_keeps_complete_fetched_model_metadata(self):
         script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
@@ -888,15 +924,199 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("applyCliProtocolDefaults(item, preset.protocol, created)", script)
         self.assertNotIn("if(isCliProtocol) applyCliProtocolDefaults(item, item.protocol);", script)
 
-    def test_runninghub_supports_both_regions(self):
+    def test_runninghub_uses_official_registry_and_region_catalog_urls(self):
         self.assertEqual(
-            main.upstream_models_url("https://www.runninghub.cn", "runninghub"),
-            "https://www.runninghub.cn/openapi/v2/models",
+            main.RUNNINGHUB_MODEL_REGISTRY_URL,
+            "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/main/developer-kit/model-registry.public.json",
         )
         self.assertEqual(
-            main.upstream_models_url("https://www.runninghub.ai", "runninghub"),
-            "https://www.runninghub.ai/openapi/v2/models",
+            main.runninghub_public_catalog_url("cn"),
+            "https://www.runninghub.cn/call-api/search-api/standard-model",
         )
+        self.assertEqual(
+            main.runninghub_public_catalog_url("global"),
+            "https://www.runninghub.ai/call-api/search-api/standard-model",
+        )
+
+    def test_runninghub_official_registry_parser_rejects_non_schema_model_lists(self):
+        official = main.runninghub_official_registry_items({
+            "version": "public-test",
+            "models": [{
+                "name_en": "Demo Image",
+                "endpoint": "demo/text-to-image",
+                "output_type": "image",
+                "params": [{"fieldKey": "prompt", "type": "STRING"}],
+            }],
+        })
+        llm_only = main.runninghub_official_registry_items({
+            "data": [{"id": "gpt-test"}],
+        })
+
+        self.assertEqual([item["endpoint"] for item in official], ["demo/text-to-image"])
+        self.assertEqual(llm_only, [])
+
+    def test_runninghub_public_catalog_parser_reads_only_official_ssr_records(self):
+        values = [
+            ["ShallowReactive", 1],
+            {"data": 2},
+            ["ShallowReactive", 3],
+            {'api-list-search-STANDARD_MODEL-{"pageNum":1}': 4},
+            {"page": 5},
+            {"records": 6},
+            [7, 9],
+            {"name": 8},
+            "demo/text-to-image",
+            {"name": 10},
+            "Demo Video",
+        ]
+        html = (
+            '<script type="application/json" data-nuxt-data="nuxt-app" '
+            f'id="__NUXT_DATA__">{json.dumps(values)}</script>'
+        )
+
+        self.assertEqual(
+            main.runninghub_public_catalog_names_from_html(html),
+            {"demo/text-to-image", "Demo Video"},
+        )
+        self.assertEqual(main.runninghub_public_catalog_names_from_html("<html></html>"), set())
+
+    def test_runninghub_region_availability_does_not_guess_unlisted_models(self):
+        items = [
+            {
+                "name_en": "Demo Image",
+                "endpoint": "demo/text-to-image",
+                "output_type": "image",
+                "params": [],
+            },
+            {
+                "name_en": "Hidden Video",
+                "endpoint": "hidden/text-to-video",
+                "output_type": "video",
+                "params": [],
+            },
+        ]
+
+        availability = main.runninghub_region_availability(items, {"demo/text-to-image"})
+
+        self.assertEqual(availability["Demo Image"], "confirmed")
+        self.assertEqual(availability["Hidden Video"], "unverified")
+
+    def test_runninghub_llm_models_url_follows_selected_region(self):
+        self.assertEqual(
+            main.runninghub_llm_models_url({"rh_region": "cn"}),
+            "https://llm.runninghub.cn/v1/models",
+        )
+        self.assertEqual(
+            main.runninghub_llm_models_url({"rh_region": "global"}),
+            "https://llm.runninghub.ai/v1/models",
+        )
+
+    async def test_runninghub_public_standard_catalog_does_not_require_llm_key(self):
+        with patch.object(main, "runninghub_api_headers", side_effect=main.HTTPException(status_code=400, detail="missing key")):
+            models, meta = await main.fetch_runninghub_llm_models({"rh_region": "cn"})
+
+        self.assertEqual(models, [])
+        self.assertEqual(meta["count"], 0)
+        self.assertIn("missing key", " ".join(meta["errors"]))
+
+    def test_runninghub_production_source_does_not_use_undocumented_models_endpoint(self):
+        source = (ROOT / "main.py").read_text(encoding="utf-8")
+
+        self.assertNotIn('runninghub_openapi_url(provider, "models")', source)
+        self.assertNotIn('"/openapi/v2/models" if protocol == "runninghub"', source)
+
+    async def test_runninghub_registry_uses_verified_snapshot_when_remote_is_unavailable(self):
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def get(self, url, **_kwargs):
+                if url == main.RUNNINGHUB_MODEL_REGISTRY_URL:
+                    raise httpx.ConnectError("offline")
+                return httpx.Response(503, text="offline")
+
+        with patch.object(main.httpx, "AsyncClient", return_value=FakeClient()):
+            items, meta = await main.fetch_runninghub_model_registry(
+                {"rh_region": "cn"},
+                include_fallback=True,
+                include_meta=True,
+            )
+
+        self.assertGreaterEqual(meta["registry_count"], 300)
+        self.assertEqual(meta["source"], "official-snapshot")
+        self.assertEqual(meta["registry_version"], "public-2026-04-29")
+        self.assertTrue(any(item.get("params") for item in items))
+
+    async def test_runninghub_llm_only_response_never_replaces_standard_registry(self):
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def get(self, url, **_kwargs):
+                if "llm.runninghub" in url:
+                    return httpx.Response(200, json={"data": [{"id": "gpt-only"}]})
+                return httpx.Response(200, json={"data": [{"id": "not-a-standard-registry"}]})
+
+        with patch.object(main, "RUNNINGHUB_OFFICIAL_REGISTRY_SNAPSHOT_FILE", str(ROOT / "missing-runninghub-registry.json")), patch.object(main.httpx, "AsyncClient", return_value=FakeClient()):
+            with self.assertRaises(main.HTTPException) as raised:
+                await main.fetch_runninghub_model_registry(
+                    {"rh_region": "cn"},
+                    include_fallback=False,
+                    include_meta=True,
+                )
+
+        self.assertEqual(raised.exception.status_code, 502)
+
+    async def test_runninghub_payload_keeps_region_status_separate_from_schema(self):
+        registry = [
+            {"name_en": "Public Image", "endpoint": "public/text-to-image", "output_type": "image", "params": []},
+            {"name_en": "Hidden Video", "endpoint": "hidden/text-to-video", "output_type": "video", "params": []},
+            {"name_en": "String Utility", "endpoint": "utility/string", "output_type": "string", "params": []},
+            {"name_en": "Region LLM", "endpoint": "region-llm", "output_type": "chat"},
+        ]
+        meta = {
+            "source": "official-snapshot",
+            "registry_count": 3,
+            "registry_version": "public-test",
+            "llm_count": 1,
+        }
+        with patch.object(main, "fetch_runninghub_model_registry", new=AsyncMock(return_value=(registry, meta))), patch.object(main, "fetch_runninghub_public_catalog_names", new=AsyncMock(return_value=({"public/text-to-image"}, {"source": "official-site", "count": 1, "error": ""}))), patch.object(main, "save_runninghub_registry_snapshot"):
+            payload = await main.runninghub_models_payload({"rh_region": "cn"})
+
+        self.assertEqual(payload["region"], "cn")
+        self.assertEqual(payload["model_availability"]["Public Image"], "confirmed")
+        self.assertEqual(payload["model_availability"]["Hidden Video"], "unverified")
+        self.assertEqual(payload["model_availability"]["Region LLM"], "confirmed")
+        self.assertEqual(payload["raw"]["confirmed_count"], 2)
+        self.assertNotIn("String Utility", payload["model_availability"])
+
+    async def test_runninghub_generation_definition_does_not_wait_for_llm_catalog(self):
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def get(self, _url, **_kwargs):
+                return httpx.Response(503, text="offline")
+
+        llm_fetch = AsyncMock(return_value=([], {}))
+        with patch.object(main, "fetch_runninghub_model_registry", wraps=main.fetch_runninghub_model_registry) as registry_fetch, patch.object(main, "fetch_runninghub_llm_models", new=llm_fetch), patch.object(main.httpx, "AsyncClient", return_value=FakeClient()):
+            definition = await main.runninghub_model_definition(
+                {"rh_region": "cn"},
+                "qwen-image-3.0-pro/text-to-image",
+            )
+
+        self.assertEqual(definition["endpoint"], "alibaba/qwen-image-3.0-pro/text-to-image")
+        self.assertEqual(llm_fetch.await_count, 0)
+        self.assertFalse(registry_fetch.await_args.kwargs["include_llm"])
 
     def test_runninghub_payload_can_read_saved_wallet_key(self):
         payload = main.TestConnectionPayload(
@@ -938,6 +1158,20 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(global_provider["rh_apps"][0]["id"], "global-app")
         self.assertEqual(main.runninghub_provider_for_region(provider, "cn")["rh_apps"][0]["id"], "cn-app")
 
+    def test_runninghub_region_forces_its_official_base_url(self):
+        provider = main.normalize_provider({
+            "id": "runninghub",
+            "rh_region": "cn",
+            "base_url": "https://www.runninghub.ai",
+            "rh_regions": {
+                "cn": {"base_url": "https://www.runninghub.ai"},
+                "global": {"base_url": "https://www.runninghub.cn"},
+            },
+        })
+
+        self.assertEqual(main.runninghub_provider_for_region(provider, "cn")["base_url"], "https://www.runninghub.cn")
+        self.assertEqual(main.runninghub_provider_for_region(provider, "global")["base_url"], "https://www.runninghub.ai")
+
     def test_canvas_exposes_only_selected_runninghub_region(self):
         provider = main.normalize_provider({
             "id": "runninghub",
@@ -963,6 +1197,49 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(main.runninghub_api_key_env("global"), "RUNNINGHUB_GLOBAL_API_KEY")
         self.assertEqual(main.runninghub_wallet_key_env("global"), "RUNNINGHUB_GLOBAL_WALLET_API_KEY")
 
+    def test_global_legacy_key_is_ignored_when_it_is_the_saved_cn_key(self):
+        values = {
+            "RUNNINGHUB_API_KEY": "same-cn-key",
+            "RUNNINGHUB_CN_API_KEY": "same-cn-key",
+        }
+
+        with patch.object(main.os, "getenv", side_effect=lambda key, default="": values.get(key, default)), \
+             patch.object(main, "read_api_env_value", side_effect=lambda key: values.get(key, "")):
+            self.assertEqual(main.runninghub_region_key_value("global"), "")
+            self.assertEqual(main.runninghub_region_key_value("cn"), "same-cn-key")
+
+    def test_runninghub_headers_use_the_key_for_the_explicit_provider_region(self):
+        def region_key(region="global", use_wallet=False):
+            return f"{region}-{'wallet' if use_wallet else 'free'}-key"
+
+        with patch.object(main, "runninghub_region_key_value", side_effect=region_key):
+            cn_headers = main.runninghub_app_headers(
+                provider={"id": "runninghub", "rh_region": "cn", "base_url": "https://www.runninghub.cn"}
+            )
+            global_headers = main.runninghub_app_headers(
+                provider={"id": "runninghub", "rh_region": "global", "base_url": "https://www.runninghub.ai"}
+            )
+
+        self.assertEqual(cn_headers["Host"], "www.runninghub.cn")
+        self.assertEqual(cn_headers["Authorization"], "Bearer cn-free-key")
+        self.assertEqual(global_headers["Host"], "www.runninghub.ai")
+        self.assertEqual(global_headers["Authorization"], "Bearer global-free-key")
+
+    def test_runninghub_requests_keep_explicit_provider_when_building_headers(self):
+        source = (ROOT / "main.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("runninghub_app_headers(False, use_wallet)", source)
+        self.assertNotIn("runninghub_app_headers(True, use_wallet)", source)
+        self.assertNotIn("headers=runninghub_app_headers(True),", source)
+        self.assertIn(
+            "runninghub_app_headers(False, use_wallet, provider=provider, api_key=api_key)",
+            source,
+        )
+        self.assertIn(
+            "runninghub_app_headers(True, use_wallet, provider=provider, api_key=api_key)",
+            source,
+        )
+
     def test_api_settings_uses_safe_response_reader_for_connection_requests(self):
         script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
 
@@ -980,6 +1257,7 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(host, html)
         self.assertIn('id="rhRegionInput"', html)
         self.assertIn("api.rhRegionLabel", html)
+        self.assertIn("baseInput.disabled = isRunningHub || isAiMoney || isAgnes;", script)
 
     def test_runninghub_onboarding_requires_region_before_key_links(self):
         script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
@@ -1111,6 +1389,24 @@ class ApiSettingsCanvasEndToEndTests(unittest.IsolatedAsyncioTestCase):
         stored_provider = next(item for item in stored if item["id"] == "runninghub")
         self.assertIn(app_id, [item["id"] for item in stored_provider["rh_apps"]])
         self.assertIn(app_id, [item["id"] for item in stored_provider["rh_regions"]["global"]["rh_apps"]])
+
+    async def test_saving_cn_runninghub_key_does_not_overwrite_legacy_global_key(self):
+        provider = main.ApiProviderPayload(
+            id="runninghub",
+            name="RunningHub",
+            base_url="https://www.runninghub.cn",
+            protocol="runninghub",
+            rh_region="cn",
+            api_key="cn-only-key",
+        )
+
+        with patch.object(main, "update_env_values") as update_env:
+            await main.save_providers([provider])
+
+        updates = update_env.call_args.args[0]
+        self.assertEqual(updates["RUNNINGHUB_CN_API_KEY"], "cn-only-key")
+        self.assertNotIn("RUNNINGHUB_API_KEY", updates)
+        self.assertNotIn("RUNNINGHUB_GLOBAL_API_KEY", updates)
 
     async def test_saved_openai_provider_requires_profiles_before_canvas_generation(self):
         provider = main.ApiProviderPayload(
