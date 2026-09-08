@@ -166,7 +166,7 @@ python\python.exe tools\data_manager.py restore "backups\备份文件.zip"
 - 画布只负责组织和执行，生成结果仍然需要创作者自己判断、筛选和修改。
 - `data/`、素材、工作流、API 配置和备份默认属于本地数据，不应上传到公开仓库。
 
-## 这三个项目，我自己就在一线用
+## 老胡的创作项目
 
 我做这些项目，最开始不是为了发到 GitHub，也不是为了包装一套课程。是因为我自己真的要写歌、做图、做视频、跑模型，工具不好用，第一个浪费时间和调用费的人就是我。它们先是我给自己造的生产工具，跑过真实作品、吃过真实的亏、改过真实的问题，后来才顺手分享出来给大家用。
 
@@ -176,7 +176,11 @@ python\python.exe tools\data_manager.py restore "backups\备份文件.zip"
 | [老胡 AI 视觉](https://github.com/LaohuAD/laohu-ai-visual) | 把一个灵感一路推进成故事、剧本、视觉资产、分镜、视频提示词、封面和复盘，少走大量返工弯路 |
 | [老胡音乐](https://github.com/LaohuAD/laohu-music) | 从选题、人物和副歌核心句开始，把歌词、旋律、声音、歌名和封面做成一首真正能继续打磨的歌 |
 
-三个项目可以单独用，也可以直接接成一条生产线：音乐项目做歌，视觉项目做故事和镜头，无限画布负责调用模型、管理素材和保存结果。对我来说，这不是三个展示项目，而是一套真的拿来干活的工作台。
+| [老胡的审美起源](https://github.com/LaohuAD/laohu-taste-genesis) | 把人的判断与反馈整理成可执行、可验证的专业 Agent 能力 |
+| [CapMotion](https://github.com/LaohuAD/laohu-CapMotion) | 基于 Cap 的录屏、口播剪辑、字幕与讲解动画工作台 |
+| [Luna 音乐创作体系](https://github.com/LaohuAD/luna-music-creative-system) | AI 音乐创作的方法资料，可与当前音乐项目对照阅读 |
+
+其中音乐、视觉与无限画布可以单独使用，也可以配合：音乐项目做歌，视觉项目做故事和镜头，无限画布负责调用模型、管理素材和保存结果。审美起源用于建设 Agent 能力，CapMotion 用于录屏与剪辑，Luna 音乐创作体系提供方法资料；不需要为了使用一个项目安装全部项目。
 
 ## 我自己在用，也真心希望你用的模型入口
 
@@ -211,13 +215,19 @@ API 设置会分开保存国内站和国际站的 Key、AI 应用与已启用模
 
 ## 作者与账号
 
+老胡的统一入口：[个人主页](https://lao-hu.com) · [教程与资料](https://lao-hu.com/learn/) · [全部开源项目](https://lao-hu.com/projects/) · [公众号与联系方式](https://lao-hu.com/#contact) · [模型小屋](https://api.lao-hu.com)。
+
+教程入口汇总文字资料和配套视频；公众号入口可在主页查看。模型小屋是独立的模型服务，不是使用这些开源项目的必购项，具体接入与费用以各项目说明和服务页面为准。
+
 项目由老胡维护。更多 AI 音乐、视觉和内容创作实践可以在 [Bilibili](https://space.bilibili.com/13497214)、[小红书](https://xhslink.com/m/AZo7UbSx1ef) 和 [抖音](https://v.douyin.com/usGF0Kz_Yic/) 查看。
 
 ## 授权与来源
 
 本仓库基于原 Infinite-Canvas 项目持续重构，原始作者和历史贡献保留在 Git 提交记录中；当前的智能画布、模型能力档案和维护文档由老胡继续维护。
 
-本项目禁止未经授权把封装后的软件直接修改成商业产品。基于代码二次开发的软件必须保持开源并注明来源作者。详细条款见 [LICENSE](LICENSE)。
+老胡有权独立授权的原创部分采用：**代码：MIT License；规则、Skill、提示词、文档和案例：CC BY-SA 4.0**。详见 [原创部分授权范围](LICENSE-LAOHU.md)。
+
+上游代码及受其约束的衍生部分仍遵守 [原许可证](LICENSE)，其中包含商业封装限制、开源与署名要求；本次调整不把整个无限画布改成 MIT，也不消除这些限制。第三方材料保留原许可。
 
 ## 界面预览
 
