@@ -1,26 +1,26 @@
 {
-  "version": "2026.08.28",
-  "updated_at": "2026-08-28T00:00:00+08:00",
+  "version": "2026.09.08",
+  "updated_at": "2026-09-08T00:00:00+08:00",
   "items": [
     {
       "type": "feature",
-      "text": "视频模型适配扩展：即梦 CLI 新增 Seedance 2.5 及完整运行模式，AI MONEY 新增 Wan 3.0 Prime 四个模型和 FlowMusic 能力档案。"
+      "text": "智能画布新增共享视频导演台骨架，支持普通 Clip、连接 Clip、可缩放时间轴、素材引用与分片下载。"
     },
     {
       "type": "feature",
-      "text": "智能画布新增图像对比工具节点，并完善空格键拖动画布、视频中央播放控件和对比分割线交互。"
+      "text": "RunningHub 按国内站和国际站分层同步官方模型目录，补齐可用性标识、批量选择和区域密钥隔离。"
     },
     {
       "type": "improvement",
-      "text": "GPT CLI 现在跟随当前 Codex 登录和模型配置，并保留用户主动管理的画布模型白名单。"
+      "text": "导演台支持个性化 RunningHub AI 应用来源，Clip 参数按官方 Schema 动态映射，并改善时长拖拽和面板排版。"
     },
     {
       "type": "fix",
-      "text": "静态资源版本改为响应时动态生成，刷新后可立即获取新脚本，启动服务不再改写项目 HTML 文件。"
+      "text": "页面业务提示统一迁移到项目弹窗，RunningHub 合规下架等业务错误现在会返回可理解的具体原因。"
     },
     {
-      "type": "security",
-      "text": "FlowMusic 分轨文件下载增加公网地址校验、DNS 绑定、ZIP 格式校验和下载大小上限。"
+      "type": "improvement",
+      "text": "本地服务增强代码变更检测与静态资源刷新机制，降低更新后浏览器仍读取旧页面的概率。"
     }
   ]
 }
