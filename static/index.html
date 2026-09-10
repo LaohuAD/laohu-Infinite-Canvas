@@ -1648,6 +1648,12 @@
                     <p id="project-update-notes-empty" class="update-notes-empty" hidden>暂未获取到更新说明。</p>
                 </div>
                 <div id="update-source-list" class="update-source-list">
+                    <button id="update-source-r2" class="update-source-card" type="button" data-update-source="r2" onclick="setUpdateSource('r2')">
+                        <div class="update-source-head"><div class="update-source-title">
+                            <strong id="r2-update-title">老胡更新服务 · Cloudflare</strong>
+                            <span id="r2-update-description">完整发布包，下载后校验，再备份安装。</span>
+                        </div></div><div class="connectivity-list" data-connectivity-source="r2"></div>
+                    </button>
                     <button id="update-source-github" class="update-source-card" type="button" data-update-source="github" onclick="setUpdateSource('github')">
                         <div class="update-source-head">
                             <div class="update-source-title">
@@ -1663,7 +1669,7 @@
                         </div>
                         <div class="connectivity-list" data-connectivity-source="github"></div>
                     </button>
-                    <button id="update-source-modelscope" class="update-source-card" type="button" data-update-source="modelscope" onclick="setUpdateSource('modelscope')">
+                    <button id="update-source-modelscope" style="display:none" class="update-source-card" type="button" data-update-source="modelscope" disabled>
                         <div class="update-source-head">
                             <div class="update-source-title">
                                 <strong>ModelScope 下载源</strong>
@@ -1734,7 +1740,7 @@
         let updateConnectivityResult = null;
         let projectUpdateRunning = false;
         let projectUpdateAbort = null;  // 当前更新请求的 AbortController，便于用户中途取消
-        let updateSource = localStorage.getItem('studio_update_source') || 'github';
+        let updateSource = localStorage.getItem('studio_update_source') === 'github' ? 'github' : 'r2';
         let projectUpdateNotes = null;
 
         function setSidebarPinned(pinned, options = {}) {
@@ -2177,11 +2183,14 @@
         }
 
         function updateSourceLabel(source = updateSource) {
+            if(source === 'r2') return updateUiText('老胡更新服务 · Cloudflare', 'Laohu updates · Cloudflare');
             return source === 'modelscope' ? 'ModelScope' : 'GitHub';
         }
 
         function setUpdateSource(source) {
-            updateSource = source === 'modelscope' ? 'modelscope' : 'github';
+            updateSource = source === 'r2' ? 'r2' : 'github';
+            document.getElementById('r2-update-title').textContent = updateUiText('老胡更新服务 · Cloudflare', 'Laohu updates · Cloudflare');
+            document.getElementById('r2-update-description').textContent = updateUiText('完整发布包，下载后校验，再备份安装。', 'Complete release package. Verified and backed up before installation.');
             localStorage.setItem('studio_update_source', updateSource);
             refreshProjectUpdateModalText();
         }
@@ -2199,16 +2208,15 @@
 
         function bestUpdateSourceFromConnectivity(data) {
             const results = data?.results || [];
+            if(sourceConnectivityStats('r2', results).ok) return 'r2';
             const github = sourceConnectivityStats('github', results);
-            const ms = sourceConnectivityStats('modelscope', results);
-            if(github.ok && ms.ok) return ms.avg < github.avg ? 'modelscope' : 'github';
-            if(ms.ok) return 'modelscope';
             if(github.ok) return 'github';
             return updateSource;
         }
 
         function updateTargetLabel(name) {
             const labels = {
+                'Cloudflare 发布清单': ['Cloudflare 发布清单', 'Cloudflare release manifest'],
                 'GitHub 更新列表': ['GitHub 更新列表', 'GitHub update API'],
                 'GitHub 版本文件': ['GitHub 版本文件', 'GitHub version file'],
                 'GitHub 主页': ['GitHub 主页', 'GitHub home page'],
@@ -2250,9 +2258,7 @@
                 { name:'GitHub 更新列表', url:github.tree_url || appInfo.tree_url || 'https://api.github.com/repos/LaohuAD/laohu-Infinite-Canvas/git/trees/main?recursive=1', source:'github', required:true },
                 { name:'GitHub 版本文件', url:github.version_url || appInfo.version_url || 'https://raw.githubusercontent.com/LaohuAD/laohu-Infinite-Canvas/main/VERSION', source:'github', required:true },
                 { name:'GitHub 主页', url:github.repo_url || appInfo.repo_url || PROJECT_URL, source:'github' },
-                { name:'ModelScope 版本文件', url:ms.version_url || 'https://www.modelscope.cn/api/v1/studio/Daniel8152/Infinite-Canvas/repo?Revision=master&FilePath=VERSION', source:'modelscope', required:true },
-                { name:'ModelScope 空间页面', url:ms.repo_url || 'https://modelscope.cn/studios/Daniel8152/Infinite-Canvas', source:'modelscope' },
-                { name:'ModelScope 主页', url:'https://modelscope.cn/', source:'modelscope' },
+                { name:'Cloudflare 发布清单', url:'https://infinitecanvas.lao-hu.com/updates/latest.json', source:'r2', required:true },
                 { name:'Google 连通性', url:'https://www.google.com/generate_204', source:'reference' },
             ];
         }
@@ -2290,10 +2296,12 @@
             });
             };
             renderInto(document.querySelector('[data-connectivity-source="github"]'), 'github');
-            renderInto(document.querySelector('[data-connectivity-source="modelscope"]'), 'modelscope');
+            renderInto(document.querySelector('[data-connectivity-source="r2"]'), 'r2');
         }
 
         function refreshProjectUpdateModalText() {
+            document.getElementById('r2-update-title').textContent = updateUiText('老胡更新服务 · Cloudflare', 'Laohu updates · Cloudflare');
+            document.getElementById('r2-update-description').textContent = updateUiText('完整发布包，下载后校验，再备份安装。', 'Complete release package. Verified and backed up before installation.');
             const gitBtn = document.getElementById('github-entry-btn');
             const remoteVersion = gitBtn?.dataset.remoteVersion || '';
             const localVersion = gitBtn?.dataset.localVersion || appInfo.version || '';
@@ -2326,8 +2334,8 @@
                 }
             });
             if(copyEl) copyEl.textContent = updateUiText(
-                `将从 ${sourceName} 更新 main.py、VERSION 和 static 文件。更新前会自动备份，更新完成后后端会自动重启。当前 ${versionLabel(localVersion)}，最新 ${versionLabel(remoteVersion || localVersion)}。`,
-                `This updates main.py, VERSION, and static files from ${sourceName}. A backup is created first, then the backend restarts automatically. Current ${versionLabel(localVersion)}, latest ${versionLabel(remoteVersion || localVersion)}.`
+                `将从 ${sourceName} 更新程序、界面和模型能力档案，不覆盖用户密钥、配置或素材。先备份，再安装并重启。当前 ${versionLabel(localVersion)}，最新 ${versionLabel(remoteVersion || localVersion)}。`,
+                `Updates program files, UI and model capabilities from ${sourceName}, preserving your keys, settings and media. Backs up before installation and restart. Current ${versionLabel(localVersion)}, latest ${versionLabel(remoteVersion || localVersion)}.`
             );
             if(testText) testText.textContent = updateConnectivityResult ? updateUiText('重新测试', 'Retest') : updateUiText('测试连通性', 'Test connectivity');
             if(cancelText) cancelText.textContent = updateUiText('取消', 'Cancel');
@@ -2341,8 +2349,8 @@
                     'warn',
                     updateUiText('建议先测试连通性', 'Connectivity test recommended'),
                     updateUiText(
-                        '测试会同时测速 GitHub 和 ModelScope。你可以根据结果切换下载源。',
-                        'The test checks both GitHub and ModelScope. Choose the faster reachable source before updating.'
+                        '优先使用 Cloudflare 完整发布包；尚未发布时可使用自己的 GitHub 仓库。',
+                        'Prefer the complete Cloudflare release. Your GitHub repository is available before the first release.'
                     )
                 );
             } else if(updateConnectivityResult.backend_missing) {
@@ -2410,7 +2418,7 @@
 
         function computeConnectivitySources(results) {
             const out = {};
-            for(const source of ['github', 'modelscope']) {
+            for(const source of ['github', 'r2']) {
                 const reqAll = (results || []).filter(it => it.source === source && it.required);
                 out[source] = {
                     ok: reqAll.length > 0 && reqAll.every(it => it.ok),
@@ -2686,7 +2694,6 @@
                     const sources = appInfo.sources || {};
                     const candidates = [
                         {source:'github', url:sources.github?.version_url || appInfo.version_url || ''},
-                        {source:'modelscope', url:sources.modelscope?.version_url || ''},
                     ].filter(item => item.url);
                     for(const item of candidates) {
                         try {
@@ -2698,7 +2705,7 @@
                 }
                 const hasUpdate = !!(current && best?.version && compareVersions(best.version, current) > 0);
                 if(hasUpdate) {
-                    if(best.source === 'modelscope') setUpdateSource('modelscope');
+                    setUpdateSource(best.source);
                     setProjectUpdateNotes(best.update_notes || null);
                     showUpdateNotice(current, best.version);
                 }
@@ -2708,7 +2715,7 @@
                     } else if(reachable) {
                         await StudioDialog.alert(isEn ? `You are on the latest version (${versionLabel(current)}).` : `已是最新版本（${versionLabel(current)}）。`, {type:'info'});
                     } else {
-                        await StudioDialog.alert(isEn ? 'Could not reach GitHub or ModelScope. Check your network/proxy and try again.' : '无法连接 GitHub 或 ModelScope 更新源，请检查网络或代理后重试。', {type:'warning'});
+                        await StudioDialog.alert(isEn ? 'Could not reach the update service. Check your network and try again.' : '无法连接更新服务，请检查网络后重试。', {type:'warning'});
                     }
                 }
             } catch(e) {

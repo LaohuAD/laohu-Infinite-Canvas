@@ -83,9 +83,9 @@ const recommendApiList = document.getElementById('recommendApiList');
 const VOLCENGINE_DEFAULT_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
 const VOLCENGINE_DEFAULT_PROJECT_NAME = 'default';
 const VOLCENGINE_DEFAULT_REGION = 'cn-beijing';
-const AI_MONEY_DEFAULT_BASE_URL = 'https://api.laohuaimoney.com';
-const AI_MONEY_REGISTER_URL = 'https://api.laohuaimoney.com/sign-up?aff=460d';
-const AI_MONEY_DOCS_URL = 'https://api.laohuaimoney.com/docs/';
+const AI_MONEY_DEFAULT_BASE_URL = 'https://api.lao-hu.com';
+const AI_MONEY_REGISTER_URL = 'https://api.lao-hu.com/sign-up?aff=460d';
+const AI_MONEY_HOME_URL = 'https://api.lao-hu.com/';
 const AGNES_DEFAULT_BASE_URL = 'https://apihub.agnes-ai.com/v1';
 const AGNES_REGISTER_URL = 'https://platform.agnes-ai.com/settings/apiKeys';
 const MS_BUILTIN_IMAGE_MODELS = [
@@ -289,7 +289,7 @@ const ONBOARDING_GUIDES = {
         primaryLabelKey:'api.aiMoneyRegister',
         primaryUrl:AI_MONEY_REGISTER_URL,
         secondaryLabelKey:'api.aiMoneyDocs',
-        secondaryUrl:AI_MONEY_DOCS_URL
+        secondaryUrl:AI_MONEY_HOME_URL
     },
     agnes:{
         titleKey:'api.agnesOnboardingTitle',
@@ -1010,12 +1010,12 @@ function renderProviderOnboarding(item){
                     <div class="onboarding-title">${escapeHtml(tr(guide.titleKey))}</div>
                     <div class="onboarding-desc">${escapeHtml(tr(guide.descKey))}</div>
                 </div>
-                <span class="onboarding-badge">AI MONEY</span>
+                <span class="onboarding-badge">laohu</span>
             </div>
             <div class="onboarding-step-panel onboarding-rh-linear-panel onboarding-ai-money-panel">
                 <div class="onboarding-rh-linear-row">
                     <div class="onboarding-rh-source-group">
-                        <div class="onboarding-rh-source-label">AI MONEY API</div>
+                        <div class="onboarding-rh-source-label">laohu API</div>
                         <div class="onboarding-key-actions onboarding-rh-key-actions">
                             <a class="onboarding-key-btn" href="${escapeAttr(guide.primaryUrl)}" target="_blank" rel="noopener noreferrer"><i data-lucide="user-plus" class="w-3.5 h-3.5"></i><span>${escapeHtml(tr(guide.primaryLabelKey))}</span></a>
                             <a class="onboarding-key-btn" href="${escapeAttr(guide.secondaryUrl)}" target="_blank" rel="noopener noreferrer"><i data-lucide="book-open" class="w-3.5 h-3.5"></i><span>${escapeHtml(tr(guide.secondaryLabelKey))}</span></a>
@@ -1120,7 +1120,7 @@ function applyProviderOnboardingDefaults(id){
         item.volcengine_project_name = item.volcengine_project_name || VOLCENGINE_DEFAULT_PROJECT_NAME;
         item.volcengine_region = item.volcengine_region || VOLCENGINE_DEFAULT_REGION;
     } else if(id === 'ai-money'){
-        item.name = 'AI MONEY';
+        item.name = 'laohu';
         item.base_url = AI_MONEY_DEFAULT_BASE_URL;
         item.protocol = 'openai';
         item.image_request_mode = 'openai';
@@ -3019,7 +3019,7 @@ function renderProviderList(){
                     <span class="provider-banner-inner">
                         <span class="provider-logo-wrap provider-logo-ai-money">
                             <img src="/static/images/ai-money.png" alt="" aria-hidden="true" class="ai-money-icon">
-                            <span class="provider-logo-name">AI MONEY</span>
+                            <span class="provider-logo-name">laohu</span>
                         </span>
                         <span class="provider-protocol-pill">API</span>
                     </span>
@@ -3177,7 +3177,7 @@ function renderEditor(){
         if(volcRegionInput) volcRegionInput.value = item.volcengine_region || VOLCENGINE_DEFAULT_REGION;
     }
     if(isAiMoney){
-        item.name = 'AI MONEY';
+        item.name = 'laohu';
         item.base_url = AI_MONEY_DEFAULT_BASE_URL;
         item.protocol = 'openai';
         item.image_request_mode = 'openai';
@@ -4707,7 +4707,7 @@ async function saveProviders(){
             item.audio_models = unique(item.audio_models || []);
         }
         if(item.id === 'ai-money'){
-            item.name = 'AI MONEY';
+            item.name = 'laohu';
             item.base_url = AI_MONEY_DEFAULT_BASE_URL;
             item.protocol = 'openai';
         }

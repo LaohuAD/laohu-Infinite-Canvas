@@ -86,12 +86,12 @@ class ConfiguredModelCapabilityMatrixTests(unittest.TestCase):
     def test_ai_money_new_llm_models_are_configured_and_dry_run_without_network(self):
         provider = next(item for item in main.load_api_providers() if item.get("id") == "ai-money")
         self.assertIn("qwen/qwen3.8-max", provider.get("chat_models") or [])
-        self.assertIn("laohuaimoney/gk-4.6", provider.get("chat_models") or [])
+        self.assertIn("laohu/gk-4.6", provider.get("chat_models") or [])
 
         catalog = main.MODEL_CAPABILITY_REGISTRY.build_catalog([provider])
         models = {item["model_id"]: item for item in catalog["providers"][0]["models"]}
         qwen = models["qwen/qwen3.8-max"]
-        gk = models["laohuaimoney/gk-4.6"]
+        gk = models["laohu/gk-4.6"]
         self.assertEqual(qwen["node_type"], "text_generation")
         self.assertTrue(qwen["runnable"])
         self.assertEqual(gk["inputs"]["reference"]["media_type"], "image")
@@ -100,7 +100,7 @@ class ConfiguredModelCapabilityMatrixTests(unittest.TestCase):
         for model_id, input_counts, inputs, input_roles in (
             ("qwen/qwen3.8-max", {"text": 1, "image": 0}, {"prompt": "测试"}, {"prompt": 1}),
             (
-                "laohuaimoney/gk-4.6",
+                "laohu/gk-4.6",
                 {"text": 1, "image": 1},
                 {"prompt": "描述图片", "reference": ["asset://reference-image"]},
                 {"prompt": 1, "reference": 1},

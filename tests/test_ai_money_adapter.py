@@ -159,7 +159,7 @@ class AiMoneyAdapterTests(unittest.IsolatedAsyncioTestCase):
             "https://api.laohuaimoney.com/v1/video/generations",
         )
 
-        self.assertEqual(urls, ["https://api.laohuaimoney.com/v1/video/generations/task-1"])
+        self.assertEqual(urls, ["https://api.lao-hu.com/v1/video/generations/task-1"])
 
     def test_audio_request_body_supports_mureka_capability_parameters(self):
         body = main.ai_money_audio_request_body(
@@ -306,11 +306,11 @@ class AiMoneyAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             main.midjourney_api_url(provider, "/v1/midjourney/generations/upscale"),
-            "https://api.laohuaimoney.com/v1/midjourney/generations/upscale",
+            "https://api.lao-hu.com/v1/midjourney/generations/upscale",
         )
         self.assertEqual(
             main.ai_money_music_api_url(provider, "extend"),
-            "https://api.laohuaimoney.com/v1/music/generations/extend",
+            "https://api.lao-hu.com/v1/music/generations/extend",
         )
 
     async def test_canvas_midjourney_image_uses_dedicated_task_adapter(self):
@@ -424,22 +424,22 @@ class AiMoneyAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             main.ai_money_text_specialist_url(provider, "transcription"),
-            "https://api.laohuaimoney.com/v1/audio/transcriptions",
+            "https://api.lao-hu.com/v1/audio/transcriptions",
         )
         self.assertEqual(
             main.ai_money_text_specialist_url(provider, "prompt_enhancement"),
-            "https://api.laohuaimoney.com/v1/video/generations",
+            "https://api.lao-hu.com/v1/video/generations",
         )
         self.assertEqual(
             main.ai_money_text_specialist_url(provider, "image_description"),
-            "https://api.laohuaimoney.com/v1/midjourney/generations/describe",
+            "https://api.lao-hu.com/v1/midjourney/generations/describe",
         )
 
     def test_default_providers_include_ai_money_without_preselecting_models(self):
         provider = next(item for item in main.default_api_providers() if item["id"] == "ai-money")
 
-        self.assertEqual(provider["name"], "AI MONEY")
-        self.assertEqual(provider["base_url"], "https://api.laohuaimoney.com")
+        self.assertEqual(provider["name"], "laohu")
+        self.assertEqual(provider["base_url"], "https://api.lao-hu.com")
         self.assertEqual(provider["protocol"], "openai")
         self.assertEqual(provider["image_models"], [])
         self.assertEqual(provider["chat_models"], [])
@@ -501,7 +501,7 @@ class AiMoneyAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             main.ai_money_image_task_url(provider, "task_123"),
-            "https://api.laohuaimoney.com/v1/image/generations/task_123",
+            "https://api.lao-hu.com/v1/image/generations/task_123",
         )
 
     def test_ai_money_accepts_signed_image_result_without_file_extension(self):
@@ -598,11 +598,11 @@ class AiMoneyAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             main.video_submit_url_candidates(provider, "https://api.laohuaimoney.com"),
-            ["https://api.laohuaimoney.com/v1/videos"],
+            ["https://api.lao-hu.com/v1/videos"],
         )
         self.assertEqual(
             main.video_task_url_candidates(provider, "https://api.laohuaimoney.com", "task_123"),
-            ["https://api.laohuaimoney.com/v1/videos/task_123"],
+            ["https://api.lao-hu.com/v1/videos/task_123"],
         )
 
     def test_ai_money_video_result_reads_metadata_url(self):
@@ -700,6 +700,32 @@ class AiMoneyAdapterTests(unittest.IsolatedAsyncioTestCase):
         })
 
         self.assertEqual(provider["audio_models"], ["doubao-seed-audio-1.0"])
+
+    def test_laohu_provider_migrates_legacy_domain_brand_and_model_ids(self):
+        provider = main.normalize_provider({
+            "id": "ai-money",
+            "name": "AI MONEY",
+            "base_url": "https://api.laohuaimoney.com",
+            "protocol": "openai",
+            "image_models": ["laohuaimoney-image-g2-t2i", "zhenzhen-image-nb-pro"],
+            "chat_models": ["laohuaimoney/gk-4.6", "zhenzhen/g5.6-sol"],
+            "video_models": ["laohuaimoney-upscaler", "zhenzhen-video-v31-fast"],
+            "model_names": {
+                "laohuaimoney-image-g2-t2i": "AI MONEY Image G2",
+                "zhenzhen-video-v31-fast": "Laohuaimoney Video V3.1 Fast",
+            },
+        })
+
+        self.assertEqual(provider["name"], "laohu")
+        self.assertEqual(provider["base_url"], "https://api.lao-hu.com")
+        self.assertEqual(provider["image_models"], ["laohu-image-g2-t2i", "laohu-image-nb-pro"])
+        self.assertEqual(provider["chat_models"], ["laohu/gk-4.6", "laohu/g5.6-sol"])
+        self.assertEqual(provider["video_models"], ["laohu-upscaler", "laohu-video-v31-fast"])
+        self.assertEqual(provider["model_names"], {
+            "laohu-image-g2-t2i": "laohu Image G2",
+            "laohu-video-v31-fast": "laohu Video V3.1 Fast",
+        })
+        self.assertTrue(main.is_ai_money_provider({"id": "custom", "base_url": "https://api.lao-hu.com"}))
 
     async def test_generate_seed_audio_downloads_and_returns_local_result(self):
         provider = {

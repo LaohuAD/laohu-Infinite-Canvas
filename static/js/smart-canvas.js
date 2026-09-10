@@ -11386,7 +11386,7 @@ function runningHubPriceLookupRegion(provider){
     return activeHasKey ? selected : 'cn';
 }
 function priceLookupUrl(provider){
-    if(provider?.id === 'ai-money') return 'https://api.laohuaimoney.com/pricing';
+    if(provider?.id === 'ai-money') return 'https://api.lao-hu.com/pricing';
     if(provider?.id !== 'runninghub') return '';
     return runningHubPriceLookupRegion(provider) === 'global'
         ? 'https://www.runninghub.ai/call-api/search-api/standard-model?search=&inviteCode=rh-v1001'
@@ -11581,8 +11581,8 @@ function renderPriceComparisonTable(){
     if(smartPriceComparisonNote){
         smartPriceComparisonNote.classList.toggle('pending', unpublishedCount > 0);
         smartPriceComparisonNote.textContent = priceUiText(
-            `已核实固定或阶梯价格 ${fixedCount} 项，公式、浮动或账号计费 ${variableCount} 项，官方未公开或待同步 ${unpublishedCount} 项。AI MONEY 和 RunningHub 可点击“查询价格”：模型名称会自动复制，打开官方页面后粘贴搜索，再点击“详情”查看资费。最终以平台实际扣费为准。`,
-            `${fixedCount} fixed or tiered prices verified, ${variableCount} formula, variable, or account-billed items, and ${unpublishedCount} unpublished or pending items. For AI MONEY and RunningHub, Check price copies the model name and opens the official page; paste it into search, then open Details. Final billing follows the provider.`
+            `已核实固定或阶梯价格 ${fixedCount} 项，公式、浮动或账号计费 ${variableCount} 项，官方未公开或待同步 ${unpublishedCount} 项。laohu 和 RunningHub 可点击“查询价格”：模型名称会自动复制，打开官方页面后粘贴搜索，再点击“详情”查看资费。最终以平台实际扣费为准。`,
+            `${fixedCount} fixed or tiered prices verified, ${variableCount} formula, variable, or account-billed items, and ${unpublishedCount} unpublished or pending items. For laohu and RunningHub, Check price copies the model name and opens the official page; paste it into search, then open Details. Final billing follows the provider.`
         );
     }
     if(smartPriceComparisonSub) smartPriceComparisonSub.textContent = priceUiText(`${rows.length} 个模型分组 · ${providers.length} 个平台`, `${rows.length} model groups · ${providers.length} providers`);

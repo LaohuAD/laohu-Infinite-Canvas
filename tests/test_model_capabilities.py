@@ -2182,12 +2182,12 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
         by_id = {item["id"]: item for item in catalog["providers"]}
 
         ai_models = {item["model_id"]: item for item in by_id["ai-money"]["models"]}
-        self.assertEqual(ai_models["laohuaimoney-image-g-v2-lowprice"]["validation_mode"], "strict")
+        self.assertEqual(ai_models["laohu-image-g-v2-lowprice"]["validation_mode"], "strict")
         self.assertEqual(ai_models["custom-image"]["validation_mode"], "blocked")
         self.assertEqual(ai_models["custom-image"]["readiness"], "needs_profile")
         self.assertFalse(ai_models["custom-image"]["runnable"])
-        self.assertEqual(ai_models["laohuaimoney-image-g-v2-lowprice"]["readiness"], "ready")
-        self.assertTrue(ai_models["laohuaimoney-image-g-v2-lowprice"]["runnable"])
+        self.assertEqual(ai_models["laohu-image-g-v2-lowprice"]["readiness"], "ready")
+        self.assertTrue(ai_models["laohu-image-g-v2-lowprice"]["runnable"])
         self.assertEqual(ai_models["doubao-seed-audio-1.0"]["node_type"], "audio_generation")
         self.assertEqual(ai_models["doubao-seed-audio-1.0"]["validation_mode"], "strict")
         self.assertEqual(by_id["jimeng"]["capability_provider_id"], "jimeng-cli")

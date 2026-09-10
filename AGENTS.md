@@ -62,12 +62,15 @@
 
 完成任何影响运行行为的更新前，至少在本机真实验证一条 macOS 使用路径，并检查相关代码和脚本的 Windows 兼容性。如果本地无法实际运行 Windows，交付时必须明确说明，并列出已检查的 Windows 文件或命令。
 
-## AI MONEY 文档入口
+## laohu API 入口与迁移
 
-AI MONEY 的文档分为人类阅读入口和 AI 读取入口，不能混用：
+laohu 对外品牌、请求域名和公开模型 ID 已更新，但项目内部 provider ID 仍保持 `ai-money`，避免旧画布、旧配置和历史生成记录失效。
 
-- 用户界面的“查看接入文档”必须跳转到 `https://api.laohuaimoney.com/docs/`，用于人类浏览和操作。
-- `https://api.laohuaimoney.com/docs/llms.txt` 仅供 AI 或程序读取接口规范，不得作为用户界面中的文档链接。
+- 所有 laohu 实际 API 请求统一使用 `https://api.lao-hu.com`；旧域名只允许出现在迁移识别和回归测试中，不得再作为提交地址。
+- 用户界面统一显示品牌名 `laohu`，人类访问入口使用 `https://api.lao-hu.com/`，价格入口使用 `https://api.lao-hu.com/pricing`。
+- 当前新域名的 `/docs/` 和 `/docs/llms.txt` 尚未对外可用，产品界面不得链接到这两个失效地址。模型目录以带鉴权的 `https://api.lao-hu.com/v1/models` 为准；参数能力继续使用现有已验证档案，直到新官方参数文档恢复。
+- 历史 `laohuaimoney-*`、`laohuaimoney/*`、`zhenzhen-*` 和 `zhenzhen/*` 模型 ID 在读取时必须单向迁移为 `laohu-*` 或 `laohu/*`；真实提交不得再发送旧 ID。
+- 新 Key 统一保存为 `API_PROVIDER_LAOHU_KEY`；旧 `API_PROVIDER_AI_MONEY_KEY` 只作为读取兼容，不得因品牌迁移导致用户已保存的 Key 失效。
 
 ## GPT CLI 能力边界
 
@@ -107,7 +110,7 @@ API 设置中的“推荐 API”属于管理员背书的公开入口，不等同
 
 ## 正式平台适配范围
 
-用户要求“全部平台”“所有正式平台”或同义范围时，必须先从当前 API 设置和平台注册表列出完整平台清单，再逐个平台建立全量目录、能力档案、请求适配和无付费验证。当前正式范围包括 RunningHub、AI MONEY、ModelScope、即梦 CLI、GPT CLI 和火山引擎；只有用户明确排除的平台才可以不纳入本次实现与报告。
+用户要求“全部平台”“所有正式平台”或同义范围时，必须先从当前 API 设置和平台注册表列出完整平台清单，再逐个平台建立全量目录、能力档案、请求适配和无付费验证。当前正式范围包括 RunningHub、laohu、ModelScope、即梦 CLI、GPT CLI 和火山引擎；只有用户明确排除的平台才可以不纳入本次实现与报告。
 
 禁止只完成资料最完整或当前正在讨论的少数平台后，把局部覆盖当作全平台完成。最终报告必须分别给出每个平台的目录总数、可运行数、待补 Schema 数和适配器缺口；GPT CLI 等能力边界较窄的平台也必须回归其禁止能力，不能因为模型数量少而省略。
 

@@ -28,12 +28,14 @@ class AiMoneyUiTests(unittest.TestCase):
         script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
         html = (ROOT / "static/api-settings.html").read_text(encoding="utf-8")
 
-        self.assertIn("const AI_MONEY_DEFAULT_BASE_URL = 'https://api.laohuaimoney.com';", script)
+        self.assertIn("const AI_MONEY_DEFAULT_BASE_URL = 'https://api.lao-hu.com';", script)
         self.assertIn("const order = ['modelscope', 'runninghub', 'volcengine', 'ai-money', 'agnes'];", script)
         self.assertIn("/static/images/ai-money.png", script)
-        self.assertIn("https://api.laohuaimoney.com/sign-up?aff=460d", script)
-        self.assertIn("const AI_MONEY_DOCS_URL = 'https://api.laohuaimoney.com/docs/';", script)
-        self.assertIn('href="https://api.laohuaimoney.com/docs/"', html)
+        self.assertIn("https://api.lao-hu.com/sign-up?aff=460d", script)
+        self.assertIn("const AI_MONEY_HOME_URL = 'https://api.lao-hu.com/';", script)
+        self.assertIn('href="https://api.lao-hu.com/"', html)
+        self.assertNotIn("api.laohuaimoney.com", script)
+        self.assertNotIn("api.laohuaimoney.com", html)
         self.assertNotIn("llms.txt", script)
         self.assertNotIn("llms.txt", html)
 
@@ -119,7 +121,7 @@ class AiMoneyUiTests(unittest.TestCase):
         script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
         styles = (ROOT / "static/css/api-settings.css").read_text(encoding="utf-8")
 
-        self.assertIn('class="provider-logo-name">AI MONEY</span>', script)
+        self.assertIn('class="provider-logo-name">laohu</span>', script)
         self.assertIn(".provider-card-ai-money .provider-logo-ai-money { width:auto;", styles)
 
     def test_api_settings_and_smart_canvas_expose_audio_model_flow(self):

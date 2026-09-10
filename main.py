@@ -43,6 +43,8 @@ from fastapi.responses import FileResponse, Response, StreamingResponse, JSONRes
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from project_storage import ProjectStorage, StorageError, media_kind as stored_media_kind
+from static.release_update import allowed_file as release_allowed_file, validate_package, package_url, LATEST_URL as R2_LATEST_URL, MAX_PACKAGE_BYTES
+from static.model_migrations import normalize_laohu_model_id
 from model_capabilities import ModelCapabilityError, ModelCapabilityRegistry, jimeng_image_resolution_options, save_provider_catalog_snapshot, save_runninghub_registry_snapshot
 
 QUIET_ACCESS_PATHS = {
@@ -584,7 +586,8 @@ COMFYUI_ADDRESS = COMFYUI_INSTANCES[0]
 
 AI_BASE_URL = os.getenv("COMFLY_BASE_URL", "https://ai.comfly.chat").rstrip("/")
 AI_API_KEY = os.getenv("COMFLY_API_KEY", "")
-AI_MONEY_DEFAULT_BASE_URL = "https://api.laohuaimoney.com"
+AI_MONEY_DEFAULT_BASE_URL = "https://api.lao-hu.com"
+LAOHU_PROVIDER_NAME = "laohu"
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 PUBLIC_MEDIA_BASE_URL = os.getenv("PUBLIC_MEDIA_BASE_URL", "").strip().rstrip("/")
 MODELSCOPE_API_KEY = os.getenv("MODELSCOPE_API_KEY", "")
@@ -771,6 +774,8 @@ def provider_key_env(provider_id):
         return "RUNNINGHUB_API_KEY"
     if provider_id == "volcengine":
         return "ARK_API_KEY"
+    if provider_id == "ai-money":
+        return "API_PROVIDER_LAOHU_KEY"
     return f"API_PROVIDER_{re.sub(r'[^A-Za-z0-9]', '_', provider_id).upper()}_KEY"
 
 def runninghub_normalize_region(value, fallback="global"):
@@ -839,6 +844,9 @@ def provider_env_key_value(provider_id: str) -> str:
     key = os.getenv(env_key, "") or read_api_env_value(env_key)
     if key:
         return key
+    if provider_id == "ai-money":
+        # 兼容旧版已保存的 Key；新保存统一使用 LAOHU 命名。
+        return os.getenv("API_PROVIDER_AI_MONEY_KEY", "") or read_api_env_value("API_PROVIDER_AI_MONEY_KEY")
     if provider_id == "modelscope":
         return MODELSCOPE_API_KEY or ""
     return ""
@@ -966,7 +974,7 @@ def default_api_providers():
         },
         {
             "id": "ai-money",
-            "name": "AI MONEY",
+            "name": LAOHU_PROVIDER_NAME,
             "base_url": AI_MONEY_DEFAULT_BASE_URL,
             "protocol": "openai",
             "image_request_mode": "openai",
@@ -1081,11 +1089,13 @@ def merge_default_api_providers(providers, inject_missing=True):
         if not current:
             merged.append(ai_money_default)
         else:
-            current["name"] = "AI MONEY"
+            current["name"] = LAOHU_PROVIDER_NAME
             current["base_url"] = AI_MONEY_DEFAULT_BASE_URL
             current["protocol"] = "openai"
             current["image_request_mode"] = "openai"
-            current["audio_models"] = model_list_from_values(current.get("audio_models") or [])
+            for field in ("image_models", "chat_models", "video_models", "audio_models"):
+                current[field] = laohu_model_list(current.get(field) or [])
+            current["model_names"] = normalize_laohu_model_name_map(current.get("model_names"))
     for provider_id in ("openai-compatible",):
         provider_default = next((item for item in default_api_providers() if item["id"] == provider_id), None)
         if not provider_default:
@@ -1150,6 +1160,25 @@ def model_list_from_values(values):
             selected_model(item, item)
             deduped.append(item)
     return deduped
+
+def laohu_model_list(values):
+    return model_list_from_values(normalize_laohu_model_id(value) for value in (values or []))
+
+def normalize_laohu_display_name(value):
+    label = str(value or "")
+    for pattern in (r"\blaohuaimoney\b", r"\bAI\s+MONEY\b", r"\bzhenzhen\b"):
+        label = re.sub(pattern, LAOHU_PROVIDER_NAME, label, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", label).strip()[:160]
+
+def normalize_laohu_model_name_map(value):
+    normalized = {}
+    if isinstance(value, dict):
+        for raw_model, raw_label in value.items():
+            model = normalize_laohu_model_id(raw_model)
+            label = normalize_laohu_display_name(raw_label)
+            if model and label and label != model:
+                normalized[model] = label
+    return normalized
 
 def normalize_ms_loras(values):
     normalized = []
@@ -1611,13 +1640,17 @@ def normalize_provider(item):
     image_edit_endpoint = normalize_endpoint_override(item.get("image_edit_endpoint"), "图生图/编辑端口")
     volc_project = re.sub(r"\s+", " ", str(item.get("volcengine_project_name") or "").strip())[:80]
     volc_region = re.sub(r"\s+", " ", str(item.get("volcengine_region") or "").strip())[:40]
+    image_models = model_list_from_values(item.get("image_models") or [])
+    chat_models = model_list_from_values(item.get("chat_models") or [])
+    video_models = model_list_from_values(item.get("video_models") or [])
+    audio_models = model_list_from_values(item.get("audio_models") or [])
     if provider_id == "volcengine":
         protocol = "volcengine"
         base_url = base_url or VOLCENGINE_DEFAULT_BASE_URL
         volc_project = volc_project or VOLCENGINE_DEFAULT_PROJECT_NAME
         volc_region = volc_region or VOLCENGINE_DEFAULT_REGION
     if provider_id == "ai-money":
-        name = "AI MONEY"
+        name = LAOHU_PROVIDER_NAME
         base_url = AI_MONEY_DEFAULT_BASE_URL
         protocol = "openai"
         image_request_mode = "openai"
@@ -1630,11 +1663,6 @@ def normalize_provider(item):
         image_models = []
         video_models = []
         audio_models = []
-    elif provider_id != "runninghub":
-        image_models = model_list_from_values(item.get("image_models") or [])
-        chat_models = model_list_from_values(item.get("chat_models") or [])
-        video_models = model_list_from_values(item.get("video_models") or [])
-        audio_models = model_list_from_values(item.get("audio_models") or [])
     runninghub_region = ""
     if provider_id == "runninghub":
         protocol = "runninghub"
@@ -1653,6 +1681,11 @@ def normalize_provider(item):
     if provider_id != "runninghub":
         video_models = [] if protocol == "codex" else model_list_from_values(item.get("video_models") or [])
         audio_models = [] if protocol == "codex" else model_list_from_values(item.get("audio_models") or [])
+    if provider_id == "ai-money":
+        image_models = laohu_model_list(image_models)
+        chat_models = laohu_model_list(chat_models)
+        video_models = laohu_model_list(video_models)
+        audio_models = laohu_model_list(audio_models)
     if locked_rule and "video_models" in locked_rule:
         video_models = model_list_from_values(locked_rule.get("video_models") or [])
     return {
@@ -1667,11 +1700,11 @@ def normalize_provider(item):
         "image_edit_endpoint": image_edit_endpoint,
         "enabled": bool(item.get("enabled", True)),
         "primary": bool(item.get("primary", False)),
-        "image_models": [] if protocol == "codex" else model_list_from_values(image_models if provider_id == "runninghub" else item.get("image_models") or []),
-        "chat_models": model_list_from_values(chat_models if provider_id == "runninghub" else item.get("chat_models") or []),
+        "image_models": [] if protocol == "codex" else model_list_from_values(image_models),
+        "chat_models": model_list_from_values(chat_models),
         "video_models": video_models,
         "audio_models": audio_models,
-        "model_names": normalize_model_name_map(item.get("model_names")),
+        "model_names": normalize_laohu_model_name_map(item.get("model_names")) if provider_id == "ai-money" else normalize_model_name_map(item.get("model_names")),
         "model_protocols": normalize_model_protocols(item.get("model_protocols")),
         "ms_loras": normalize_ms_loras(item.get("ms_loras") or []),
         "ms_defaults_version": int(item.get("ms_defaults_version") or 0),
@@ -2257,10 +2290,9 @@ def fetch_remote_update_notes(url: str, version: str = "", timeout: float = 5.0)
 def fetch_update_notes_with_fallback(preferred_source: str, version: str, timeout: float = 3.0) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     urls = {
         "github": GITHUB_UPDATE_NOTES_URL,
-        "modelscope": MODELSCOPE_UPDATE_NOTES_URL,
     }
     preferred = preferred_source if preferred_source in urls else "github"
-    order = [preferred, "modelscope" if preferred == "github" else "github"]
+    order = [preferred]
     notes_by_source: Dict[str, Any] = {}
     best_notes: Dict[str, Any] = {"version": version, "items": []}
     for source in order:
@@ -2438,12 +2470,9 @@ def app_info():
                 "tree_url": GITHUB_TREE_URL,
                 "update_notes_url": GITHUB_UPDATE_NOTES_URL,
             },
-            "modelscope": {
-                "label": "ModelScope",
-                "repo_url": MODELSCOPE_REPO_URL,
-                "version_url": MODELSCOPE_VERSION_URL,
-                "tree_url": MODELSCOPE_TREE_URL,
-                "update_notes_url": MODELSCOPE_UPDATE_NOTES_URL,
+            "r2": {
+                "label": "Cloudflare",
+                "manifest_url": R2_LATEST_URL,
             },
         },
         "update_notes": read_local_update_notes(version),
@@ -2487,9 +2516,7 @@ def update_connectivity_targets() -> List[Tuple[str, str, str, bool]]:
         ("GitHub 更新列表", GITHUB_TREE_URL, "github", True),
         ("GitHub 版本文件", GITHUB_VERSION_URL, "github", True),
         ("GitHub 主页", GITHUB_REPO_URL, "github", False),
-        ("ModelScope 版本文件", MODELSCOPE_VERSION_URL, "modelscope", True),
-        ("ModelScope 空间页面", MODELSCOPE_REPO_URL, "modelscope", False),
-        ("ModelScope 主页", "https://modelscope.cn/", "modelscope", False),
+        ("Cloudflare 发布清单", R2_LATEST_URL, "r2", True),
         ("Google 连通性", "https://www.google.com/generate_204", "reference", False),
     ]
 
@@ -2514,7 +2541,7 @@ def update_connectivity():
         item["required"] = required
         results.append(item)
     sources = {}
-    for source in ("github", "modelscope"):
+    for source in ("github", "r2"):
         source_required = [item for item in results if item.get("source") == source and item.get("required")]
         sources[source] = {
             "ok": all(item["ok"] for item in source_required),
@@ -2569,8 +2596,17 @@ def version_gt(a: str, b: str) -> bool:
 
 @app.get("/api/check-update")
 def check_update():
-    """服务端检测 GitHub 与 ModelScope 两个源的远端版本（走系统代理，避免浏览器跨域/被墙）。"""
+    """优先正式发布包，未发布或暂不可达时检查自己的 GitHub 仓库。"""
     current = current_app_version()
+    # 已正式发布的 R2 清单优先；不把尚未打包的主分支当作 R2 发布。
+    try:
+        release = fetch_r2_manifest()
+        latest = {"source": "r2", "version": release["version"], "update_notes": release.get("update_notes", {})}
+        return {"current": current, "latest": latest, "update_notes": latest["update_notes"],
+                "update_available": version_gt(release["version"], current), "reachable": True,
+                "r2": {"ok": True, "version": release["version"], "source": "r2", "url": R2_LATEST_URL}}
+    except Exception:
+        pass
     # 并发检测两个源，避免串行 8s+8s 拖慢首屏更新提示
     holder: Dict[str, Dict[str, Any]] = {}
     def _probe(key: str, url: str):
@@ -2579,16 +2615,14 @@ def check_update():
         holder[key] = item
     threads = [
         Thread(target=_probe, args=("github", GITHUB_VERSION_URL), daemon=True),
-        Thread(target=_probe, args=("modelscope", MODELSCOPE_VERSION_URL), daemon=True),
     ]
     for t in threads:
         t.start()
     for t in threads:
         t.join(timeout=5.5)
     github = holder.get("github") or {"version": "", "ok": False, "error": "检测超时（超过 5s）", "url": GITHUB_VERSION_URL, "source": "github"}
-    modelscope = holder.get("modelscope") or {"version": "", "ok": False, "error": "检测超时（超过 5s）", "url": MODELSCOPE_VERSION_URL, "source": "modelscope"}
     best: Dict[str, Any] = {}
-    for item in (github, modelscope):
+    for item in (github,):
         if item["ok"] and item["version"]:
             if not best or version_gt(item["version"], best["version"]):
                 best = {"source": item["source"], "version": item["version"]}
@@ -2600,19 +2634,15 @@ def check_update():
     return {
         "current": current,
         "github": github,
-        "modelscope": modelscope,
         "latest": best,
         "update_notes": best.get("update_notes") if best else {},
         "update_notes_sources": notes_by_source,
         "update_available": update_available,
-        "reachable": bool(github["ok"] or modelscope["ok"]),
+        "reachable": bool(github["ok"]),
     }
 
 def update_allowed_file(path: str) -> bool:
-    path = str(path or "").replace("\\", "/").lstrip("/")
-    if not path or any(part in {"", ".", ".."} for part in path.split("/")):
-        return False
-    return path in {"main.py", "VERSION"} or path.startswith("static/")
+    return release_allowed_file(path)
 
 # 缓存 GitHub Tree API 响应（含 ETag），减少 60 次/h 限流压力
 GITHUB_TREE_CACHE: Dict[str, Any] = {"etag": "", "data": None, "expires_at": 0.0}
@@ -2721,12 +2751,12 @@ def download_modelscope_update_files(staging_root: str) -> List[str]:
     return files
 
 def safe_update_target(path: str) -> str:
-    rel = str(path or "").replace("\\", "/").lstrip("/")
+    rel = str(path or "")
     if not update_allowed_file(rel):
         raise ValueError(f"更新文件不在允许范围：{rel}")
     target = os.path.abspath(os.path.join(BASE_DIR, *rel.split("/")))
     base = os.path.abspath(BASE_DIR)
-    if os.path.commonpath([base, target]) != base:
+    if os.path.commonpath([base, target]) != base or os.path.commonpath([os.path.realpath(base), os.path.realpath(target)]) != os.path.realpath(base):
         raise ValueError(f"更新路径不安全：{rel}")
     return target
 
@@ -2862,18 +2892,54 @@ def staged_update_file_list(staging_root: str) -> Tuple[List[str], List[str], Li
     static_files = sorted(set(static_files))
     return root_files, static_files, root_files + static_files
 
-UPDATE_SOURCE_LABELS = {"github": "GitHub", "modelscope": "ModelScope"}
+UPDATE_SOURCE_LABELS = {"github": "GitHub", "modelscope": "ModelScope", "r2": "老胡更新服务 / Cloudflare"}
 
 def normalize_update_source(value: str) -> str:
     source = str(value or "github").strip().lower()
-    if source == "ms":
-        return "modelscope"
-    if source not in {"github", "modelscope"}:
+    if source in {"ms", "modelscope"}:
+        return "github"
+    if source not in {"github", "modelscope", "r2"}:
         return "github"
     return source
 
+def fetch_r2_manifest():
+    with requests.get(R2_LATEST_URL, timeout=8, stream=True, allow_redirects=False) as response:
+        response.raise_for_status()
+        chunks, size = [], 0
+        for chunk in response.iter_content(65536):
+            size += len(chunk)
+            if size > 4 * 1024 * 1024:
+                raise ValueError("更新清单过大")
+            chunks.append(chunk)
+    manifest = json.loads(b"".join(chunks))
+    package_url(manifest)
+    if manifest.get("schema_version") != 1:
+        raise ValueError("不支持的更新清单")
+    return manifest
+
 def stage_update_from_source(source: str, staging_root: str) -> Tuple[List[str], List[str], List[str]]:
     """下载指定源的更新文件到 staging，返回 (root_files, static_files, files)。失败抛异常。"""
+    if source == "r2":
+        manifest = fetch_r2_manifest()
+        with requests.get(package_url(manifest), timeout=(10, 60), stream=True, allow_redirects=False) as response:
+            response.raise_for_status()
+            chunks, size = [], 0
+            for chunk in response.iter_content(65536):
+                size += len(chunk)
+                if size > MAX_PACKAGE_BYTES:
+                    raise ValueError("更新包超过安全大小限制")
+                chunks.append(chunk)
+        payload = validate_package(b"".join(chunks), manifest)
+        # 依赖发生变化时不能在仍运行的环境中静默替换，避免重启后无法启动。
+        requirements_path = Path(BASE_DIR) / "requirements.txt"
+        if not requirements_path.exists() or requirements_path.read_bytes() != payload['requirements.txt']:
+            raise ValueError("此版本依赖有变化，请使用完整安装包更新并重新运行依赖安装脚本；当前程序未被修改")
+        for rel, content in payload.items():
+            safe_update_target(rel)
+            target = Path(staging_root).joinpath(*rel.split('/'))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        return staged_update_file_list(staging_root)
     if source == "modelscope":
         download_modelscope_update_files(staging_root)
         return staged_update_file_list(staging_root)
@@ -3036,9 +3102,7 @@ def update_from_github(req: UpdateRequest = UpdateRequest()):
     requested_source = normalize_update_source(req.source)
     # 冗余设计：先用用户选择的源，失败后自动切换到另一个源兜底，全部失败才报错
     source_order = [requested_source]
-    if req.fallback:
-        other = "modelscope" if requested_source == "github" else "github"
-        source_order.append(other)
+    # 不再回退到原作者的 ModelScope 仓库，也不把校验失败降级成无校验更新。
     try:
         backup_root = ""
         backup_manifest: Dict[str, Any] = {}
@@ -5945,7 +6009,16 @@ def is_ai_money_provider(provider):
         return False
     provider_id = str(provider.get("id") or "").strip().lower()
     base_url = str(provider.get("base_url") or "").strip().lower()
-    return provider_id == "ai-money" or "api.laohuaimoney.com" in urllib.parse.urlparse(base_url).netloc
+    host = urllib.parse.urlparse(base_url).netloc
+    return provider_id == "ai-money" or host in {"api.lao-hu.com", "api.laohuaimoney.com"}
+
+def laohu_api_base_url(provider=None):
+    """返回 laohu 当前唯一的提交域名。
+
+    参数仅为兼容现有调用签名；旧画布即使仍带旧 base_url，
+    实际提交也不得再回到旧域名。
+    """
+    return AI_MONEY_DEFAULT_BASE_URL
 
 def is_runninghub_provider(provider):
     return provider_protocol(provider) == "runninghub" or str((provider or {}).get("id") or "").strip().lower() == "runninghub"
@@ -7798,7 +7871,7 @@ def image_task_url_for_provider(provider, task_id):
     return f"{base_url}/images/tasks/{task_id}" if base_url.endswith("/v1") else f"{base_url}/v1/images/tasks/{task_id}"
 
 def ai_money_image_task_url(provider, task_id):
-    base_url = str((provider or {}).get("base_url") or AI_MONEY_DEFAULT_BASE_URL).rstrip("/")
+    base_url = laohu_api_base_url(provider)
     return f"{base_url}/v1/image/generations/{urllib.parse.quote(str(task_id), safe='')}"
 
 def merge_request_body(base, overlay):
@@ -7812,7 +7885,7 @@ def merge_request_body(base, overlay):
 
 def ai_money_image_request_body(prompt, model, reference_urls=None, aspect_ratio="", resolution="", capability_parameters=None):
     body = {
-        "model": selected_model(model, "seedream-v5-pro-t2i"),
+        "model": normalize_laohu_model_id(selected_model(model, "seedream-v5-pro-t2i")),
         "prompt": str(prompt or ""),
     }
     references = [str(url or "").strip() for url in (reference_urls or []) if str(url or "").strip()]
@@ -7828,16 +7901,16 @@ def ai_money_image_request_body(prompt, model, reference_urls=None, aspect_ratio
     return merge_request_body(body, capability_parameters)
 
 def ai_money_video_request_body(model, prompt, seconds, aspect_ratio="", resolution="", image_urls=None, video_urls=None, audio_urls=None, generate_audio=False, return_last_frame=False, seed=None, capability_parameters=None):
-    model_name = selected_model(model, "seedance-2.0-fast-t2v")
+    model_name = normalize_laohu_model_id(selected_model(model, "seedance-2.0-fast-t2v"))
     lower_model = model_name.lower()
     images = [str(url or "").strip() for url in (image_urls or []) if str(url or "").strip()]
     videos = [str(url or "").strip() for url in (video_urls or []) if str(url or "").strip()]
     audios = [str(url or "").strip() for url in (audio_urls or []) if str(url or "").strip()]
     is_wan_3_reference = bool(re.fullmatch(r"wan-3\.0-(?:global-)?prime-r2v", lower_model))
     if lower_model.endswith("-i2v") and not images:
-        raise HTTPException(status_code=400, detail="AI MONEY 图生视频模型需要至少一张参考图片。")
+        raise HTTPException(status_code=400, detail="laohu 图生视频模型需要至少一张参考图片。")
     if is_wan_3_reference and not (images or videos or audios):
-        raise HTTPException(status_code=400, detail="AI MONEY Wan 3.0 参考生视频模型需要至少一个图片、视频或音频参考素材。")
+        raise HTTPException(status_code=400, detail="laohu Wan 3.0 参考生视频模型需要至少一个图片、视频或音频参考素材。")
     body = {
         "model": model_name,
         "prompt": str(prompt or ""),
@@ -7893,7 +7966,7 @@ AI_MONEY_REFERENCE_AUDIO_MODELS = {
 }
 
 def ai_money_music_api_url(provider, action=""):
-    base_url = str((provider or {}).get("base_url") or AI_MONEY_DEFAULT_BASE_URL).rstrip("/")
+    base_url = laohu_api_base_url(provider)
     suffix = str(action or "").strip().strip("/")
     return f"{base_url}/v1/music/generations/{suffix}" if suffix else f"{base_url}/v1/music/generations"
 
@@ -7927,7 +8000,7 @@ def ai_money_flowmusic_request_body(model, prompt, reference_audio_url="", capab
     return body
 
 def ai_money_audio_request_body(model, prompt, reference_audio_url="", speaker="", audio_format="mp3", sample_rate=24000, speech_rate=0, loudness_rate=0, pitch_rate=0, capability_parameters=None):
-    model_name = selected_model(model, "doubao-seed-audio-1.0")
+    model_name = normalize_laohu_model_id(selected_model(model, "doubao-seed-audio-1.0"))
     if model_name.lower().startswith("flowmusic-"):
         return ai_money_flowmusic_request_body(model_name, prompt, reference_audio_url, capability_parameters)
     if model_name in {"mureka-v8-bgm", "mureka-v9-bgm"}:
@@ -7956,7 +8029,7 @@ def ai_money_audio_request_body(model, prompt, reference_audio_url="", speaker="
             body.setdefault("metadata", {})["audio_url"] = reference_audio
         return body
     if model_name != "doubao-seed-audio-1.0":
-        raise HTTPException(status_code=400, detail="AI MONEY 当前只开放已完成适配的豆包 Seed Audio 模型。")
+        raise HTTPException(status_code=400, detail="laohu 当前只开放已完成适配的豆包 Seed Audio 模型。")
     reference_audio = str(reference_audio_url or "").strip()
     speaker_name = str(speaker or "").strip()
     if reference_audio and speaker_name:
@@ -8062,7 +8135,7 @@ def ai_money_flowmusic_result(raw, action):
     return {"audios": [url] if url else []}
 
 async def wait_for_ai_money_audio_task(client, provider, task_id):
-    base_url = str((provider or {}).get("base_url") or AI_MONEY_DEFAULT_BASE_URL).rstrip("/")
+    base_url = laohu_api_base_url(provider)
     task_url = f"{base_url}/v1/audio/generations/{urllib.parse.quote(str(task_id), safe='')}"
     deadline = time.monotonic() + VIDEO_POLL_TIMEOUT
     delay = max(2.0, IMAGE_POLL_INTERVAL)
@@ -8081,12 +8154,12 @@ async def wait_for_ai_money_audio_task(client, provider, task_id):
             return raw
         if status in VIDEO_TASK_FAILURE_STATUSES:
             reason = (data or {}).get("message") or (data or {}).get("error") or (raw or {}).get("message") or str(raw)
-            raise HTTPException(status_code=502, detail=f"AI MONEY 音频任务失败：{reason}")
+            raise HTTPException(status_code=502, detail=f"laohu 音频任务失败：{reason}")
         delay = min(delay * 1.5, 10.0)
-    raise HTTPException(status_code=504, detail=f"AI MONEY 音频任务超时：{last_payload or task_id}")
+    raise HTTPException(status_code=504, detail=f"laohu 音频任务超时：{last_payload or task_id}")
 
 async def wait_for_ai_money_music_task(client, provider, task_id):
-    base_url = str((provider or {}).get("base_url") or AI_MONEY_DEFAULT_BASE_URL).rstrip("/")
+    base_url = laohu_api_base_url(provider)
     task_url = f"{base_url}/v1/music/tasks/{urllib.parse.quote(str(task_id), safe='')}"
     deadline = time.monotonic() + VIDEO_POLL_TIMEOUT
     delay = max(2.0, IMAGE_POLL_INTERVAL)
@@ -8105,15 +8178,15 @@ async def wait_for_ai_money_music_task(client, provider, task_id):
             return raw
         if status in {"failed", "failure", "error", "cancelled", "canceled"}:
             reason = (data or {}).get("message") or (data or {}).get("error") or str(raw)
-            raise HTTPException(status_code=502, detail=f"AI MONEY Suno 任务失败：{reason}")
+            raise HTTPException(status_code=502, detail=f"laohu Suno 任务失败：{reason}")
         delay = min(delay * 1.5, 10.0)
-    raise HTTPException(status_code=504, detail=f"AI MONEY Suno 任务超时：{last_payload or task_id}")
+    raise HTTPException(status_code=504, detail=f"laohu Suno 任务超时：{last_payload or task_id}")
 
 async def generate_ai_money_audio(provider, model, prompt, reference_audio_url="", speaker="", audio_format="mp3", sample_rate=24000, speech_rate=0, loudness_rate=0, pitch_rate=0, capability_parameters=None):
     api_key = provider_env_key_value((provider or {}).get("id") or "ai-money")
     if not api_key:
-        raise HTTPException(status_code=400, detail="AI MONEY 未配置 API Key，请先在 API 设置中填写。")
-    base_url = str((provider or {}).get("base_url") or AI_MONEY_DEFAULT_BASE_URL).rstrip("/")
+        raise HTTPException(status_code=400, detail="laohu 未配置 API Key，请先在 API 设置中填写。")
+    base_url = laohu_api_base_url(provider)
     async with httpx.AsyncClient(timeout=VIDEO_POLL_TIMEOUT) as client:
         reference_url = str(reference_audio_url or "").strip()
         if reference_url:
@@ -8143,7 +8216,7 @@ async def generate_ai_money_audio(provider, model, prompt, reference_audio_url="
                 return {"files": [url for url in files if url], "task_id": task_id, "raw": result}
             audios = [await save_remote_audio_to_output(url, prefix="ai_money_flowmusic_") for url in outputs.get("audios", []) if url]
             if not audios:
-                raise HTTPException(status_code=502, detail=f"AI MONEY FlowMusic 任务没有返回音频地址：{str(result)[:500]}")
+                raise HTTPException(status_code=502, detail=f"laohu FlowMusic 任务没有返回音频地址：{str(result)[:500]}")
             return {"audios": [url for url in audios if url], "task_id": task_id, "raw": result}
         if str(model or "").strip().lower().startswith("suno-"):
             action = str(model or "").strip().lower().removeprefix("suno-")
@@ -8163,7 +8236,7 @@ async def generate_ai_money_audio(provider, model, prompt, reference_audio_url="
             result = raw if ai_money_audio_output_urls(raw) else await wait_for_ai_money_music_task(client, provider, task_id) if task_id else raw
             urls = ai_money_audio_output_urls(result)
             if not urls:
-                raise HTTPException(status_code=502, detail=f"AI MONEY Suno 任务没有返回音频地址：{str(result)[:500]}")
+                raise HTTPException(status_code=502, detail=f"laohu Suno 任务没有返回音频地址：{str(result)[:500]}")
             local_urls = [await save_remote_audio_to_output(url, prefix="ai_money_suno_") for url in urls]
             return {"audios": [url for url in local_urls if url], "task_id": task_id, "raw": result}
         model_name = str(model or "").strip().lower()
@@ -8183,7 +8256,7 @@ async def generate_ai_money_audio(provider, model, prompt, reference_audio_url="
         if model_name == "minimax-voice-clone":
             result_text = ai_money_audio_result_text(result)
             if not result_text:
-                raise HTTPException(status_code=502, detail=f"AI MONEY 音色克隆成功但没有返回音色 ID：{str(result)[:500]}")
+                raise HTTPException(status_code=502, detail=f"laohu 音色克隆成功但没有返回音色 ID：{str(result)[:500]}")
             return {
                 "texts": [{"url": result_text, "kind": "text", "name": result_text}],
                 "task_id": task_id,
@@ -8191,7 +8264,7 @@ async def generate_ai_money_audio(provider, model, prompt, reference_audio_url="
             }
         urls = ai_money_audio_output_urls(result)
         if not urls:
-            raise HTTPException(status_code=502, detail=f"AI MONEY 音频生成成功但没有返回音频地址：{str(result)[:500]}")
+            raise HTTPException(status_code=502, detail=f"laohu 音频生成成功但没有返回音频地址：{str(result)[:500]}")
         local_urls = [await save_remote_audio_to_output(url, prefix="ai_money_audio_") for url in urls]
         return {"audios": [url for url in local_urls if url], "task_id": task_id, "raw": result}
 
@@ -8226,32 +8299,32 @@ def ai_money_extract_image(payload):
 async def ai_money_upload_reference(client, provider, ref_url, kind="image"):
     value = str(ref_url or "").strip()
     if not value:
-        raise HTTPException(status_code=400, detail="AI MONEY 素材地址不能为空。")
+        raise HTTPException(status_code=400, detail="laohu 素材地址不能为空。")
     if value.startswith(("http://", "https://", "asset://")):
         return value
     if value.startswith("data:"):
         header, separator, encoded = value.partition(",")
         if not separator or ";base64" not in header:
-            raise HTTPException(status_code=400, detail="AI MONEY 只支持 base64 data URL 素材。")
+            raise HTTPException(status_code=400, detail="laohu 只支持 base64 data URL 素材。")
         try:
             content = base64.b64decode(encoded)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"AI MONEY 素材解码失败：{exc}") from exc
+            raise HTTPException(status_code=400, detail=f"laohu 素材解码失败：{exc}") from exc
         mime = header.split(":", 1)[-1].split(";", 1)[0] or "application/octet-stream"
         extension = mimetypes.guess_extension(mime) or ".bin"
         filename = f"canvas_{kind}_{uuid.uuid4().hex[:8]}{extension}"
     else:
         path = local_media_reference_path(value)
         if not path:
-            raise HTTPException(status_code=400, detail=f"AI MONEY 无法读取本地素材：{value}")
+            raise HTTPException(status_code=400, detail=f"laohu 无法读取本地素材：{value}")
         try:
             with open(path, "rb") as file:
                 content = file.read()
         except OSError as exc:
-            raise HTTPException(status_code=400, detail=f"AI MONEY 读取本地素材失败：{exc}") from exc
+            raise HTTPException(status_code=400, detail=f"laohu 读取本地素材失败：{exc}") from exc
         mime = content_type_for_path(path)
         filename = os.path.basename(path) or f"canvas_{kind}"
-    upload_url = f"{str((provider or {}).get('base_url') or AI_MONEY_DEFAULT_BASE_URL).rstrip('/')}/v1/files/upload"
+    upload_url = f"{laohu_api_base_url(provider)}/v1/files/upload"
     response = await client.post(
         upload_url,
         headers=api_headers(json_body=False, provider=provider),
@@ -8260,11 +8333,11 @@ async def ai_money_upload_reference(client, provider, ref_url, kind="image"):
     response.raise_for_status()
     uploaded_url = ai_money_file_url(response.json())
     if not uploaded_url:
-        raise HTTPException(status_code=502, detail=f"AI MONEY 素材上传成功但没有返回可用地址：{response.text[:400]}")
+        raise HTTPException(status_code=502, detail=f"laohu 素材上传成功但没有返回可用地址：{response.text[:400]}")
     return uploaded_url
 
 async def generate_ai_money_image(prompt, size, quality, model, reference_images, provider, aspect_ratio="", resolution="", capability_parameters=None):
-    base_url = str(provider.get("base_url") or AI_MONEY_DEFAULT_BASE_URL).rstrip("/")
+    base_url = laohu_api_base_url(provider)
     references = []
     async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
         for ref in (reference_images or [])[:ONLINE_IMAGE_REFERENCE_MAX]:
@@ -8370,7 +8443,7 @@ async def generate_ai_money_midjourney_image(prompt, size, model, reference_imag
     return {"type": "url", "value": first_url}, {**result, "submit": raw, "task_id": task_id}
 
 async def generate_ai_money_video(payload, provider, capability_parameters=None):
-    base_url = str(provider.get("base_url") or AI_MONEY_DEFAULT_BASE_URL).rstrip("/")
+    base_url = laohu_api_base_url(provider)
     async with httpx.AsyncClient(timeout=VIDEO_POLL_TIMEOUT) as client:
         if str(payload.model or "").strip().lower() in {"fashvsr_video_upscale", "fashvsr-video-upscale"}:
             if len(payload.videos or []) != 1:
@@ -8394,7 +8467,7 @@ async def generate_ai_money_video(payload, provider, capability_parameters=None)
             result = raw if video_output_urls(raw) else await wait_for_video_task(client, provider, str(task_id), submit_url) if task_id else raw
             urls = video_output_urls(result)
             if not urls:
-                raise HTTPException(status_code=502, detail=f"AI MONEY FashVSR 成功但没有返回视频：{result}")
+                raise HTTPException(status_code=502, detail=f"laohu FashVSR 成功但没有返回视频：{result}")
             return {"videos": [await save_remote_video_to_output(url, prefix="ai_money_fashvsr_") for url in urls], "task_id": task_id, "raw": result}
         image_urls = []
         for ref in (payload.images or [])[:10]:
@@ -8433,7 +8506,7 @@ async def generate_ai_money_video(payload, provider, capability_parameters=None)
         result = raw if video_output_urls(raw) else await wait_for_video_task(client, provider, str(task_id), f"{base_url}/v1/videos") if task_id else raw
         urls = video_output_urls(result)
         if not urls:
-            raise HTTPException(status_code=502, detail=f"AI MONEY 视频生成成功但没有返回视频：{result}")
+            raise HTTPException(status_code=502, detail=f"laohu 视频生成成功但没有返回视频：{result}")
         return {"videos": [await save_remote_video_to_output(url, prefix="ai_money_video_") for url in urls], "task_id": task_id, "raw": result}
 
 def image_task_data(payload):
@@ -17065,8 +17138,8 @@ async def probe_volcengine_auto_detect(client, base_url: str, api_key: str):
     }
 
 def classify_upstream_model(mid):
-    lc = str(mid or "").lower()
-    if lc == "laohuaimoney-upscaler":
+    lc = normalize_laohu_model_id(mid).lower()
+    if lc == "laohu-upscaler":
         return "video"
     if lc.startswith("minmax-h3-context-ir-") or lc == "whisper-1" or lc == "midjourney-describe":
         return "chat"
@@ -17754,7 +17827,7 @@ MIDJOURNEY_ACTION_PATHS = {
 
 def midjourney_api_url(provider, path):
     base_url = str((provider or {}).get("base_url") or "").strip().rstrip("/")
-    root = base_url if is_ai_money_provider(provider) else APIMART_MIDJOURNEY_API_ROOT
+    root = laohu_api_base_url(provider) if is_ai_money_provider(provider) else APIMART_MIDJOURNEY_API_ROOT
     return f"{root}{path}"
 
 def apimart_midjourney_provider(provider_id: str):
@@ -18552,6 +18625,8 @@ def video_output_urls(raw):
     return deduped
 
 def video_api_root(provider):
+    if is_ai_money_provider(provider):
+        return laohu_api_base_url(provider)
     base_url = (provider.get("base_url") or AI_BASE_URL).rstrip("/")
     if is_volcengine_provider(provider):
         if base_url.endswith("/api/v3"):
@@ -18567,7 +18642,7 @@ def looks_like_html_response(text: str) -> bool:
 
 def video_submit_url_candidates(provider, base_url):
     if is_ai_money_provider(provider):
-        return [f"{base_url}/v1/videos"]
+        return [f"{laohu_api_base_url(provider)}/v1/videos"]
     if is_agnes_provider(provider):
         return [f"{base_url}/v1/videos"]
     if is_lingjing_provider(provider):
@@ -18585,6 +18660,7 @@ def video_submit_url_candidates(provider, base_url):
 
 def video_task_url_candidates(provider, base_url, task_id, submit_url=""):
     if is_ai_money_provider(provider):
+        base_url = laohu_api_base_url(provider)
         if "/v1/video/generations" in str(submit_url or ""):
             return [f"{base_url}/v1/video/generations/{urllib.parse.quote(str(task_id), safe='')}" ]
         return [f"{base_url}/v1/videos/{urllib.parse.quote(str(task_id), safe='')}" ]
@@ -19366,10 +19442,10 @@ async def canvas_audio_generation(payload: CanvasAudioRequest, node_type: str = 
     except HTTPException:
         raise
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=f"AI MONEY {'音乐' if node_type == 'music_generation' else '音频'}接口错误：{exc.response.text[:500]}") from exc
+        raise HTTPException(status_code=exc.response.status_code, detail=f"laohu {'音乐' if node_type == 'music_generation' else '音频'}接口错误：{exc.response.text[:500]}") from exc
     except httpx.HTTPError as exc:
-        log_net_error(f"{'音乐' if node_type == 'music_generation' else '音频'}(AI MONEY) 网络/TLS错误 model={model}", exc)
-        raise HTTPException(status_code=502, detail=f"请求 AI MONEY {'音乐' if node_type == 'music_generation' else '音频'}接口失败：{exc}") from exc
+        log_net_error(f"{'音乐' if node_type == 'music_generation' else '音频'}(laohu) 网络/TLS错误 model={model}", exc)
+        raise HTTPException(status_code=502, detail=f"请求 laohu {'音乐' if node_type == 'music_generation' else '音频'}接口失败：{exc}") from exc
 
 @app.post("/api/canvas-audio")
 async def canvas_audio(payload: CanvasAudioRequest):
@@ -19431,10 +19507,10 @@ async def canvas_video(payload: CanvasVideoRequest):
         except HTTPException:
             raise
         except httpx.HTTPStatusError as exc:
-            raise HTTPException(status_code=exc.response.status_code, detail=f"AI MONEY 视频接口错误：{exc.response.text[:500]}") from exc
+            raise HTTPException(status_code=exc.response.status_code, detail=f"laohu 视频接口错误：{exc.response.text[:500]}") from exc
         except httpx.HTTPError as exc:
-            log_net_error(f"视频(AI MONEY) 网络/TLS错误 model={payload.model}", exc)
-            raise HTTPException(status_code=502, detail=f"请求 AI MONEY 视频接口失败：{exc}") from exc
+            log_net_error(f"视频(laohu) 网络/TLS错误 model={payload.model}", exc)
+            raise HTTPException(status_code=502, detail=f"请求 laohu 视频接口失败：{exc}") from exc
     base_url = video_api_root(provider)
     if not base_url:
         raise HTTPException(status_code=400, detail=f"{provider.get('name') or provider['id']} 未配置 Base URL")
@@ -19907,14 +19983,14 @@ async def canvas_video(payload: CanvasVideoRequest):
 # --- Canvas LLM ---
 
 def ai_money_text_specialist_url(provider, operation):
-    base_url = str((provider or {}).get("base_url") or AI_MONEY_DEFAULT_BASE_URL).rstrip("/")
+    base_url = laohu_api_base_url(provider)
     path = {
         "transcription": "/v1/audio/transcriptions",
         "prompt_enhancement": "/v1/video/generations",
         "image_description": "/v1/midjourney/generations/describe",
     }.get(str(operation or "").strip())
     if not path:
-        raise HTTPException(status_code=400, detail=f"AI MONEY 不支持文本专用操作：{operation}")
+        raise HTTPException(status_code=400, detail=f"laohu 不支持文本专用操作：{operation}")
     return f"{base_url}{path}"
 
 def ai_money_special_text_value(raw, operation):
@@ -19927,7 +20003,7 @@ def ai_money_special_text_value(raw, operation):
     return str(data.get("result_text") or data.get("text") or data.get("prompt") or "").strip()
 
 async def wait_for_ai_money_text_task(client, provider, task_id):
-    base_url = str((provider or {}).get("base_url") or AI_MONEY_DEFAULT_BASE_URL).rstrip("/")
+    base_url = laohu_api_base_url(provider)
     task_url = f"{base_url}/v1/video/generations/{urllib.parse.quote(str(task_id), safe='')}"
     deadline = time.monotonic() + VIDEO_POLL_TIMEOUT
     last_payload = {}
@@ -19942,8 +20018,8 @@ async def wait_for_ai_money_text_task(client, provider, task_id):
         if ai_money_special_text_value(raw, "prompt_enhancement"):
             return raw
         if status in VIDEO_TASK_FAILURE_STATUSES:
-            raise HTTPException(status_code=502, detail=f"AI MONEY 文本任务失败：{str(raw)[:500]}")
-    raise HTTPException(status_code=504, detail=f"AI MONEY 文本任务超时：{last_payload or task_id}")
+            raise HTTPException(status_code=502, detail=f"laohu 文本任务失败：{str(raw)[:500]}")
+    raise HTTPException(status_code=504, detail=f"laohu 文本任务超时：{last_payload or task_id}")
 
 async def generate_ai_money_special_text(payload, provider, profile, platform_parameters):
     operation = str(profile.get("operation") or "").strip()
@@ -19997,7 +20073,7 @@ async def generate_ai_money_special_text(payload, provider, profile, platform_pa
                 raw = await wait_for_ai_money_text_task(client, provider, task_id)
         text = ai_money_special_text_value(raw, operation)
         if not text:
-            raise HTTPException(status_code=502, detail=f"AI MONEY 文本专用接口没有返回文本：{str(raw)[:500]}")
+            raise HTTPException(status_code=502, detail=f"laohu 文本专用接口没有返回文本：{str(raw)[:500]}")
         return {"text": text, "model": payload.model, "raw_usage": None, "raw": raw}
 
 @app.post("/api/canvas-llm")

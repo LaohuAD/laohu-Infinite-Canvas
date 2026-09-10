@@ -727,7 +727,7 @@ console.log(JSON.stringify({
         css = (ROOT / "static/css/smart-canvas.css").read_text(encoding="utf-8")
 
         self.assertIn("function priceLookupUrl", source)
-        self.assertIn("https://api.laohuaimoney.com/pricing", source)
+        self.assertIn("https://api.lao-hu.com/pricing", source)
         self.assertIn("https://www.runninghub.cn/call-api/search-api/standard-model?search=", source)
         self.assertIn("https://www.runninghub.ai/call-api/search-api/standard-model?search=", source)
         self.assertIn("provider?.rh_region === 'global'", source)

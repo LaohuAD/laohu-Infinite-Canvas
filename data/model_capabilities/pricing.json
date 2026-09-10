@@ -56,7 +56,7 @@
       "status": "dynamic",
       "label_zh": "按上游实际消费结算",
       "label_en": "Billed by actual upstream usage",
-      "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
+      "source_url": "https://api.lao-hu.com/pricing"
     },
     "modelscope": {
       "status": "account",
@@ -161,7 +161,7 @@
         "label_en": "¥16–31 / 1M tokens + upscaling",
         "details_zh": "多模态参考视频使用较低 Token 档；超分另收 ¥0.28–0.63/秒。",
         "details_en": "Reference-video tier; upscaling adds ¥0.28–0.63/sec.",
-        "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
+        "source_url": "https://api.lao-hu.com/pricing"
       }
     },
     {
@@ -174,7 +174,7 @@
         "label_en": "¥26–51 / 1M tokens + upscaling",
         "details_zh": "按实际 Token 结算；超分另收 ¥0.28–0.63/秒。",
         "details_en": "Billed by actual tokens; upscaling adds ¥0.28–0.63/sec.",
-        "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
+        "source_url": "https://api.lao-hu.com/pricing"
       }
     },
     {
@@ -185,7 +185,7 @@
         "unit": "video_second",
         "label_zh": "¥22 / 百万 Token + 超分",
         "label_en": "¥22 / 1M tokens + upscaling",
-        "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
+        "source_url": "https://api.lao-hu.com/pricing"
       }
     },
     {
@@ -196,7 +196,7 @@
         "unit": "video_second",
         "label_zh": "¥37 / 百万 Token + 超分",
         "label_en": "¥37 / 1M tokens + upscaling",
-        "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
+        "source_url": "https://api.lao-hu.com/pricing"
       }
     },
     {
@@ -207,7 +207,7 @@
         "unit": "video_second",
         "label_zh": "¥14 / 百万 Token + 超分",
         "label_en": "¥14 / 1M tokens + upscaling",
-        "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
+        "source_url": "https://api.lao-hu.com/pricing"
       }
     },
     {
@@ -218,7 +218,7 @@
         "unit": "video_second",
         "label_zh": "¥23 / 百万 Token + 超分",
         "label_en": "¥23 / 1M tokens + upscaling",
-        "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
+        "source_url": "https://api.lao-hu.com/pricing"
       }
     },
     {
@@ -231,7 +231,7 @@
         "label_en": "¥0.43–1.71 / sec",
         "details_zh": "国内 Prime：480P ¥0.43、720P ¥0.86、1080P ¥1.71，每秒计费。",
         "details_en": "Domestic Prime per second: 480P ¥0.43, 720P ¥0.86, 1080P ¥1.71.",
-        "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
+        "source_url": "https://api.lao-hu.com/pricing"
       }
     },
     {
@@ -244,12 +244,12 @@
         "label_en": "$0.06–0.27 / sec (converted by exchange rate)",
         "details_zh": "海外 Prime：480P $0.06、720P $0.13、1080P $0.27，每秒计费并按汇率折算。",
         "details_en": "Global Prime per second: 480P $0.06, 720P $0.13, 1080P $0.27, converted by exchange rate.",
-        "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
+        "source_url": "https://api.lao-hu.com/pricing"
       }
     },
     {
       "provider_id": "ai-money",
-      "model_id_pattern": "^laohuaimoney-upscaler$",
+      "model_id_pattern": "^laohu-upscaler$",
       "record": {
         "status": "confirmed",
         "unit": "video_second",
@@ -257,7 +257,7 @@
         "label_en": "¥0.14–0.56 / sec",
         "details_zh": "720p ¥0.14、1080p ¥0.21、2K ¥0.35、4K ¥0.56，每秒计费。",
         "details_en": "Per second: 720p ¥0.14, 1080p ¥0.21, 2K ¥0.35, 4K ¥0.56.",
-        "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
+        "source_url": "https://api.lao-hu.com/pricing"
       }
     },
     {
@@ -268,7 +268,7 @@
         "unit": "image",
         "label_zh": "¥0.27–0.54 / 张",
         "label_en": "¥0.27–0.54 / image",
-        "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
+        "source_url": "https://api.lao-hu.com/pricing"
       }
     },
     {
@@ -279,7 +279,7 @@
         "unit": "image",
         "label_zh": "$0.041–0.081 / 张（按汇率折算）",
         "label_en": "$0.041–0.081 / image (converted by exchange rate)",
-        "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
+        "source_url": "https://api.lao-hu.com/pricing"
       }
     },
     {
@@ -292,7 +292,7 @@
         "label_en": "About ¥0.27–0.54 / image",
         "details_zh": "官方文档实测参考，最终按上游实际消费结算。",
         "details_en": "Documented observed range; final charge follows upstream usage.",
-        "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
+        "source_url": "https://api.lao-hu.com/pricing"
       }
     },
     {
@@ -305,7 +305,7 @@
         "label_en": "About $0.045 / run (v6.1 relax)",
         "details_zh": "官方文档实测参考，最终按上游 USD cost 折算人民币。",
         "details_en": "Documented observed price; final charge converts actual upstream USD cost.",
-        "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
+        "source_url": "https://api.lao-hu.com/pricing"
       }
     },
     {
@@ -318,7 +318,7 @@
         "label_en": "About $0.05 / run (usually 2 tracks)",
         "details_zh": "官方文档实测参考，最终按上游 USD cost 折算人民币。",
         "details_en": "Documented observed price; final charge converts actual upstream USD cost.",
-        "source_url": "https://api.laohuaimoney.com/docs/llms.txt"
+        "source_url": "https://api.lao-hu.com/pricing"
       }
     }
   ],

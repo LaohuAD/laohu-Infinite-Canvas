@@ -24,6 +24,9 @@ PROVIDER_ALIASES = {
     "codex": "codex-cli",
     "jimeng": "jimeng-cli",
 }
+
+
+from static.model_migrations import normalize_laohu_model_id
 RUNNINGHUB_PROFILE_ALIASES = {
     "seedance-2.0-global/text-to-video": "Seedance2.0 Text to Video",
     "seedance-2.0-global/image-to-video": "Seedance2.0 Image to Video",
@@ -243,9 +246,9 @@ def _classification_tier(profile: Dict[str, Any], provider_id: str) -> str:
                 match = re.search(pattern, model_id)
                 if match:
                     return match.group(1)
-            if model_id == "laohuaimoney-video-g-omni-flash":
+            if model_id == "laohu-video-g-omni-flash":
                 return "omni-flash"
-            match = re.search(r"laohuaimoney-video-v31-(fast|lite|quality)$", model_id)
+            match = re.search(r"laohu-video-v31-(fast|lite|quality)$", model_id)
             if match:
                 return match.group(1)
         if node_type == "audio_generation":
@@ -868,12 +871,12 @@ def runninghub_profile_from_registry_item(item: Dict[str, Any]) -> Dict[str, Any
 
 
 def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
-    normalized = str(model_id or "").strip()
+    normalized = normalize_laohu_model_id(model_id)
     lower = normalized.lower()
     is_wan_3_prime = bool(re.fullmatch(r"wan-3\.0-(?:global-)?prime-(?:i2v|r2v)", lower))
     if lower in {"fashvsr_video_upscale", "fashvsr-video-upscale"}:
         operation = "video_upscale"
-    elif lower == "laohuaimoney-upscaler":
+    elif lower == "laohu-upscaler":
         operation = "video_upscale"
     elif lower.endswith(("-start-end", "-start-to-end")):
         operation = "start_end_to_video"
@@ -891,14 +894,14 @@ def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
         operation = "image_to_video"
     elif lower.endswith("-multi"):
         operation = "multimodal_to_video"
-    elif lower.startswith("laohuaimoney-video-"):
+    elif lower.startswith("laohu-video-"):
         operation = "multimodal_to_video" if "omni" in lower else "compatible_video"
     elif lower in {"kling-elements-advanced", "kling-lip-sync-identify-face", "kling-lip-sync-video", "midjourney-video"}:
         operation = "special_video"
     elif "draft-enhance" in lower:
         operation = "draft_enhance"
     else:
-        raise ModelCapabilityError(f"不是已确认的 AI MONEY 视频模型：{model_id}")
+        raise ModelCapabilityError(f"不是已确认的 laohu 视频模型：{model_id}")
     base = re.sub(r"-(t2v|i2v|multi|r2v|reference-to-video|start-end|start-to-end|v2v|edit|motion|short-play)$", "", lower)
     family_patterns = (
         (r"^wan-3\.0-", "wan-3.0"),
@@ -914,14 +917,14 @@ def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
         (r"^fashvsr[_-]", "fashvsr"),
         (r"^vidu-q3-", "vidu-q3"),
         (r"^wan-2\.7-spicy-", "wan-2.7-spicy"),
-        (r"^laohuaimoney-video-v31-", "veo3.1"),
-        (r"^laohuaimoney-video-g-omni-", "veo3.1"),
-        (r"^laohuaimoney-video-gk-", "grok-video"),
+        (r"^laohu-video-v31-", "veo3.1"),
+        (r"^laohu-video-g-omni-", "veo3.1"),
+        (r"^laohu-video-gk-", "grok-video"),
     )
     family_name = next((name for pattern, name in family_patterns if re.search(pattern, lower)), base)
     if lower in {"fashvsr_video_upscale", "fashvsr-video-upscale"}:
         family_name = "FashVSR"
-    elif lower == "laohuaimoney-upscaler":
+    elif lower == "laohu-upscaler":
         family_name = "upscaler"
     elif lower == "midjourney-video":
         family_name = "midjourney"
@@ -1024,7 +1027,7 @@ def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
             "resolution": {"level": "optional", "type": "enum", "options": ["480p", "720p"], "default": "720p", "source_field": "metadata.resolution"},
             "aspect_ratio": {"level": "optional", "type": "enum", "options": ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"], "default": "16:9", "source_field": "metadata.ratio"},
         }
-    elif lower.startswith("laohuaimoney-video-v31-"):
+    elif lower.startswith("laohu-video-v31-"):
         inputs = {
             "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"},
             "reference": {"media_type": "image", "min": 0, "max": 3, "role": "reference"},
@@ -1034,13 +1037,13 @@ def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
             "duration": {"level": "optional", "type": "enum", "options": [10], "default": 10, "source_field": "seconds"},
             "aspect_ratio": {"level": "optional", "type": "enum", "options": ["16:9", "9:16"], "default": "16:9", "source_field": "metadata.ratio"},
         }
-    elif lower.startswith("laohuaimoney-video-gk-v15"):
+    elif lower.startswith("laohu-video-gk-v15"):
         inputs = {
             "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"},
             "reference": {"media_type": "image", "min": 0, "max": 7, "role": "reference"},
         }
         mapping = {"prompt": "prompt", "reference": "images"}
-    elif lower.startswith("laohuaimoney-video-g-omni-"):
+    elif lower.startswith("laohu-video-g-omni-"):
         inputs = {
             "prompt": {"media_type": "text", "min": 0, "max": 1, "role": "prompt"},
             "reference": {"media_type": "image", "min": 0, "max": 16, "role": "reference"},
@@ -1245,13 +1248,13 @@ def _ai_money_flowmusic_profile(model_id: str) -> Dict[str, Any]:
 
 
 def ai_money_profile_from_model_id(model_id: str, node_type: str = "") -> Dict[str, Any]:
-    normalized = str(model_id or "").strip()
+    normalized = normalize_laohu_model_id(model_id)
     lower = normalized.lower()
     music_model = _is_music_model_id(normalized)
     if node_type == "music_generation" and not music_model:
-        raise ModelCapabilityError(f"AI MONEY 模型 {normalized} 不是音乐生成模型")
+        raise ModelCapabilityError(f"laohu 模型 {normalized} 不是音乐生成模型")
     if node_type == "audio_generation" and music_model:
-        raise ModelCapabilityError(f"AI MONEY 模型 {normalized} 属于音乐生成节点")
+        raise ModelCapabilityError(f"laohu 模型 {normalized} 属于音乐生成节点")
     if node_type == "text_generation" and lower == "whisper-1":
         return {
             "model_id": normalized, "family_id": "ai-money-whisper", "family_name": "Whisper",
@@ -1298,10 +1301,10 @@ def ai_money_profile_from_model_id(model_id: str, node_type: str = "") -> Dict[s
             "output": {"media_type": "text", "min": 1, "max": 4, "async": False},
             "platform": {"endpoint": "/v1/midjourney/generations/describe"},
         }
-    if node_type == "text_generation" and lower == "laohuaimoney/gk-4.6":
+    if node_type == "text_generation" and lower == "laohu/gk-4.6":
         return {
             "model_id": normalized,
-            "family_id": "ai-money-laohuaimoney-gk-4-6",
+            "family_id": "ai-money-laohu-gk-4-6",
             "family_name": "GK 4.6",
             "family_name_en": "GK 4.6",
             "display_name": normalized,
@@ -1391,7 +1394,7 @@ def ai_money_profile_from_model_id(model_id: str, node_type: str = "") -> Dict[s
         }
     layer_decomposition = "layer-decomposition" in lower
     official_image_model = (
-        lower.startswith("laohuaimoney-image-")
+        lower.startswith("laohu-image-")
         or lower.startswith("seedream-v5-pro-")
         or lower.startswith("qwen-image-3.0-")
         or lower.startswith("wan-2.7-global-")
@@ -1400,13 +1403,13 @@ def ai_money_profile_from_model_id(model_id: str, node_type: str = "") -> Dict[s
     if official_image_model:
         operation = "layer_decomposition" if layer_decomposition else "image_to_image" if any(token in lower for token in ("-i2i", "-edit", "image-to-image")) else "text_to_image"
         family_base = re.sub(r"-(i2i|t2i|edit)$", "", lower)
-        if lower.startswith("laohuaimoney-image-g2-") or lower.startswith("laohuaimoney-image-g-v2-"):
+        if lower.startswith("laohu-image-g2-") or lower.startswith("laohu-image-g-v2-"):
             family_base = "gpt-image-2"
-        elif lower.startswith("laohuaimoney-image-gk-"):
+        elif lower.startswith("laohu-image-gk-"):
             family_base = "grok-image"
-        elif lower.startswith("laohuaimoney-image-nb-pro"):
+        elif lower.startswith("laohu-image-nb-pro"):
             family_base = "nano-banana-pro"
-        elif lower.startswith("laohuaimoney-image-nb-"):
+        elif lower.startswith("laohu-image-nb-"):
             family_base = "nano-banana-2"
         elif lower.startswith("qwen-image-3.0-"):
             family_base = "qwen-image-3.0"
@@ -1415,43 +1418,43 @@ def ai_money_profile_from_model_id(model_id: str, node_type: str = "") -> Dict[s
         elif lower.startswith("wan-2.7-global-"):
             family_base = "wan-image"
         prompt_input = {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}
-        if lower == "laohuaimoney-image-nb-flash":
+        if lower == "laohu-image-nb-flash":
             prompt_input["max_chars"] = 1000
-        elif operation == "image_to_image" and lower.startswith("laohuaimoney-image-"):
+        elif operation == "image_to_image" and lower.startswith("laohu-image-"):
             prompt_input.update({"min_chars": 5, "max_chars": 2000})
         inputs = {"prompt": prompt_input}
         mapping = {"prompt": "prompt"}
         optional_reference_max = 0
-        if lower.startswith("laohuaimoney-image-nb-"):
+        if lower.startswith("laohu-image-nb-"):
             optional_reference_max = 14
-        elif lower.startswith("laohuaimoney-image-g-v2-lowprice"):
+        elif lower.startswith("laohu-image-g-v2-lowprice"):
             optional_reference_max = 16
         if operation in {"image_to_image", "layer_decomposition"} or optional_reference_max:
             reference_min = 1 if operation in {"image_to_image", "layer_decomposition"} else 0
-            if lower == "laohuaimoney-image-gk-v2-edit":
+            if lower == "laohu-image-gk-v2-edit":
                 reference_max = 3
             else:
-                reference_max = 1 if layer_decomposition or lower.startswith("laohuaimoney-image-gk-v15-edit") else (optional_reference_max or 10)
+                reference_max = 1 if layer_decomposition or lower.startswith("laohu-image-gk-v15-edit") else (optional_reference_max or 10)
             inputs["reference"] = {"media_type": "image", "min": reference_min, "max": reference_max, "role": "reference"}
             mapping["reference"] = "images"
         parameters = {
             "resolution": {"level": "optional", "type": "enum", "options": ["1k", "2k", "4k"], "source_field": "metadata.resolution"},
             "aspect_ratio": {"level": "optional", "type": "enum", "options": ["1:1", "16:9", "9:16", "4:3", "3:4"], "source_field": "metadata.ratio"},
         }
-        if lower == "laohuaimoney-image-gk-v2-edit":
+        if lower == "laohu-image-gk-v2-edit":
             parameters = {
                 "resolution": {"level": "optional", "type": "enum", "options": ["1k", "2k"], "source_field": "resolution"},
                 "aspect_ratio": {"level": "optional", "type": "enum", "options": ["auto", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "9:21", "1:2", "2:1"], "source_field": "aspect_ratio"},
                 "count": {"level": "optional", "type": "integer", "min": 1, "max": 10, "source_field": "n"},
                 "nsfw_check": {"level": "optional", "type": "boolean", "default": False, "source_field": "nsfw_check"},
             }
-        elif lower == "laohuaimoney-image-gk-v2":
+        elif lower == "laohu-image-gk-v2":
             parameters = {
                 "resolution": {"level": "optional", "type": "enum", "options": ["quality"], "source_field": "resolution"},
                 "aspect_ratio": {"level": "optional", "type": "enum", "options": ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9"], "source_field": "size"},
                 "count": {"level": "optional", "type": "integer", "min": 1, "max": 12, "source_field": "n"},
             }
-        if lower == "laohuaimoney-image-g-v2-lowprice":
+        if lower == "laohu-image-g-v2-lowprice":
             parameters["aspect_ratio"]["source_field"] = "size"
             parameters["count"] = {"level": "optional", "type": "integer", "min": 1, "max": 10, "source_field": "n"}
         mapping.update({
@@ -1695,7 +1698,7 @@ def ai_money_profile_from_model_id(model_id: str, node_type: str = "") -> Dict[s
             "output": {"media_type": "audio", "min": 1, "async": True},
             "platform": {"endpoint": endpoint},
         }
-    raise ModelCapabilityError(f"AI MONEY 模型 {normalized} 缺少已确认的平台适配器")
+    raise ModelCapabilityError(f"laohu 模型 {normalized} 缺少已确认的平台适配器")
 
 
 def modelscope_profile_from_model_id(model_id: str, node_type: str) -> Dict[str, Any]:
@@ -2358,7 +2361,10 @@ class ModelCapabilityRegistry:
                     indexed_profiles[(model_id, str(profile.get("node_type") or "").strip())] = profile
             models = []
             for node_type, field_name in NODE_MODEL_FIELDS.items():
-                for model_id in _unique_strings(provider.get(field_name) or []):
+                configured_model_ids = _unique_strings(provider.get(field_name) or [])
+                if capability_id == "ai-money":
+                    configured_model_ids = _unique_strings(normalize_laohu_model_id(model_id) for model_id in configured_model_ids)
+                for model_id in configured_model_ids:
                     source = indexed_profiles.get((model_id, node_type))
                     if self.readiness(source) != "ready":
                         source = dynamic_profile_for_model(capability_id, model_id, node_type) or source
@@ -2397,7 +2403,10 @@ class ModelCapabilityRegistry:
             configured_order_by_type = {
                 node_type: {
                     model_id: index
-                    for index, model_id in enumerate(_unique_strings(provider.get(field_name) or []))
+                    for index, model_id in enumerate(_unique_strings(
+                        normalize_laohu_model_id(value) if capability_id == "ai-money" else value
+                        for value in (provider.get(field_name) or [])
+                    ))
                 }
                 for node_type, field_name in NODE_MODEL_FIELDS.items()
             }
@@ -2438,8 +2447,9 @@ class ModelCapabilityRegistry:
         for provider in catalog["providers"]:
             if provider["id"] != provider_id:
                 continue
+            requested_model_id = normalize_laohu_model_id(model_id) if provider.get("capability_provider_id") == "ai-money" else model_id
             for model in provider["models"]:
-                if model["model_id"] == model_id and model["node_type"] == node_type:
+                if model["model_id"] == requested_model_id and model["node_type"] == node_type:
                     return model
         return None
 

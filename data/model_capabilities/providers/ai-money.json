@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "provider_id": "ai-money",
-  "provider_name": "AI MONEY",
+  "provider_name": "laohu",
   "status": "maintained",
   "updated_at": "2026-08-25",
   "sources": [
     {
-      "url": "https://api.laohuaimoney.com/docs/llms.txt",
-      "kind": "official_documented",
-      "checked_at": "2026-08-25"
+      "url": "https://api.lao-hu.com/v1/models",
+      "kind": "runtime_verified",
+      "checked_at": "2026-09-09"
     },
     {
       "path": "main.py",
@@ -18,9 +18,9 @@
   ],
   "models": [
     {
-      "model_id": "laohuaimoney-image-g-v2-lowprice",
+      "model_id": "laohu-image-g-v2-lowprice",
       "family_id": "ai-money-image-g-v2-lowprice",
-      "family_name": "AI MONEY Image G V2 · 低价版",
+      "family_name": "laohu Image G V2 · 低价版",
       "variant_id": "text_or_image_to_image",
       "node_type": "image_generation",
       "operation": "text_to_image",
@@ -89,8 +89,8 @@
       "platform": {"endpoint": "/v1/chat/completions"}
     },
     {
-      "model_id": "laohuaimoney/gk-4.6",
-      "family_id": "ai-money-laohuaimoney-gk-4-6",
+      "model_id": "laohu/gk-4.6",
+      "family_id": "ai-money-laohu-gk-4-6",
       "family_name": "GK 4.6",
       "family_name_en": "GK 4.6",
       "variant_id": "default",
@@ -149,7 +149,7 @@
       "platform": {"endpoint": "/v1/audio/generations"}
     },
     {
-      "model_id": "laohuaimoney-image-gk-v2-edit",
+      "model_id": "laohu-image-gk-v2-edit",
       "family_id": "ai-money-grok-image",
       "family_name": "Grok Image",
       "family_name_en": "Grok Image",
