@@ -35,7 +35,7 @@ class RealtimeIsolationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.assertIsNotNone(importlib.util.find_spec('canvas_core'), '共享内核必须独立于 main 初始化')
         from canvas_core.realtime import ConnectionManager
-        self.manager = ConnectionManager(send_timeout=0.05)
+        self.manager = ConnectionManager(send_timeout=1.0)
 
     async def test_slow_client_cannot_delay_healthy_client(self):
         slow, healthy = FakeSocket(), FakeSocket()
@@ -44,8 +44,17 @@ class RealtimeIsolationTests(unittest.IsolatedAsyncioTestCase):
         healthy.received.clear()
         slow.delay = 10
         broadcast = asyncio.create_task(self.manager.broadcast_canvas_updated('c', 42, 3, 'author'))
-        await asyncio.wait_for(healthy.received.wait(), 0.03)
-        await asyncio.wait_for(broadcast, 0.2)
+        try:
+            await asyncio.wait_for(healthy.received.wait(), 3)
+            # 验证健康连接在慢连接仍挂起时收到消息，而非要求 CI 在 30ms 内调度。
+            self.assertIn(slow, self.manager.active_connections)
+            self.assertFalse(slow.closed)
+            self.assertFalse(broadcast.done())
+            await asyncio.wait_for(broadcast, 3)
+        finally:
+            if not broadcast.done():
+                broadcast.cancel()
+                await asyncio.gather(broadcast, return_exceptions=True)
         self.assertEqual(healthy.messages[-1], {'type':'canvas_updated','canvas_id':'c','updated_at':42,'revision':3,'client_id':'author'})
         self.assertNotIn(slow, self.manager.active_connections)
         self.assertNotIn('slow', self.manager.user_connections)
