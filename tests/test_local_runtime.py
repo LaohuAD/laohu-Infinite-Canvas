@@ -193,6 +193,18 @@ class MediaToolResolutionTests(unittest.TestCase):
 
     def test_resolution_skips_broken_path_and_uses_valid_candidate(self):
         from local_runtime import resolve_media_tool
-        with patch('local_runtime.shutil.which', return_value='/broken/ffmpeg'), patch('local_runtime.Path.stat', return_value=SimpleNamespace(st_mtime_ns=1)), patch('local_runtime._media_binary_works', side_effect=lambda path,*_: path!='/broken/ffmpeg'):
-            self.assertNotEqual(resolve_media_tool('ffmpeg'), '/broken/ffmpeg')
-            self.assertIsNotNone(resolve_media_tool('ffmpeg'))
+        import local_runtime
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            broken = root / 'broken-ffmpeg'
+            broken.touch()
+            valid = root / 'bin' / ('ffmpeg.exe' if local_runtime.os.name == 'nt' else 'ffmpeg')
+            valid.parent.mkdir()
+            valid.touch()
+            # 使用真实文件属性，避免模拟 stat 破坏 Python 3.10 的 glob/is_dir。
+            with patch('local_runtime.ROOT', root), \
+                 patch.dict(local_runtime.os.environ, {'LAOHU_FFMPEG_PATH': ''}), \
+                 patch('local_runtime.shutil.which', return_value=str(broken)), \
+                 patch('local_runtime.Path.glob', return_value=[]), \
+                 patch('local_runtime._media_binary_works', side_effect=lambda path, *_: path == str(valid)):
+                self.assertEqual(resolve_media_tool('ffmpeg'), str(valid))
