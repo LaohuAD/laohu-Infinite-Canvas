@@ -3,6 +3,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from project_storage import ProjectStorage, StorageError
 
@@ -16,6 +17,20 @@ class ProjectStorageTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_same_second_safety_backup_never_replaces_source_archive(self):
+        value = self.storage.data_dir / 'sentinel.json'
+        value.write_text('{"value": 1}', encoding='utf-8')
+        with patch('project_storage.time.strftime', return_value='20260913-000000'):
+            original = self.storage.create_backup()
+            original_bytes = original.read_bytes()
+            value.write_text('{"value": 2}', encoding='utf-8')
+            restored = self.storage.restore_backup(original, create_safety_backup=True)
+        self.assertNotEqual(str(original), restored['safety_backup'])
+        self.assertEqual(original.read_bytes(), original_bytes)
+        self.assertEqual(json.loads(value.read_text())['value'], 1)
+        with zipfile.ZipFile(restored['safety_backup']) as backup:
+            self.assertEqual(json.loads(backup.read('data/sentinel.json'))['value'], 2)
 
     def test_layout_separates_structured_data_media_workflows_backups_and_cache(self):
         layout = self.storage.layout()

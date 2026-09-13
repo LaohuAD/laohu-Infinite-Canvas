@@ -119,12 +119,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(json.dumps({'repo_url': 'https://github.com/LaohuAD/laohu-Infinite-Canvas', 'version': 'fixture'}).encode())
+        if count == 2 and not getattr(self.server, 'stopping', False):
+            self.server.stopping = True
+            threading.Timer(1.2, self.server.shutdown).start()
 server = HTTPServer(('127.0.0.1', 0), Handler)
 (root / 'url.txt').write_text('http://127.0.0.1:' + str(server.server_port) + '/')
 if count == 1:
     Path(os.environ['INFINITE_CANVAS_RESTART_FILE']).write_text(json.dumps({'restart_at': time.time() + 1}))
-else:
-    threading.Timer(1.2, server.shutdown).start()
 try:
     server.serve_forever(poll_interval=0.05)
 except KeyboardInterrupt:
@@ -160,13 +161,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers()
         self.wfile.write(json.dumps({'repo_url':'https://github.com/LaohuAD/laohu-Infinite-Canvas','version':'1.0'}).encode())
+        if count == 2 and not getattr(self.server, 'stopping', False):
+            self.server.stopping = True
+            threading.Timer(1.2, self.server.shutdown).start()
 server=HTTPServer(('127.0.0.1',0),Handler)
 (root/'url.txt').write_text('http://127.0.0.1:'+str(server.server_port)+'/')
 if count==1:
     job=next((root/'cache/update-jobs').iterdir())
     Path(os.environ['INFINITE_CANVAS_RESTART_FILE']).write_text(json.dumps({'restart_at':time.time()+1,'update_job':str(job)}))
-else:
-    threading.Timer(1.2,server.shutdown).start()
 try: server.serve_forever(poll_interval=.05)
 except KeyboardInterrupt: pass
 finally: server.server_close()

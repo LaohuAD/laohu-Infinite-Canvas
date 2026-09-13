@@ -7,9 +7,10 @@ from fastapi import HTTPException
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import main
+from provider_fixture import ConfiguredProvidersMixin, configured_providers
 
 
-class AiMoneyAdapterTests(unittest.IsolatedAsyncioTestCase):
+class AiMoneyAdapterTests(ConfiguredProvidersMixin, unittest.IsolatedAsyncioTestCase):
     def test_remote_archive_download_rejects_private_network_addresses(self):
         with patch.object(main.socket, "getaddrinfo", return_value=[
             (main.socket.AF_INET, main.socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443)),

@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import main
+from provider_fixture import ConfiguredProvidersMixin, configured_providers
 from model_capabilities import (
     ModelCapabilityError,
     ModelCapabilityRegistry,
@@ -39,7 +40,7 @@ def run_node(source):
     return json.loads(result.stdout)
 
 
-class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
+class ModelCapabilityTests(ConfiguredProvidersMixin, unittest.IsolatedAsyncioTestCase):
     def test_jimeng_queue_payload_hides_invalid_zero_progress(self):
         pending = main.JimengPendingError(
             "submit-zero",
@@ -1145,7 +1146,7 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(resolved, str(path))
 
     def test_official_non_volcengine_catalogs_have_expected_coverage(self):
-        providers = json.loads((ROOT / "data" / "api_providers.json").read_text(encoding="utf-8"))
+        providers = configured_providers()
         registry = ModelCapabilityRegistry(ROOT)
         expected = {
             "modelscope": (7, 7),
@@ -1723,7 +1724,7 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
             prompt="你好",
             reference_audio="/api/results/audio/source.wav",
         )
-        provider = {"id": "runninghub", "base_url": "https://www.runninghub.ai", "rh_region": "global"}
+        provider = {"id": "runninghub", "base_url": "https://www.runninghub.ai", "rh_region": "global", "wallet_api_key": "fixture-not-a-real-key"}
         submitted = {}
 
         class Response:

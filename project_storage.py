@@ -1072,7 +1072,8 @@ class ProjectStorage:
         if destination:
             archive = Path(destination).expanduser().resolve()
         else:
-            archive = self.backups_dir / f"无限画布备份-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+            # 同秒内的恢复前备份不能覆盖正在读取的原备份（Windows 还会拒绝替换）。
+            archive = self.backups_dir / f"无限画布备份-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}.zip"
         archive.parent.mkdir(parents=True, exist_ok=True)
         temp = archive.with_name(f".{archive.name}.{uuid.uuid4().hex}.tmp")
         sources: list[Path] = [self.data_dir, self.assets_dir]

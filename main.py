@@ -3954,7 +3954,8 @@ def canvas_media_url_for_legacy_path(value):
     if not text:
         return ""
     parsed = urllib.parse.urlsplit(text)
-    if parsed.scheme not in {"", "file"}:
+    # Windows 盘符会被 urlsplit 识别为 scheme；应先识别本地绝对路径。
+    if parsed.scheme not in {"", "file"} and not os.path.isabs(text):
         return ""
     if parsed.scheme == "file":
         clean = urllib.parse.unquote(parsed.path or "")

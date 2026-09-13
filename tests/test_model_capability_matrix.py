@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import main
+from provider_fixture import ConfiguredProvidersMixin, configured_providers
 
 
 NODE_OUTPUT_TYPES = {
@@ -82,7 +83,7 @@ def _profile_fixture(profile):
     return inputs, input_counts, input_roles, parameters
 
 
-class ConfiguredModelCapabilityMatrixTests(unittest.TestCase):
+class ConfiguredModelCapabilityMatrixTests(ConfiguredProvidersMixin, unittest.TestCase):
     def test_ai_money_new_llm_models_are_configured_and_dry_run_without_network(self):
         provider = next(item for item in main.load_api_providers() if item.get("id") == "ai-money")
         self.assertIn("qwen/qwen3.8-max", provider.get("chat_models") or [])

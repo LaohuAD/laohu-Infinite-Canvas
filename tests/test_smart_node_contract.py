@@ -1181,7 +1181,8 @@ console.log(JSON.stringify(request));
         self.assertIn("const inputCounts = textGenerationCandidateInputCounts(request)", renderer)
         self.assertIn("resolveCapabilityFamilySelection(settings.textProvider, 'text_generation', inputCounts", renderer)
 
-        providers = json.loads((ROOT / "data/api_providers.json").read_text(encoding="utf-8"))
+        from provider_fixture import configured_providers
+        providers = configured_providers()
         codex = next(item for item in providers if item["id"] == "codex")
         codex_profile = json.loads((ROOT / "data/model_capabilities/providers/codex-cli.json").read_text(encoding="utf-8"))
         codex_text_models = {

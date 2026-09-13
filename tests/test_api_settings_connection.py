@@ -777,7 +777,7 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
             candidates = main.codex_cli_candidates()
 
         self.assertIn("/Applications/ChatGPT.app/Contents/Resources/codex", candidates)
-        self.assertIn("/Users/test/Applications/ChatGPT.app/Contents/Resources/codex", candidates)
+        self.assertIn(main.os.path.join("/Users/test", "Applications", "ChatGPT.app", "Contents", "Resources", "codex"), candidates)
 
     async def test_codex_status_reports_login_state(self):
         version_proc = MagicMock()
