@@ -104,7 +104,10 @@ class AiMoneyUiTests(unittest.TestCase):
         ]
         for link in expected_links:
             self.assertIn(link, html)
-        self.assertIn("老胡用AI赚钱", html)
+        self.assertIn("老胡用AI画梦", html)
+        self.assertNotIn("dx-letter", html)
+        self.assertNotIn("frame-online", html)
+        self.assertNotIn("frame-gpt-chat", html)
         self.assertNotIn("wuli大雄", html)
         for key in ("social.xiaohongshu", "social.douyin", "social.bilibili", "social.youtube"):
             self.assertIn(f'data-i18n-title="{key}"', html)

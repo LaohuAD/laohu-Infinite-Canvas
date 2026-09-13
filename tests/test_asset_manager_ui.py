@@ -81,7 +81,7 @@ class AssetManagerUiTests(unittest.TestCase):
         self.assertIn("resultIdFromUrl", self.promote_script)
         self.assertIn("/api/results/${encodeURIComponent(entry.id)}/promote", self.promote_script)
 
-    def test_generation_results_are_independent_and_have_five_filters(self):
+    def test_generation_results_are_independent_and_have_six_filters(self):
         self.assertIn("apiJson('/api/results')", self.script)
         self.assertIn("apiJson('/api/results/delete'", self.script)
         for category_id, label in (
@@ -90,8 +90,9 @@ class AssetManagerUiTests(unittest.TestCase):
             ("video", "视频"),
             ("audio", "音频"),
             ("text", "文本"),
+            ("music", "音乐"),
         ):
-            self.assertIn(f"id:'{category_id}', name:'{label}'", self.script)
+            self.assertIn(f"['{category_id}','{label}']", self.script)
         self.assertNotIn("apiJson('/api/canvas-assets')", self.script)
         self.assertIn("source_canvas", self.script)
         self.assertIn("未记录来源", self.script)
@@ -113,26 +114,48 @@ class AssetManagerUiTests(unittest.TestCase):
         self.assertIn(".asset-text-editor {", self.styles)
         self.assertIn("background:var(--card)", self.styles)
 
+    def test_retired_asset_tools_are_removed_from_ui_and_routes(self):
+        import main
+        self.assertNotIn("storageSettingsBtn", self.html)
+        for marker in ("data-asset-classify", "data-asset-avatar-register", "data-canvas-asset-open", "data-canvas-asset-copy"):
+            self.assertNotIn(marker, self.script)
+        routes = {getattr(route, "path", "") for route in main.app.routes}
+        self.assertNotIn("/api/local-assets/classify", routes)
+        self.assertNotIn("/api/asset-library/classify", routes)
+        self.assertNotIn("/api/storage-settings", routes)
+        self.assertFalse(any(path.endswith(("/register-avatar", "/avatar-status")) for path in routes))
+        self.assertIn("/api/storage-files/{kind}/{rel_path:path}", routes)
+
+    def test_translation_module_changes_refresh_loader_cache(self):
+        import os
+        import tempfile
+        from unittest.mock import patch
+        import main
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module = root / "js/i18n/asset-manager.js"
+            module.parent.mkdir(parents=True)
+            module.write_text("first", encoding="utf-8")
+            (root / "js/i18n.js").write_text("loader", encoding="utf-8")
+            with patch.object(main, "STATIC_DIR", directory):
+                html = '<script src="/static/js/i18n.js?v=old"></script>'
+                before = main.versioned_static_html(html)
+                modified = module.stat().st_mtime_ns + 10_000_000_000
+                os.utime(module, ns=(modified, modified))
+                after = main.versioned_static_html(html)
+            self.assertNotEqual(before, after)
+
     def test_default_asset_library_has_no_delete_action(self):
         self.assertIn("activeAssetLibraryId === 'default'", self.script)
 
-    def test_skill_library_imports_markdown_through_shared_prompt_assets(self):
+    def test_skill_library_and_canvas_calls_are_retired(self):
         main_source = (ROOT / "main.py").read_text(encoding="utf-8")
-
-        self.assertIn("def seed_skill_library", main_source)
-        self.assertIn('"kind": "skill" if', main_source)
-        self.assertIn('@app.post("/api/prompt-libraries/skills/import")', main_source)
-        self.assertIn('accept=".md,text/markdown,text/plain"', self.script)
-        self.assertIn("data-prompt-skill-import", self.script)
-        self.assertIn("new FormData()", self.script)
-
-    def test_skill_selection_keeps_stable_id_and_runtime_snapshot(self):
         canvas_source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
-
-        self.assertIn("libraryKind:activeLibrary.kind", canvas_source)
-        self.assertIn("textSystemSkillId", canvas_source)
-        self.assertIn("textSystemSkillSnapshot", canvas_source)
-        self.assertIn("skill:cloneSmartSettings(runSettings.textSystemSkillSnapshot", canvas_source)
+        self.assertNotIn("def seed_skill_library", main_source)
+        self.assertNotIn('@app.post("/api/prompt-libraries/skills/import")', main_source)
+        self.assertNotIn("data-prompt-skill-import", self.script)
+        self.assertNotIn("textSystemSkillSnapshot", canvas_source)
+        self.assertIn("archive_retired_skill_data", main_source)
 
 
 if __name__ == "__main__":

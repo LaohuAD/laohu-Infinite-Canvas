@@ -362,7 +362,7 @@ console.log(JSON.stringify({
         self.assertEqual(data["prompt"], "<sks> front-right quarter view elevated shot medium shot")
         self.assertEqual(data["reset"], "<sks> front view eye-level shot medium shot")
 
-    def test_text_generator_is_a_fixed_execution_node(self):
+    def test_text_generator_preserves_resized_creation_preview(self):
         script = """
 const c=require('./static/js/smart-node-contract.js');
 const node=c.normalizeExecutionNode({type:c.NODE_TYPES.textGenerator,w:900,h:700,runSettings:{provider_id:'codex-cli'}});
@@ -372,7 +372,7 @@ console.log(JSON.stringify({types:c.NODE_TYPES,node,isExecution:c.isExecutionNod
 
         self.assertEqual(data["types"]["textGenerator"], "smart-text-generator")
         self.assertTrue(data["isExecution"])
-        self.assertEqual((data["node"]["w"], data["node"]["h"]), (316, 194))
+        self.assertEqual((data["node"]["w"], data["node"]["h"]), (900, 700))
         self.assertEqual(data["title"], "文本生成")
         self.assertEqual(data["output"], "text")
 
@@ -394,7 +394,8 @@ console.log(JSON.stringify({
     def test_canvas_material_menu_paste_and_text_files_share_text_material_path(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
         menu = source[source.index("function createNodeFromMenu"):source.index("shell.addEventListener('mousedown'", source.index("function createNodeFromMenu"))]
-        paste = source[source.index("window.addEventListener('paste'"):source.index("window.addEventListener('keydown'")]
+        paste_start = source.index("window.addEventListener('paste'")
+        paste = source[paste_start:source.index("window.addEventListener('keydown'", paste_start)]
 
         self.assertIn("createTextMaterialNodeAt", menu)
         self.assertNotIn("pickMediaForSmartNode(created.id)", menu)
@@ -411,7 +412,7 @@ console.log(JSON.stringify({
         self.assertIn("SMART_NODE_TYPES.textGenerator", menu)
         self.assertNotIn("createPromptNode", menu)
         self.assertIn("if(node.type === 'smart-prompt') return promptNodeBodyHtml(node)", body)
-        self.assertIn("smartExecutionNodeBodyHtml(node)", body)
+        self.assertIn("fusedCreationBodyHtml(node, layout)", body)
         self.assertLess(body.index("promptNodeBodyHtml(node)"), body.index("isSmartExecutionNode(node)"))
         self.assertIn("async function runSelectedNode", source)
         self.assertIn("runPromptLLMNode(node.id)", source)
@@ -428,8 +429,8 @@ console.log(JSON.stringify({
 
         self.assertIn('class="text-generation-template-btn"', section)
         self.assertIn('data-text-system-template', section)
-        self.assertIn('aria-label="${escapeAttr(tr(\'smart.systemTemplateSkill\'))}"', section)
-        self.assertNotIn('<span>${escapeHtml(tr(\'smart.templateSkill\'))}</span>', section)
+        self.assertIn('aria-label="${escapeAttr(tr(\'smart.systemTemplate\'))}"', section)
+        self.assertNotIn('<span>${escapeHtml(tr(\'smart.template\'))}</span>', section)
         self.assertIn(".text-generation-system-row { grid-column:1 / -1; position:relative; overflow:visible;", css)
         self.assertIn("padding:8px 42px 8px 10px", css)
         self.assertIn(".dynamic-params .text-generation-system-row textarea:focus", css)
@@ -476,7 +477,7 @@ console.log(JSON.stringify({
     def test_strict_model_parameters_are_rendered_from_one_schema_source(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
         css = (ROOT / "static/css/smart-canvas.css").read_text(encoding="utf-8")
-        renderer = source[source.index("function renderCapabilityParameters"):source.index("function renderCapabilityNumber")]
+        renderer = source[source.index("function renderCapabilityParameters"):source.index("const CAPABILITY_PARAMETER_UNSET")]
 
         self.assertIn("renderCapabilityParameterBundle(profile)", renderer)
         self.assertNotIn("renderVideoResolutionControl", renderer)
@@ -497,7 +498,7 @@ console.log(JSON.stringify({
         self.assertIn("capability-option-grid", renderer)
         self.assertIn("data-capability-option", renderer)
         self.assertIn('type="range"', renderer)
-        self.assertNotIn('type="number"', renderer)
+        self.assertIn('type="number"', renderer)
         self.assertIn("function renderExecutionConfigPanel", source)
         self.assertIn("function renderCapabilityModelHelp", source)
         self.assertIn("function renderCapabilityCostEstimate", source)
@@ -536,6 +537,59 @@ console.log(JSON.stringify({
         self.assertIn("Text-to-image", source)
         self.assertIn("Image-to-image", source)
 
+    def test_concrete_parameter_values_and_manual_creation_are_independent_from_agent(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        defaults = source[source.index("const CAPABILITY_PARAMETER_UNSET"):source.index("function setCapabilityParameter")]
+        memory = source[source.index("const manualNodeSettingsFingerprints"):source.index("function smartSettingsModeKey")]
+        descriptor = source[source.index("function executionSelectionDescriptor"):source.index("function executionSelectionInputState")]
+        create = source[source.index("function createExecutionNode"):source.index("function resultIdsForMediaItems")]
+        data = run_node("""
+const assert=require('node:assert/strict');
+const SMART_NODE_CONTRACT=require('./static/js/smart-node-contract.js');
+const CanvasCreation=require('./static/js/canvas-creation.js');
+const SMART_NODE_TYPES=SMART_NODE_CONTRACT.NODE_TYPES;
+const cloneSmartSettings=s=>JSON.parse(JSON.stringify(s||{}));
+let settings={}, recentSmartSettingsByMode={}, selectedId='', nodes=[];
+const canvasDefaultSmartSettings={engine:'api',provider_id:'platform',model:'initial',count:1};
+const initialSmartSettings=canvasDefaultSmartSettings;
+const saveRecentSmartSettings=()=>{};
+const capabilityProfileFor=()=>null;
+const sanitizeSmartApiSelection=()=>{};
+const ensureExecutionSelectionDefaults=(s,n,opts)=>{if(opts.resetSelection)s.model='initial';};
+const uid=()=>String(nodes.length),pushUndo=()=>{},render=()=>{},scheduleSave=()=>{};
+""" + defaults + descriptor + memory + create + """
+const profile={model_id:'m',parameters:{
+ resolution:{level:'optional',type:'string',options:['1K','2K']},
+ audio:{level:'optional',type:'boolean',default:false},
+ strength:{level:'optional',type:'number',default:0,min:0,max:1},
+ note:{level:'optional',type:'text'},
+ task_id:{level:'required',type:'text'}
+}};
+const values=capabilityParameterSubmissionValues(profile,{capabilityParameters:{m:{resolution:CAPABILITY_PARAMETER_UNSET}}});
+assert.deepEqual(values,{resolution:'1K',audio:false,strength:0});
+const image={id:'old-image',type:SMART_NODE_TYPES.imageGenerator};
+const original={engine:'api',provider_id:'chosen-platform',model:'chosen',imageFamilyId:'family',count:3,
+ capabilityParameters:{chosen:{resolution:'2K',audio:false,strength:0,prompt:'do not copy',task_id:'old-run'}},
+ promptDraftText:'do not copy',videoTempShLinks:[{url:'/old'}]};
+rememberManualExecutionSettings(image,original);
+rememberManualExecutionSettings({id:'old-video',type:SMART_NODE_TYPES.videoGenerator},{engine:'api',videoProvider:'vp',videoModel:'vm',count:1});
+const manual=createExecutionNode(10,20,image.type,{inheritManual:true});
+assert.equal(manual.runSettings.model,'chosen');
+assert.equal(manual.runSettings.count,3);
+assert.equal(manual.runSettings.capabilityParameters.chosen.strength,0);
+assert.equal(manual.runSettings.capabilityParameters.chosen.audio,false);
+assert.equal(manual.runSettings.capabilityParameters.chosen.prompt,undefined);
+assert.equal(manual.runSettings.capabilityParameters.chosen.task_id,undefined);
+assert.equal(manual.promptDraftText,'');
+manual.runSettings.capabilityParameters.chosen.resolution='4K';
+assert.equal(manualExecutionSettingsForType(image.type).capabilityParameters.chosen.resolution,'2K');
+const agent=createExecutionNode(30,40,image.type,{select:false});
+assert.equal(agent.runSettings.model,'initial');
+assert.equal(agent.runSettings.count,1);
+console.log(JSON.stringify({ok:true}));
+""")
+        self.assertTrue(data["ok"])
+
     def test_execution_parameter_controls_are_stable_and_optional_values_can_be_omitted(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
         renderer = source[
@@ -545,12 +599,38 @@ console.log(JSON.stringify({
 
         self.assertIn("CAPABILITY_PARAMETER_UNSET", source)
         self.assertIn("function capabilityParameterControlKind", source)
-        self.assertIn("if(key === 'duration') return 'select'", source)
+        self.assertIn("if(capabilityParameterSemantic(key, spec) === 'duration') return 'select'", source)
         self.assertIn("function capabilityParameterSubmissionValues", source)
         self.assertIn("renderCapabilityUnsetChoice", renderer)
         self.assertIn("data-capability-unset", source)
         self.assertNotIn("spec.options.length <= 12", renderer)
         self.assertIn("capabilityParameterSubmissionValues(textCapabilitySelection.profile, runSettings)", source)
+
+    def test_new_model_candidates_do_not_inherit_previous_model_parameter_constraints(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        initialize = source[source.index("function ensureExecutionSelectionDefaults"):source.index("function capabilityFamilyLabel")]
+        data = run_node("""
+const assert=require('node:assert/strict');
+const executionSelectionDescriptor=()=>({kind:'image',nodeType:'image_generation',providerKey:'provider_id',modelKey:'model',familyKey:'imageFamilyId'});
+const executionSelectionInputState=()=>({inputCounts:{text:1},inputRoles:[]});
+const capabilityParameterIntent=()=>({style:'manga',webSearch:false,outputFormat:'png'});
+const executionCompatibleProviderIds=(d,c,r,p)=>Object.keys(p).length?[]:['other-platform'];
+const resolveCapabilityFamilySelection=(p,t,c,f,m,s,r,parameters)=>{
+ assert.deepEqual(parameters,{});
+ return {family:{family_id:'new-family'},profile:{model_id:'new-model'}};
+};
+""" + initialize + """
+const current={engine:'api',provider_id:'old-platform',model:'old-model'};
+ensureExecutionSelectionDefaults(current,{}, {resetSelection:true});
+assert.equal(current.model,'new-model');
+const inherited={engine:'api',provider_id:'removed-platform',model:'removed-model'};
+ensureExecutionSelectionDefaults(inherited,{}, {resetSelection:false});
+assert.equal(inherited.model,'removed-model');
+console.log(JSON.stringify({ok:true}));
+""")
+        self.assertTrue(data["ok"])
+        renderers = source[source.index("function verifiedTextGenerationModels"):source.index("function renderApiMusicParams")]
+        self.assertNotIn("capabilityParameterIntent(", renderers)
 
     def test_execution_nodes_initialize_compatible_model_mode_and_parameter_defaults(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
@@ -558,12 +638,12 @@ console.log(JSON.stringify({
         load = source[source.index("async function loadCanvas"):source.index("function migrateLegacyMusicGeneratorNodes")]
         defaults = source[source.index("const CAPABILITY_PARAMETER_UNSET"):source.index("function generatedCapabilityParameterLabel")]
 
-        self.assertIn("ensureExecutionSelectionDefaults(node.runSettings, node, {resetSelection:true})", create)
+        self.assertIn("ensureExecutionSelectionDefaults(node.runSettings, node, {resetSelection:!hasInherited})", create)
         self.assertGreaterEqual(create.count("node.runSettings.engine = 'api'"), 5)
         self.assertIn("initializedExecutionDefaults", load)
         self.assertIn("ensureExecutionSelectionDefaults(node.runSettings, node)", load)
         self.assertIn("capabilitySafeDefaultProfileForFamily", source)
-        self.assertIn("if(capabilityParameterIsOptional(spec)) return CAPABILITY_PARAMETER_UNSET", defaults)
+        self.assertIn("if(spec.ui_hidden === true && capabilityParameterIsOptional(spec)) return CAPABILITY_PARAMETER_UNSET", defaults)
         self.assertIn("if(options.length) return options[0]", defaults)
         self.assertIn("if(type === 'boolean') return false", defaults)
         self.assertIn("Number(spec.min)", defaults)
@@ -683,7 +763,7 @@ console.log(JSON.stringify({
         self.assertIn("currentIndexWithoutDragged", reorder)
         self.assertIn(".capability-option-drag-preview", css)
         self.assertIn(".capability-option.capability-option-drop-placeholder", css)
-        self.assertIn(".capability-option-grid.is-list,.capability-option-grid.capability-resolution-options", css)
+        self.assertIn(".capability-option-grid.capability-resolution-options", css)
         self.assertIn("touch-action:none", css)
         self.assertIn("width:28px !important", css[css.index(".execution-config-panel-title .capability-settings-control"):])
 
@@ -961,10 +1041,10 @@ console.log(JSON.stringify(request));
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
         cases = [
             ("async function runPromptLLMNode", "async function runSelectedNode", "await preflightCanvasNodeRun", "fetch('/api/canvas-llm'"),
-            ("async function runApiGeneration", "function smartCompactJson", "await preflightCanvasNodeRun", "fetch('/api/canvas-image-tasks'"),
+            ("async function runApiGeneration", "function smartCompactJson", "await preflightCanvasNodeRun", "canvasModelClient.submitMany('/api/canvas-image-tasks'"),
             ("async function runRunningHubGeneration", "async function runApiVideoGeneration", "await preflightCanvasNodeRun", "submitAndPollRunningHub(endpoint"),
-            ("async function runApiVideoGeneration", "async function runApiAudioGeneration", "await preflightCanvasNodeRun", "fetch('/api/canvas-video'"),
-            ("async function runApiAudioMediaGeneration", "async function runModelscopeGeneration", "await preflightCanvasNodeRun", "fetch(isMusic ? '/api/canvas-music' : '/api/canvas-audio'"),
+            ("async function runApiVideoGeneration", "async function runApiAudioGeneration", "await preflightCanvasNodeRun", "canvasModelClient.post('/api/canvas-video'"),
+            ("async function runApiAudioMediaGeneration", "async function runModelscopeGeneration", "await preflightCanvasNodeRun", "canvasModelClient.post(isMusic ? '/api/canvas-music' : '/api/canvas-audio'"),
             ("async function runModelscopeGeneration", "async function urlToBase64", "await preflightCanvasNodeRun", "fetch('/api/canvas-image-tasks'"),
         ]
 
@@ -1000,7 +1080,7 @@ console.log(JSON.stringify(request));
         self.assertIn("/results'", helpers)
         self.assertIn("resultIdsForMediaItems", helpers)
         self.assertIn("await queueCanvasRun", image)
-        self.assertLess(image.index("await queueCanvasRun"), image.index("fetch('/api/canvas-image-tasks'"))
+        self.assertLess(image.index("await queueCanvasRun"), image.index("canvasModelClient.submitMany('/api/canvas-image-tasks'"))
         self.assertIn("await submitCanvasRun", image)
         self.assertIn("await processCanvasRun", pending)
         self.assertIn("await finishCanvasRun", pending)
@@ -1012,7 +1092,8 @@ console.log(JSON.stringify(request));
         generation = source[source.index("async function runGeneration"):source.index("async function runPromptLLMNode")]
         pending = source[source.index("async function resumeSmartPendingNode"):source.index("function resumeSmartPendingTasks")]
 
-        self.assertIn("Promise.allSettled", image)
+        self.assertIn("canvasModelClient.submitMany", image)
+        self.assertIn("Promise.allSettled", (ROOT / "static/js/canvas-model-client.js").read_text())
         self.assertIn("submissionFailures", image)
         self.assertIn("await recoverCanvasRun(activeRunNode", image)
         self.assertIn("runSubmissionFailures", generation)
@@ -1139,20 +1220,20 @@ console.log(JSON.stringify(request));
         self.assertIn("resolve_model_capability_request", endpoint)
         self.assertIn('"audio": len(payload.audios or [])', endpoint)
 
-    def test_text_material_reuses_toolbar_and_only_first_blank_save_mutates_itself(self):
+    def test_text_material_reuses_toolbar_and_saves_versions_in_place(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
         toolbar = source[source.index("function smartNodeToolbarHtml"):source.index("function duplicateSmartNodeMediaToCanvas")]
         saver = source[source.index("async function saveTextMaterialEditor"):source.index("function openGroupImagePreview")]
         renderer = source[source.index("function singleMediaHtml"):source.index("function smartNodeHasLiveMedia")]
 
         self.assertIn("key:'replace'", toolbar)
-        self.assertIn("label:'上传素材'", toolbar)
+        self.assertIn("label:capabilityUiText('上传素材','Upload material')", toolbar)
         self.assertNotIn("上传并替换", toolbar)
         self.assertIn("key:'template'", toolbar)
         self.assertNotIn("media-text-head", renderer)
-        self.assertIn("isBlankTextInputMaterial", saver)
-        self.assertIn("sourceItem.text = text", saver)
-        self.assertIn("SMART_NODE_CONTRACT.createTextResultMaterial", saver)
+        self.assertIn("source.resultVersions.push", saver)
+        self.assertIn("source.images=", saver)
+        self.assertNotIn("nodes.push", saver)
 
     def test_text_result_content_survives_result_normalization_and_canvas_reload(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
@@ -1161,7 +1242,7 @@ console.log(JSON.stringify(request));
         canvas_loader = source[source.index("async function loadCanvas"):source.index("function migrateLegacyMusicGeneratorNodes")]
 
         self.assertIn("const source = item && typeof item === 'object' ? item : {};", finalizer)
-        self.assertIn("{...source, url, name:source.name", finalizer)
+        self.assertIn("{...source, url, name:pendingNode.creationTask", finalizer)
         self.assertIn("entry.item.text = content", loader)
         self.assertIn("entry.item.content = content", loader)
         self.assertIn("fetch(entry.url, {cache:'no-store'})", loader)
@@ -1246,7 +1327,7 @@ console.log(JSON.stringify(request));
         self.assertIn("replaceTextMaterialFromFiles", handler)
         self.assertIn("targetId", handler)
 
-    def test_execution_nodes_use_fixed_compact_dimensions(self):
+    def test_execution_nodes_preserve_preview_dimensions(self):
         script = """
 const c=require('./static/js/smart-node-contract.js');
 const types=[c.NODE_TYPES.imageGenerator,c.NODE_TYPES.videoGenerator,c.NODE_TYPES.audioGenerator,c.NODE_TYPES.aiApp,c.NODE_TYPES.comfyWorkflow];
@@ -1254,7 +1335,7 @@ console.log(JSON.stringify(types.map(type=>c.normalizeExecutionNode({type,w:900,
 """
         data = run_node(script)
 
-        self.assertEqual([(node["w"], node["h"]) for node in data], [(316, 194)] * 5)
+        self.assertEqual([(node["w"], node["h"]) for node in data], [(900, 700)] * 5)
 
     def test_runninghub_comfyui_only_accepts_ai_apps(self):
         script = """
@@ -1935,11 +2016,10 @@ console.log(JSON.stringify({
         self.assertNotIn('id="engineSelect"', html)
         self.assertNotIn("engineSelect.onchange", source)
 
-    def test_execution_nodes_do_not_render_or_start_resize_handles(self):
+    def test_creation_nodes_render_resize_handles(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
 
-        self.assertIn("const canResize = !isExecution", source)
-        self.assertIn("if(isSmartExecutionNode(node)) return;", source)
+        self.assertIn("const canResize = !isAngle", source)
 
     def test_group_is_organization_only_and_arranges_on_explicit_action(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
@@ -1964,7 +2044,7 @@ console.log(JSON.stringify({
         group_toolbar = source[source.index("function smartGroupToolbarHtml"):source.index("function runSmartGroupToolbarAction")]
         group_action = source[source.index("function runSmartGroupToolbarAction"):source.index("function nowMs")]
 
-        self.assertIn("label:'图片宫格切分'", node_toolbar)
+        self.assertIn("label:capabilityUiText('图片宫格切分','Split grid')", node_toolbar)
         self.assertNotIn("宫格拼接", node_toolbar)
         for label in ("预览", "收藏到资产素材", "图片宫格拼接", "下载", "整理排版"):
             self.assertIn(f"label:'{label}'", group_toolbar)
@@ -2159,7 +2239,7 @@ console.log(JSON.stringify({
         self.assertIn("function handleSmartNodeShiftDoubleClick", source)
         self.assertIn("world.addEventListener('dblclick', handleSmartNodeShiftDoubleClick, true)", source)
         self.assertIn("const nodeEl = event.target?.closest?.('.image-node')", source)
-        self.assertIn("nodeEl?.querySelectorAll('.smart-popover", focus)
+        self.assertIn("nodeEl?.querySelectorAll('.node-head,.result-version-switcher,.smart-node-floating-menu,.smart-popover", focus)
         self.assertIn("[data-smart-node-id=", focus)
         self.assertIn("const targetScale = Math.max(0.35", focus)
         self.assertIn("cubic-bezier(.22,1,.36,1)", css)
@@ -2209,7 +2289,7 @@ console.log(JSON.stringify({
         self.assertIn("if(!running) return '';", source)
         self.assertIn(".media-text-preview.is-inline-editing", css)
         self.assertIn(".media-text-inline-editor", css)
-        self.assertIn("editor.addEventListener('wheel'", source)
+        self.assertIn("creation-text-columns", source)
         self.assertIn(".media-text-inline-editor')) return", source)
         self.assertIn("justify-content:flex-start", css)
 
@@ -2360,9 +2440,9 @@ console.log(JSON.stringify({
         self.assertIn("function beginShiftConnectionFromPointer(event)", source)
         self.assertIn("const hit = connectionNodeHitAtPoint(event.clientX, event.clientY, event.target)", source)
         self.assertIn("shell.addEventListener('mousedown', beginShiftConnectionFromPointer, true)", source)
-        self.assertIn("if(event.button !== 0 || !event.shiftKey) return false", source)
+        self.assertIn("if(![0,2].includes(event.button) || !event.shiftKey) return false", source)
         self.assertIn("if(!hit.nodeId) return false", source)
-        self.assertIn("if(event.target?.closest?.('.node-port')) return false", source)
+        self.assertIn("if(event.button===0&&event.target?.closest?.('.node-port')) return false", source)
         self.assertIn("if(e.button === 0 && e.shiftKey)", source)
 
     def test_shift_left_double_click_wins_over_connection_drag(self):
@@ -2374,7 +2454,7 @@ console.log(JSON.stringify({
         self.assertIn("let lastShiftConnectionDragAt = 0", source)
         self.assertIn("previous.nodeId === hit.nodeId", handler)
         self.assertIn("Date.now() - previous.at <= 420", handler)
-        self.assertIn("portDragState.shiftNodeClick = true", handler)
+        self.assertIn("portDragState.shiftNodeClick = event.button===0", handler)
         self.assertIn("portDragState.shiftNodeDoubleClick = Boolean(isDoubleClick)", handler)
         self.assertIn("drag.shiftNodeDoubleClick && !drag.moved", finish)
         self.assertIn("focusSmartNodeInViewport(drag.fromId)", finish)
@@ -2517,11 +2597,11 @@ console.log(JSON.stringify({
         self.assertIn("navigator.clipboard.write", source)
         self.assertIn("e.shiftKey && key === 'c'", source)
         clipboard = source[source.index("function selectedClipboardMedia"):source.index("function pasteNodes")]
-        self.assertIn(".filter(node => isSmartMaterialNode(node))", clipboard)
-        self.assertIn("function clipboardMediaManifest", clipboard)
-        self.assertIn("function clipboardMediaHtml", clipboard)
+        self.assertIn(".filter(node => isSmartImageNode(node))", clipboard)
         self.assertIn("entries.length > 1", clipboard)
-        self.assertIn("const item = entries.length === 1 ? entries[0].item : null", clipboard)
+        self.assertIn("StudioMedia.copy(entries.map", clipboard)
+        self.assertIn("window.addEventListener('copy', event =>", source)
+        self.assertIn("event.defaultPrevented || isEditableTarget(event.target)", source)
         self.assertNotIn("已复制第 1 个素材", clipboard)
 
     def test_group_bounds_and_dragging_use_every_member_type(self):
@@ -2559,7 +2639,8 @@ console.log(JSON.stringify({
 
         self.assertIn("base_revision", backend)
         self.assertIn('canvas["revision"]', backend)
-        self.assertIn("os.fsync", backend)
+        self.assertIn("from canvas_core.json_store import", backend)
+        self.assertIn("os.fsync", (ROOT / "canvas_core/json_store.py").read_text(encoding="utf-8"))
         self.assertIn("os.replace", backend)
         self.assertIn("base_revision:storageCanvas.revision", frontend)
         self.assertIn("canvas.revision = Number(data.canvas?.revision", frontend)
@@ -2576,7 +2657,7 @@ console.log(JSON.stringify({
     def test_new_smart_canvases_start_on_the_current_node_schema(self):
         source = (ROOT / "main.py").read_text(encoding="utf-8")
 
-        self.assertIn("SMART_CANVAS_NODE_SCHEMA_VERSION = 6", source)
+        self.assertIn("SMART_CANVAS_NODE_SCHEMA_VERSION = 7", source)
         self.assertIn('canvas["node_schema_version"] = SMART_CANVAS_NODE_SCHEMA_VERSION', source)
 
     def test_media_references_preserve_audio_video_text_and_image_types(self):
@@ -2759,8 +2840,8 @@ console.log(JSON.stringify(c.reconcileRunningHubInputBindings(fields,refs,{
         field = source[source.index("function renderRhSettingField"):source.index("function comfyRandomEnabledField")]
         self.assertIn('class="rh-ai-app-params"', params)
         self.assertIn('class="rh-ai-app-param-list"', params)
-        self.assertIn('class="rh-ai-app-param-row', field)
-        self.assertIn('class="rh-ai-app-param-label"', field)
+        self.assertIn("renderExternalParameterControl(field,'rh')", field)
+        self.assertIn('function externalParameterSpec', source)
         self.assertIn(".composer.ai-app-composer .composer-card", css)
         self.assertIn("grid-template-areas:\"thumbs\" \"params\" \"run\"", css)
         self.assertIn(".rh-ai-app-param-list", css)
@@ -2773,7 +2854,7 @@ console.log(JSON.stringify(c.reconcileRunningHubInputBindings(fields,refs,{
         self.assertNotIn("hasRoomRight", position)
         self.assertNotIn("classList.toggle('composer-side'", position)
         self.assertIn("classList.remove('composer-side'", position)
-        self.assertIn("const forceBelow = node.type === SMART_NODE_TYPES.aiApp", position)
+        self.assertIn("const forceBelow = isSmartExecutionNode(node) || isSmartMaterialNode(node)", position)
         self.assertIn("const belowTop = rect.y + rect.height + gap", position)
         self.assertIn("top = forceBelow ? belowTop", position)
         self.assertIn("if(!forceBelow) top = Math.min", position)
@@ -2956,7 +3037,7 @@ console.log(JSON.stringify({explicit,resolved}));
             source.index("function renderGenericCapabilityParameters")
         ]
         self.assertIn("capabilityParameterPreview", parameter_control)
-        self.assertIn("capabilityUiText('默认','Default')", parameter_control)
+        self.assertIn("capability-number-value", parameter_control)
         self.assertIn("value === undefined || value === ''", parameter_control)
         full_span_rule = css[
             css.index(".execution-config-grid > .capability-fields"):
@@ -3090,7 +3171,8 @@ console.log(JSON.stringify({
         ]
 
         self.assertIn("e.shiftKey", drag)
-        self.assertIn("isConnectedInputReference", drag)
+        self.assertIn("hasMentionReferenceContent", drag)
+        self.assertNotIn("isConnectedInputReference", drag)
         self.assertIn("data-input-ref-swappable", thumbs)
         self.assertIn("swapGlobalInputReferences", reorder)
         self.assertIn("inputRefOrder", reorder)
@@ -3205,7 +3287,7 @@ console.log(JSON.stringify({
         ]
         self.assertIn("REFERENCE_MEDIA_ORDER", ordered)
         self.assertIn("groupReferenceItemsByMediaKind", ordered)
-        self.assertIn("groupReferenceItemsByMediaKind", visible)
+        self.assertIn("orderedInputReferencesForNode", visible)
         media_kind = source[
             source.index("function mediaKindForItem"):
             source.index("function localDisplayUrlForMediaItem")
@@ -3285,7 +3367,6 @@ console.log(JSON.stringify({
             ROOT / "static/api-settings.html",
             ROOT / "static/js/i18n/api-settings.js",
             ROOT / "static/js/i18n/smart-canvas.js",
-            ROOT / "static/js/i18n(1)/smart-canvas.js",
         ]
         combined = "\n".join(path.read_text(encoding="utf-8") for path in visible_sources)
 
@@ -3452,7 +3533,7 @@ console.log(JSON.stringify({
 """
         data = run_node(script)
 
-        self.assertEqual(data["executionToMaterial"], "result")
+        self.assertEqual(data["executionToMaterial"], "input")
         self.assertEqual(data["materialToExecution"], "input")
         self.assertEqual(data["groupToExecution"], "input")
 
@@ -3494,7 +3575,10 @@ console.log(JSON.stringify({allowed,denied}));
         data = run_node(script)
 
         self.assertTrue(all(data["allowed"].values()))
-        self.assertFalse(any(data["denied"].values()))
+        self.assertTrue(data["denied"]["executionToExecution"])
+        self.assertTrue(data["denied"]["materialToMaterial"])
+        self.assertFalse(data["denied"]["self"])
+        self.assertFalse(data["denied"]["resultGroupToPrompt"])
 
     def test_canvas_line_and_drag_connections_share_the_contract_matrix(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
@@ -3665,7 +3749,8 @@ console.log(JSON.stringify({source,result}));
         self.assertIn('CANVAS_TASK_HANDLES: Dict[str, asyncio.Task] = {}', backend)
         self.assertIn('@app.post("/api/canvas-tasks/{task_id}/cancel")', backend)
         self.assertIn("handle.cancel()", backend)
-        self.assertIn("except asyncio.CancelledError", backend)
+        self.assertIn("from canvas_core.task_execution import execute_task", backend)
+        self.assertIn("except asyncio.CancelledError", (ROOT / "canvas_core/task_execution.py").read_text())
 
     def test_text_material_content_can_feed_downstream_execution(self):
         script = """
@@ -3698,14 +3783,14 @@ console.log(JSON.stringify({text:c.textContentForNode(node)}));
         self.assertIn("openTextMaterialEditor(nodeId, imageIndex)", source)
         self.assertIn("/api/canvas-text-results", source)
         self.assertIn("SMART_NODE_CONTRACT.createTextResultMaterial(sourceNode", source)
-        self.assertIn("addConnection(created.connection.from, created.connection.to, 'result')", source)
+        self.assertIn("source.resultVersions.push(CanvasCreation.snapshot", source)
         self.assertIn(".media-text-card", css)
         self.assertIn(".smart-text-editor-modal", css)
 
     def test_text_material_is_prompt_content_not_media_reference(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
 
-        self.assertIn("if(isSmartMaterialNode(node)) return SMART_NODE_CONTRACT.textContentForNode(node);", source)
+        self.assertIn("if(isSmartMaterialNode(node) || isSmartExecutionNode(node)) return SMART_NODE_CONTRACT.textContentForNode(node);", source)
         self.assertIn("const inputPrompt = inputPromptTextFor(node, ctx).trim();", source)
         self.assertIn("function imageRefsOnly(refs)", source)
         self.assertIn("mediaKindForItem(ref) === 'image'", source)

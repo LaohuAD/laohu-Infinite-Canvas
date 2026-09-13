@@ -129,12 +129,14 @@
             <div id="promptTemplateCats" class="prompt-template-cats"></div>
             <div id="promptTemplateBody" class="prompt-template-body"></div>
         </div>
-        <button id="smartArrangeBtn" class="minimap-arrange-btn" type="button" title="整理选中节点" aria-label="整理选中节点"><i data-lucide="layout-grid"></i><span>整理选中</span></button>
+        <button id="smartArrangeBtn" class="minimap-arrange-btn" type="button" title="就近宫格对齐，保留原布局" aria-labelledby="smartArrangeLabel" data-i18n-title="smart.arrangeGridHint"><i data-lucide="layout-grid"></i><span id="smartArrangeLabel" data-i18n="smart.arrangeSelected">整理选中</span></button>
         <div id="minimap" class="smart-minimap" aria-hidden="true">
             <div id="minimapContent" class="smart-minimap-content">
                 <div id="minimapViewport" class="smart-minimap-viewport"></div>
             </div>
         </div>
+        <button id="canvasProductionToggle" class="smart-production-toggle" type="button" aria-expanded="false"><i data-lucide="table-properties"></i><span>创作进度</span></button>
+        <button id="canvasAgentToggle" disabled class="smart-agent-toggle" type="button"><i data-lucide="bot"></i><span>Agent 接入</span></button>
         <button id="smartPriceToggle" class="smart-price-toggle" type="button" title="价格对比" aria-label="价格对比" data-i18n-title="smart.priceComparison"><i data-lucide="circle-dollar-sign"></i><span data-i18n="smart.priceComparison">价格对比</span></button>
         <button id="smartWorkflowToggle" class="smart-workflow-toggle" type="button" title="导入导出工作流" aria-label="导入导出工作流"><i data-lucide="package-open"></i><span>工作流</span></button>
         <button id="smartShortcutToggle" class="smart-shortcut-toggle" type="button" onclick="toggleSmartCanvasShortcuts()" title="快捷键" aria-label="快捷键" data-i18n-title="smart.shortcuts"><i data-lucide="keyboard"></i><span data-i18n="smart.shortcuts">快捷键</span></button>
@@ -175,7 +177,7 @@
                 </section>
                 <section class="workflow-transfer-card">
                     <div class="workflow-transfer-card-head"><i data-lucide="download"></i><strong>导入工作流</strong></div>
-                    <p>支持工作流 JSON，也支持包含资源的 ZIP 包。导入内容会追加到当前画布。</p>
+                    <p><span data-i18n="smart.packageImportHint">直接导入 ZIP，无需解压，资源和引用会自动恢复；JSON 只包含结构。导入内容追加到当前画布。</span></p>
                     <div id="smartWorkflowImportDropZone" class="workflow-import-drop">
                         <i data-lucide="file-up"></i>
                         <span>拖入 JSON / ZIP 工作流</span>
@@ -249,6 +251,7 @@
                     <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>V</kbd></span><span class="shortcut-keys"><kbd>Cmd</kbd><kbd>V</kbd></span><span>粘贴节点或系统剪贴板素材</span></div>
                     <div class="shortcut-item"><span class="shortcut-keys"><kbd>Space</kbd><kbd>拖拽</kbd></span><span class="shortcut-keys"><kbd>Space</kbd><kbd>拖拽</kbd></span><span data-i18n="smart.shortcutSpacePan">按住空格并拖动：从任意画布内容平移画布</span></div>
                     <div class="shortcut-item"><span class="shortcut-keys"><kbd>Shift</kbd><kbd>拖拽</kbd></span><span class="shortcut-keys"><kbd>Shift</kbd><kbd>拖拽</kbd></span><span>鼠标位于节点上时拖出连线；位于空白处时切断连线</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Shift</kbd><kbd data-i18n="smart.shortcutRightDrag">右键拖动</kbd></span><span class="shortcut-keys"><kbd>Shift</kbd><kbd data-i18n="smart.shortcutRightDrag">右键拖动</kbd></span><span data-i18n="smart.shortcutStoryConnection">建立虚线关联，不作为模型输入</span></div>
                     <div class="shortcut-item"><span class="shortcut-keys"><kbd>Shift</kbd><kbd data-i18n="smart.shortcutDoubleClick">双击</kbd></span><span class="shortcut-keys"><kbd>Shift</kbd><kbd data-i18n="smart.shortcutDoubleClick">双击</kbd></span><span data-i18n="smart.shortcutFocusNode">聚焦并放大任意画布节点</span></div>
                     <div class="shortcut-item"><span class="shortcut-keys"><kbd>双击</kbd></span><span class="shortcut-keys"><kbd>双击</kbd></span><span>预览素材、聚焦执行节点或在空白处打开快捷菜单</span></div>
                     <div class="shortcut-item"><span class="shortcut-keys"><kbd>Alt</kbd></span><span class="shortcut-keys"><kbd>Option</kbd></span><span>按住并拖动复制节点</span></div>
@@ -314,13 +317,14 @@
                     </div>
                 </div>
                 <div id="mediaTransformTools" class="image-edit-tools media-transform-tools">
-                    <span class="image-edit-sub">时间范围</span>
-                    <label><span>开始</span><input id="mediaTransformStart" type="range" min="0" max="1" step="0.01" value="0" oninput="updateSmartVideoTransformRange('start', this.value)"><output id="mediaTransformStartValue">0.00s</output></label>
-                    <label><span>结束</span><input id="mediaTransformEnd" type="range" min="0.1" max="1" step="0.01" value="1" oninput="updateSmartVideoTransformRange('end', this.value)"><output id="mediaTransformEndValue">1.00s</output></label>
-                    <span id="mediaTransformDuration" class="image-edit-sub"></span>
+                    <div id="videoMediaTimeline"></div>
+                    <div id="videoMediaToolbar" class="media-editor-toolbar">
+                    <div class="media-editor-actions">
                     <span id="mediaTransformCapability" data-media-transform-capability class="media-transform-capability"></span>
                     <button id="mediaTrimBtn" class="image-edit-btn secondary" type="button" data-media-transform-action onclick="runSmartMediaTransform('trim')"><i data-lucide="scissors" class="w-4 h-4"></i><span data-i18n="smart.mediaToolTrim">生成裁剪结果</span></button>
                     <button id="mediaExtractAudioBtn" class="image-edit-btn secondary" type="button" data-media-transform-action onclick="runSmartMediaTransform('extract_audio')"><i data-lucide="audio-lines" class="w-4 h-4"></i><span data-i18n="smart.mediaToolExtractAudio">抽出音频</span></button>
+                    </div>
+                    </div>
                 </div>
                 <div id="imageMaskTools" class="image-edit-tools">
                     <label><span data-i18n="canvas.brushSize">笔刷</span> <input id="maskBrushSize" type="range" min="4" max="160" value="42"></label>
@@ -391,6 +395,7 @@
                     <span id="gridSplitCount" class="image-edit-sub"></span>
                 </div>
                 <div id="imageEditStage" class="image-edit-stage">
+                    <div class="media-preview-exit-hints"><span data-i18n="smart.previewExitEsc">ESC 退出预览</span><span data-i18n="smart.previewExitBackdrop">点击黑色区域也可退出</span></div>
                     <button id="previewPrevBtn" class="preview-nav-btn prev" type="button" onclick="navigatePreviewImage(-1)" title="上一张"><i data-lucide="chevron-left"></i></button>
                     <button id="previewNextBtn" class="preview-nav-btn next" type="button" onclick="navigatePreviewImage(1)" title="下一张"><i data-lucide="chevron-right"></i></button>
                     <div class="image-edit-stage-inner">
@@ -450,9 +455,9 @@
                 <div class="image-edit-actions">
                     <span id="imageEditZoomLabel" style="color:#94a3b8;font-size:11px;font-weight:800;padding:0 4px;margin-right:auto;cursor:pointer;user-select:none" title="双击重置缩放" ondblclick="resetImageEditZoom()">100%</span>
                     <div id="videoFrameTools" class="video-frame-tools" style="display:none">
-                        <button class="image-edit-btn secondary" type="button" onclick="exportVideoFrame('first')"><i data-lucide="skip-back" class="w-4 h-4"></i><span>导出首帧</span></button>
-                        <button class="image-edit-btn primary" type="button" onclick="exportVideoFrame('current')"><i data-lucide="image-down" class="w-4 h-4"></i><span>导出当前帧</span></button>
-                        <button class="image-edit-btn secondary" type="button" onclick="exportVideoFrame('last')"><i data-lucide="skip-forward" class="w-4 h-4"></i><span>导出尾帧</span></button>
+                        <button id="mediaFirstFrameBtn" class="image-edit-btn secondary" type="button" data-media-transform-action onclick="exportVideoFrame('first')"><i data-lucide="skip-back" class="w-4 h-4"></i><span data-i18n="smart.mediaToolFirstFrame">提取首帧</span></button>
+                        <button id="mediaCurrentFrameBtn" class="image-edit-btn secondary" type="button" data-media-transform-action onclick="exportVideoFrame('current')"><i data-lucide="image-down" class="w-4 h-4"></i><span data-i18n="smart.mediaToolCurrentFrame">提取当前帧</span></button>
+                        <button id="mediaLastFrameBtn" class="image-edit-btn secondary" type="button" data-media-transform-action onclick="runSmartMediaTransform('last_frame')"><i data-lucide="image" class="w-4 h-4"></i><span data-i18n="smart.mediaToolLastFrame">提取尾帧</span></button>
                     </div>
                     <button id="imageEditCancelBtn" class="image-edit-btn secondary" type="button" onclick="closeImageEditor()" data-i18n="common.cancel">取消</button>
                     <button id="imageEditApplyBtn" class="image-edit-btn primary" type="button" onclick="applyImageEdit()"><i data-lucide="crop" class="w-4 h-4"></i><span data-i18n="canvas.applyCrop">应用裁剪</span></button>
@@ -462,10 +467,17 @@
         <div id="toast" class="toast"></div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
+    <dialog id="canvasAgentDialog" class="canvas-agent-dialog"><div class="canvas-agent-head"><h2 id="canvasAgentHeading"></h2><button id="canvasAgentClose" type="button" aria-label="关闭">×</button></div><p id="canvasAgentSummary"></p><section id="canvasAgentDefaults"></section><textarea id="canvasAgentInstructions" readonly aria-label="Agent connection instructions"></textarea><p id="canvasAgentFeedback" role="status" aria-live="polite"></p><div class="canvas-agent-actions"><a id="canvasAgentDocs" href="/api/agent/guide" target="_blank" rel="noopener"></a><button id="canvasAgentCopy" type="button"></button></div></dialog>
+    <script src="/static/js/media-ui.js"></script>
     <script src="/static/js/material-promote.js?v=2026.08.17.1786546376"></script>
+    <script src="/static/js/canvas-node-view.js"></script>
+    <script src="/static/js/canvas-creation.js"></script>
+    <script src="/static/js/canvas-production.js"></script>
+    <script src="/static/js/canvas-model-client.js"></script>
     <script src="/static/js/smart-node-contract.js?v=2026.08.17.1787802614"></script>
     <script src="/static/js/smart-director-core.js?v=2026.08.29.1"></script>
     <script src="/static/js/smart-model-capabilities.js?v=2026.08.17.1787829684"></script>
 <script src="/static/js/smart-canvas.js?v=2026.08.17.1787814085"></script>
+<script src="/static/js/canvas-agent.js"></script>
 </body>
 </html>

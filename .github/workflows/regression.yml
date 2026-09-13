@@ -1,0 +1,48 @@
+name: Mac 与 Windows 固定回归
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  regression:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+        python: ['3.10', '3.14']
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      CANVAS_NO_PAUSE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 将安装缓存和临时文件限定到项目目录
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          root = Path.cwd() / 'cache' / 'ci'
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+              for key, subdir in [('TMPDIR', 'tmp'), ('TMP', 'tmp'), ('TEMP', 'tmp'), ('PIP_CACHE_DIR', 'pip')]:
+                  path = root / subdir
+                  path.mkdir(parents=True, exist_ok=True)
+                  output.write(f'{key}={path}\n')
+      - name: 安装明确版本的依赖
+        run: python -m pip install -r requirements.txt
+      - name: 检查依赖一致性
+        run: python -m pip check
+      - name: 验证完整回归案例与前端脚本
+        run: python tools/check_regression.py

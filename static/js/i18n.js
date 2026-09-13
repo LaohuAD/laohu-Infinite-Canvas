@@ -1,5 +1,6 @@
 (function(){
-    const VERSION = '2026.08.18.release.1';
+    // 继承服务端按翻译模块修改时间生成的缓存标识。
+    const CACHE_VERSION = new URL(document.currentScript.src, location.href).searchParams.get('v') || '';
     const scripts = [
         '/static/js/i18n-core.js',
         '/static/js/i18n/common.js',
@@ -10,7 +11,7 @@
         '/static/js/i18n/comfyui-settings.js',
         '/static/js/i18n/asset-manager.js',
     ];
-    const tags = scripts.map(src => '<script src="' + src + '?v=' + VERSION + '"></script>').join('');
+    const tags = scripts.map(src => '<script src="' + src + '?v=' + CACHE_VERSION + '"></script>').join('');
     if(document.readyState === 'loading' && document.currentScript){
         document.write(tags);
         return;

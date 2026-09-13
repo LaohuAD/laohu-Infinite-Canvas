@@ -738,7 +738,7 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(edit_image["inputs"]["reference"]["max"], 10)
         self.assertEqual(legacy_image["parameters"]["resolution"]["options"], ["1k", "2k"])
         self.assertEqual(edit_image["parameters"]["resolution"]["options"], ["2k", "4k"])
-        self.assertEqual(pro_image["parameters"]["resolution"]["options"], ["1k", "2k", "4k"])
+        self.assertEqual(pro_image["parameters"]["resolution"]["options"], ["1.5k", "2k", "4k"])
         self.assertEqual(standard_video["parameters"]["resolution"]["options"], ["720p"])
         self.assertEqual(vip_video["parameters"]["resolution"]["options"], ["720p", "1080p", "4k"])
         self.assertEqual(vip_video["inputs"]["reference_audio"]["max"], 3)
@@ -812,6 +812,33 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("--resolution_type=2k", args)
         self.assertEqual(result["value"], "/api/results/mock-image.png")
 
+    async def test_jimeng_pro_1_5k_reaches_cli_for_generation_and_editing(self):
+        for refs in ([], [{"url":"/api/materials/reference"}]):
+            for field in ("resolution", "resolution_type"):
+                with self.subTest(mode="image2image" if refs else "text2image", field=field), \
+                     patch.object(main, "run_jimeng_cli", new=AsyncMock(return_value={"images": []})) as cli, \
+                     patch.object(main, "jimeng_prepare_local_media", new=AsyncMock(return_value=(str(ROOT / "cache/reference.png"), []))), \
+                     patch.object(main, "jimeng_store_outputs", new=AsyncMock(return_value=["/api/results/mock"])):
+                    await main.generate_jimeng_provider_image("验收", "1024x1024", "5.0Pro", refs, {"id":"jimeng"}, {field:"1.5K"})
+                    args = cli.await_args.args[0]
+                    self.assertEqual(args[0], "image2image" if refs else "text2image")
+                    self.assertIn("--resolution_type=1.5k", args)
+                    self.assertIn("--model_version=5.0Pro", args)
+        catalog = ModelCapabilityRegistry(ROOT).build_catalog([{
+            "id":"jimeng", "name":"即梦 CLI", "protocol":"jimeng", "enabled":True,
+            "image_models":["5.0Pro"], "chat_models":[], "video_models":[], "audio_models":[],
+        }])
+        profile = catalog["providers"][0]["models"][0]
+        self.assertEqual(profile["parameters"]["resolution"]["options"], ["1.5k", "2k", "4k"])
+
+    async def test_jimeng_pro_rejects_stale_1k_and_uses_common_default(self):
+        with patch.object(main, "run_jimeng_cli", new=AsyncMock()) as cli:
+            with self.assertRaises(main.HTTPException):
+                await main.generate_jimeng_provider_image("验收", "1024x1024", "5.0Pro", [], {"id":"jimeng"}, {"resolution_type":"1k"})
+            cli.assert_not_awaited()
+        self.assertEqual(main.jimeng_image_resolution("5.0Pro", "1024x1024"), "2k")
+        self.assertEqual(main.jimeng_image_resolution_options("5.0Pro"), ["1.5k", "2k", "4k"])
+
     async def test_jimeng_image_cli_rejects_resolution_not_supported_by_model(self):
         with self.assertRaises(main.HTTPException) as context:
             await main.generate_jimeng_provider_image(
@@ -826,12 +853,12 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.exception.status_code, 400)
         self.assertIn("2K、4K", context.exception.detail)
 
-    def test_jimeng_image_resolution_options_match_installed_cli_contract(self):
+    def test_jimeng_image_resolution_options_follow_each_model_contract(self):
         self.assertEqual(main.jimeng_image_resolution_options("3.0"), ["1k", "2k"])
         self.assertEqual(main.jimeng_image_resolution_options("4.7"), ["2k", "4k"])
-        self.assertEqual(main.jimeng_image_resolution_options("5.0Pro"), ["1k", "2k", "4k"])
+        self.assertEqual(main.jimeng_image_resolution_options("5.0Pro"), ["1.5k", "2k", "4k"])
         self.assertEqual(main.jimeng_image_resolution_options("4.7", "image2image"), ["2k", "4k"])
-        self.assertNotIn("1.5k", main.jimeng_image_resolution_options("5.0Pro"))
+        self.assertIn("1.5k", main.jimeng_image_resolution_options("5.0Pro", "image2image"))
 
     async def test_canvas_jimeng_video_routes_through_cli_adapter_without_network(self):
         provider = {
@@ -1803,15 +1830,13 @@ class ModelCapabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["standard_request"]["model_id"], "speech-turbo")
         self.assertEqual(result["standard_request"]["variant_id"], "turbo")
 
-    def test_canvas_graph_treats_music_generator_as_execution_node(self):
-        with self.assertRaises(main.HTTPException) as context:
-            main.validate_canvas_preflight_graph([
-                {"id": "music", "type": "smart-music-generator"},
-                {"id": "audio", "type": "smart-audio-generator"},
-            ], [{"id": "edge", "from": "music", "to": "audio"}])
+    def test_canvas_graph_accepts_fused_music_output_as_audio_input(self):
+        result = main.validate_canvas_preflight_graph([
+            {"id": "music", "type": "smart-music-generator"},
+            {"id": "audio", "type": "smart-audio-generator"},
+        ], [{"id": "edge", "from": "music", "to": "audio"}])
+        self.assertEqual(result, {"node_count": 2, "connection_count": 1})
 
-        self.assertEqual(context.exception.status_code, 400)
-        self.assertIn("执行节点不能直接连接执行节点", str(context.exception.detail))
 
     def test_provider_manifest_accepts_music_generation_family(self):
         manifest = {

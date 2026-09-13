@@ -1,0 +1,4 @@
+# 仓库统一文本行尾；Windows 启动脚本检出时使用 CRLF。
+*.bat text eol=crlf
+*.sh text eol=lf
+*.command text eol=lf

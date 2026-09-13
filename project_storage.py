@@ -13,6 +13,7 @@ import uuid
 import zipfile
 from pathlib import Path
 from typing import Any, Iterable
+from canvas_core.json_store import read_json, write_json, DataFileError
 
 
 SCHEMA_VERSION = 2
@@ -64,7 +65,18 @@ def media_kind(name: str = "", content_type: str = "") -> str:
 def safe_name(value: str, fallback: str = "文件") -> str:
     name = Path(str(value or fallback).replace("\\", "/")).name.strip()
     name = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", name).strip(" .")
-    return (name or fallback)[:180]
+    name = name or "文件"
+    # Windows 设备名即使带扩展名仍不可作为文件名；两端使用相同规范。
+    if re.fullmatch(r"(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])", name.split(".")[0].rstrip(), re.I):
+        name = "_" + name
+    if len(name.encode("utf-8")) > 180:
+        suffix = Path(name).suffix
+        if len(suffix.encode("utf-8")) > 20:
+            suffix = ""
+        digest = "_" + hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
+        budget = 180 - len((digest + suffix).encode("utf-8"))
+        name = name.encode("utf-8")[:budget].decode("utf-8", errors="ignore").rstrip(" .") + digest + suffix
+    return name
 
 
 def sha256_bytes(content: bytes) -> str:
@@ -139,27 +151,23 @@ class ProjectStorage:
 
     def _read_json(self, path: Path, fallback: Any) -> Any:
         try:
-            with path.open("r", encoding="utf-8-sig") as handle:
-                return json.load(handle)
-        except (OSError, ValueError, TypeError):
-            return fallback
+            return read_json(path, default=fallback)
+        except DataFileError as exc:
+            raise StorageError(str(exc)) from exc
 
     def _write_json(self, path: Path, value: Any) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-        with temp.open("w", encoding="utf-8", newline="\n") as handle:
-            json.dump(value, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp, path)
+        try:
+            write_json(path, value)
+        except DataFileError as exc:
+            raise StorageError(str(exc)) from exc
 
     def _load_index(self, path: Path) -> dict[str, Any]:
         value = self._read_json(path, {"version": SCHEMA_VERSION, "items": []})
-        if not isinstance(value, dict):
-            value = {"version": SCHEMA_VERSION, "items": []}
-        if not isinstance(value.get("items"), list):
-            value["items"] = []
+        if not isinstance(value, dict) or not isinstance(value.get("items"), list):
+            raise StorageError(f"索引 {path.name} 格式损坏，已阻止写入；请从备份恢复。")
+        version = value.get("version", 1)
+        if not isinstance(version, int) or version > SCHEMA_VERSION:
+            raise StorageError(f"索引 {path.name} 的版本不受支持，请使用相应新版程序，不能覆盖现有数据。")
         value["version"] = SCHEMA_VERSION
         return value
 
@@ -324,6 +332,11 @@ class ProjectStorage:
             ]))
             timestamp = now_ms()
             attempt["result_ids"] = merged
+            if (item.get("standard_request") or {}).get("node_type") == "music_generation" or (item.get("capability_snapshot") or {}).get("node_type") == "music_generation":
+                for result_id in merged:
+                    result = self.get_result(result_id)
+                    if result and result.get("kind") == "audio" and result.get("media_category") != "music":
+                        self.update_result_metadata(result_id, media_category="music")
             attempt["updated_at"] = timestamp
             item["updated_at"] = timestamp
             self._save_index(self.run_index_path, index)
@@ -727,7 +740,7 @@ class ProjectStorage:
             return value
 
     def update_result_metadata(self, result_id: str, **changes: Any) -> dict[str, Any]:
-        allowed = {"derivation", "media_info"}
+        allowed = {"derivation", "media_info", "media_category", "creation_recipes"}
         with self._lock:
             index = self._load_index(self.result_index_path)
             item = next((entry for entry in index["items"] if entry.get("id") == result_id), None)

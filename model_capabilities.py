@@ -1,6 +1,7 @@
 import json
 import re
 from copy import deepcopy
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -37,12 +38,13 @@ JIMENG_IMAGE2IMAGE_MODELS = {"4.0", "4.1", "4.5", "4.6", "4.7", "5.0", "5.0Pro"}
 
 
 def jimeng_image_resolution_options(model_id: str, mode: str = "text2image") -> List[str]:
-    """Return the resolution_type values accepted by the installed Dreamina CLI."""
+    """按具体模型返回已核实接口契约的分辨率，不跨模型统一选项。"""
     normalized = str(model_id or "").strip()
     if mode == "image2image" and normalized in {"3.0", "3.1"}:
         return []
     if normalized == "5.0Pro":
-        return ["1k", "2k", "4k"]
+        # 2026-09-12 服务端明确要求 1.5k/2k/4k；CLI 旧帮助不能缩减接口选项。
+        return ["1.5k", "2k", "4k"]
     if normalized in {"3.0", "3.1"}:
         return ["1k", "2k"]
     if normalized in (JIMENG_IMAGE2IMAGE_MODELS if mode == "image2image" else JIMENG_IMAGE_TEXT2IMAGE_MODELS):
@@ -1247,9 +1249,23 @@ def _ai_money_flowmusic_profile(model_id: str) -> Dict[str, Any]:
     }
 
 
+@lru_cache(maxsize=2)
+def _laohu_documented_profiles(path, modified_ns):
+    return _read_json(Path(path))
+
+
 def ai_money_profile_from_model_id(model_id: str, node_type: str = "") -> Dict[str, Any]:
     normalized = normalize_laohu_model_id(model_id)
     lower = normalized.lower()
+    # 已有明确档案优先于历史按名称推导，避免新版本被旧分支覆盖。
+    documented_path = Path(__file__).resolve().parent / "data/model_capabilities/providers/ai-money.json"
+    documented = _laohu_documented_profiles(str(documented_path), documented_path.stat().st_mtime_ns)
+    matches = [item for item in documented.get("models", []) if item.get("model_id") == normalized and item.get("version", 0) >= 2]
+    if matches:
+        matched = next((item for item in matches if item.get("node_type") == node_type), None)
+        if matched:
+            return deepcopy(matched)
+        raise ModelCapabilityError(f"模型 {normalized} 不支持 {node_type}")
     music_model = _is_music_model_id(normalized)
     if node_type == "music_generation" and not music_model:
         raise ModelCapabilityError(f"laohu 模型 {normalized} 不是音乐生成模型")
@@ -1677,12 +1693,12 @@ def ai_money_profile_from_model_id(model_id: str, node_type: str = "") -> Dict[s
             "version": {
                 "level": "optional",
                 "type": "enum",
-                "options": ["v3.5", "v4", "v4.5", "v4.5+", "v5"],
+                "options": ["v6", "v6-wild", "v6-mini"],
             },
         }
         if action not in source_actions:
             parameters["upstream_task_id"] = {"level": "required", "type": "text"}
-            parameters["upstream_result_index"] = {"level": "optional", "type": "integer", "min": 0}
+            parameters["upstream_result_index"] = {"level": "optional", "type": "integer", "min": 1}
         return {
             "model_id": normalized, "family_id": "ai-money-suno", "family_name": "Suno",
             "display_name": normalized, "variant_id": action, "node_type": "music_generation",
@@ -2443,7 +2459,18 @@ class ModelCapabilityRegistry:
         model_id: str,
         node_type: str,
     ) -> Optional[Dict[str, Any]]:
-        catalog = self.build_catalog(providers)
+        # 单模型预检无需重建所有平台目录，仍从用户启用白名单筛选。
+        selected_providers = []
+        for provider in providers:
+            if provider.get("id") != provider_id:
+                continue
+            selected = dict(provider)
+            field = NODE_MODEL_FIELDS.get(node_type)
+            requested = normalize_laohu_model_id(model_id) if self.capability_provider_id(provider) == "ai-money" else model_id
+            for key in set(NODE_MODEL_FIELDS.values()):
+                selected[key] = [value for value in (provider.get(key) or []) if key == field and (normalize_laohu_model_id(value) if self.capability_provider_id(provider) == "ai-money" else value) == requested]
+            selected_providers.append(selected)
+        catalog = self.build_catalog(selected_providers)
         for provider in catalog["providers"]:
             if provider["id"] != provider_id:
                 continue
@@ -2729,6 +2756,12 @@ class ModelCapabilityRegistry:
             if parameter_type == "boolean" and not isinstance(value, bool):
                 if str(value).strip().lower() not in {"true", "false", "1", "0"}:
                     raise ModelCapabilityError(f"模型 {model_id} 的参数 {key} 必须是布尔值")
+        if str(profile.get("model_id") or "").startswith(("MiniMax-H3", "laohu-image-g-v2.5-", "suno-")):
+            from laohu_protocols import validate_parameters
+            try:
+                validate_parameters(profile["model_id"], parameters, counts, normalized_roles, input_metadata)
+            except ValueError as exc:
+                raise ModelCapabilityError(str(exc)) from exc
         return profile
 
     @staticmethod

@@ -3,7 +3,6 @@
   "provider_id": "ai-money",
   "source": "https://api.lao-hu.com/v1/models",
   "chat_models": [
-    "MiniMax-H3",
     "bytedance/doubao-seed-2.0-code",
     "bytedance/doubao-seed-2.0-lite",
     "bytedance/doubao-seed-2.0-mini",
@@ -96,6 +95,7 @@
   ],
   "video_models": [
     "FlashVSR_video_upscale",
+    "MiniMax-H3",
     "flux-3-video-draft-enhance",
     "flux-3-video-global-draft-enhance",
     "flux-3-video-global-i2v",
@@ -245,6 +245,7 @@
     "suno-bpm",
     "suno-concat",
     "suno-cover-song",
+    "suno-create-model",
     "suno-create-voice",
     "suno-crop",
     "suno-extend",
@@ -265,6 +266,8 @@
     "suno-stems",
     "suno-stems-all",
     "suno-upload",
+    "suno-upload-cover",
+    "suno-upload-extend",
     "suno-upsample-tags",
     "suno-vox",
     "suno-wav"

@@ -1,28 +1,12 @@
 #!/bin/bash
-cd "$(dirname "$0")"
-LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null)"
-if [ -z "$LAN_IP" ]; then
-  LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-fi
-if [ -z "$LAN_IP" ]; then
-  LAN_IP="127.0.0.1"
-fi
-APP_URL="http://${LAN_IP}:3000/"
-
-echo "Starting ComfyUI-API-Modelscope..."
-echo "Visit: ${APP_URL}"
-echo "Local: http://127.0.0.1:3000/"
-echo "Press Ctrl+C to stop."
-echo ""
-
-# Open browser after 3 seconds
-sleep 3 && open "${APP_URL}" &
-
+cd "$(dirname "$0")" || exit 1
+# 安装和启动复用同一环境；浏览器只在服务真正就绪后打开。
 if [ -x ".venv/bin/python" ]; then
-  .venv/bin/python main.py
+  PYEXE="$PWD/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+  PYEXE="$(command -v python3)"
 else
-  python3 main.py
+  echo "找不到 Python，请先安装 Python 3.10+：https://www.python.org/downloads/"
+  exit 1
 fi
-
-echo ""
-echo "Server stopped."
+exec "$PYEXE" "$PWD/local_runtime.py" "$@"

@@ -10,7 +10,10 @@ concurrency:
   group: canvas-r2-release
   cancel-in-progress: false
 jobs:
+  regression:
+    uses: ./.github/workflows/regression.yml
   publish:
+    needs: regression
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -1,7 +1,6 @@
 const root = document.getElementById('assetManagerRoot');
 const statusEl = document.getElementById('assetStatus');
 const refreshBtn = document.getElementById('refreshBtn');
-const storageSettingsBtn = document.getElementById('storageSettingsBtn');
 const uploadInput = document.getElementById('assetUploadInput');
 
 const LOCAL_CAPTION_SETTINGS_KEY = 'asset_manager_local_caption_settings_v1';
@@ -60,7 +59,6 @@ function writeLocalCaptionSettings(){
             provider:localCaptionProvider || '',
             model:localCaptionModel || '',
             captionPrompt:localCaptionPrompt || '描述图片',
-            classifyPrompt:localClassifyPrompt || ''
         }));
     } catch(_) {}
 }
@@ -71,12 +69,8 @@ let activeInputScope = 'asset';
 let assetLibrary = {libraries:[], categories:[]};
 let promptLibrary = {libraries:[]};
 let apiProviders = [];
-let avatarRegisterProvider = '';
-let avatarBusyId = '';
 let activeAssetLibraryId = '';
 let activeAssetCategoryId = '';
-let activeAssetClassFilter = '';
-let openAssetClassGroup = 'environment';
 let activeWorkflowLibraryId = '';
 let activeWorkflowCategoryId = '';
 let activePromptLibraryId = '';
@@ -125,21 +119,15 @@ let localCaptionBusy = false;
 let localCaptionProvider = savedLocalCaptionSettings.provider || '';
 let localCaptionModel = savedLocalCaptionSettings.model || '';
 let localCaptionPrompt = savedLocalCaptionSettings.captionPrompt || '描述图片';
-let localClassifyPrompt = savedLocalCaptionSettings.classifyPrompt || '';
-let localClassifyPromptOpen = false;
 let localAssets = [];
 let localAssetsLoaded = false;
 let localUploadTree = null;
 let activeLocalUploadFolder = '';
-let activeLocalUploadClassFilter = '';
-let openLocalUploadClassGroup = '';
 let selectedLocalUploadId = '';
 let selectedLocalUploadIds = new Set();
 let localUploadQuery = '';
 let localUploadManageMode = false;
 let localUploadClipboard = null;
-let assetClassifyBusy = false;
-let localClassifyBusy = false;
 let lightboxPanState = null;
 let canvasAssetsData = {counts:{all:0,image:0,video:0,audio:0,text:0}, items:[]};
 let activeCanvasAssetCategory = 'all';
@@ -152,12 +140,15 @@ let canvasAssetManageMode = false;
 let searchCompositionActive = false;
 let searchRenderTimer = null;
 let lastSearchCompositionEndAt = 0;
-let storageSettingsState = {open:false, tab:'prefs', editor:'', dirs:{}, defaults:{}, kind:'generated', items:[], selected:new Set(), loading:false, loadingMore:false, offset:0, total:0, hasMore:false, pageSize:80, restoreScrollTop:null, classificationPrompt:'', defaultClassificationPrompt:''};
 
 const LOCAL_MEDIA_EXTS = /\.(png|jpe?g|webp|gif|bmp|avif|svg|mp4|webm|mov|m4v|mp3|wav|flac|ogg|m4a|aac)(\?|#|$)/i;
 const SEARCH_INPUT_IDS = new Set(['assetSearch','workflowSearch','promptSearch','localSearch','localUploadSearch','canvasAssetSearch']);
 
-function refreshIcons(){ if(window.lucide) lucide.createIcons(); }
+function refreshIcons(){
+    if(window.lucide) lucide.createIcons();
+    window.StudioMedia?.bindVideoPosters(root);
+    window.StudioI18n?.apply?.(root);
+}
 function i18nText(key, fallback){ return window.StudioI18n?.t?.(key) || fallback; }
 function setStatus(text='准备就绪'){ if(statusEl) statusEl.textContent = text || '准备就绪'; }
 function escapeHtml(value=''){
@@ -192,281 +183,6 @@ async function apiJson(url, options={}){
     return data;
 }
 const STORAGE_KIND_LABELS = {upload:'上传素材', generated:'生成素材', local:'本地素材'};
-async function openStorageSettings(){
-    storageSettingsState.open = true;
-    storageSettingsState.selected = new Set();
-    renderStorageSettingsModal();
-    try {
-        const [data, promptData] = await Promise.all([
-            apiJson('/api/storage-settings'),
-            apiJson('/api/asset-classification-prompt')
-        ]);
-        storageSettingsState.dirs = data.dirs || {};
-        storageSettingsState.defaults = data.defaults || {};
-        storageSettingsState.classificationPrompt = promptData.prompt || '';
-        storageSettingsState.defaultClassificationPrompt = promptData.default_prompt || '';
-        await loadStorageFiles(storageSettingsState.kind || 'generated');
-    } catch(err){
-        setStatus(err.message || '加载存储设置失败');
-        renderStorageSettingsModal();
-    }
-}
-function closeStorageSettings(){
-    storageSettingsState.open = false;
-    document.getElementById('storageSettingsOverlay')?.remove();
-}
-function syncStorageSettingsInputsToState(){
-    storageSettingsState.dirs = storageSettingsState.dirs || {};
-    ['upload','generated','local'].forEach(kind => {
-        const el = document.getElementById(`storageDir_${kind}`);
-        if(el) storageSettingsState.dirs[kind] = el.value.trim();
-    });
-    const providerEl = document.getElementById('prefCaptionProvider');
-    const modelEl = document.getElementById('prefCaptionModel');
-    const captionEl = document.getElementById('prefCaptionPrompt');
-    const classifyEl = document.getElementById('prefClassifyPrompt');
-    const ruleEl = document.getElementById('prefClassificationRulePrompt');
-    if(providerEl) localCaptionProvider = providerEl.value || '';
-    if(modelEl) localCaptionModel = modelEl.value || '';
-    if(captionEl) localCaptionPrompt = captionEl.value || '描述图片';
-    if(classifyEl) localClassifyPrompt = classifyEl.value || '';
-    if(ruleEl) storageSettingsState.classificationPrompt = ruleEl.value || '';
-}
-async function saveStorageSettings(options={}){
-    syncStorageSettingsInputsToState();
-    normalizeLocalCaptionSettings();
-    writeLocalCaptionSettings();
-    const hasDirInputs = ['upload','generated','local'].some(kind => document.getElementById(`storageDir_${kind}`));
-    const hasClassificationInput = Boolean(document.getElementById('prefClassificationRulePrompt'));
-    const shouldSaveDirs = options.saveDirs ?? hasDirInputs;
-    const shouldSaveClassification = options.saveClassification ?? hasClassificationInput;
-    const tasks = {};
-    if(shouldSaveDirs){
-        const payload = {};
-        ['upload','generated','local'].forEach(kind => {
-            payload[kind] = (storageSettingsState.dirs || {})[kind] || '';
-        });
-        tasks.dirs = apiJson('/api/storage-settings', {
-            method:'PATCH',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify(payload)
-        });
-    }
-    if(shouldSaveClassification){
-        tasks.classification = apiJson('/api/asset-classification-prompt', {
-            method:'PATCH',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({prompt:storageSettingsState.classificationPrompt || ''})
-        });
-    }
-    const [data, promptData] = await Promise.all([
-        tasks.dirs || Promise.resolve(null),
-        tasks.classification || Promise.resolve(null)
-    ]);
-    if(data) storageSettingsState.dirs = data.dirs || storageSettingsState.dirs || {};
-    if(promptData) storageSettingsState.classificationPrompt = promptData.prompt || storageSettingsState.classificationPrompt || '';
-    storageSettingsState.selected = new Set();
-    if(data) await loadStorageFiles(storageSettingsState.kind);
-    setStatus('偏好设置已保存');
-}
-async function loadStorageFiles(kind, options={}){
-    const append = Boolean(options.append);
-    const nextKind = kind || 'generated';
-    if(storageSettingsState.loading || storageSettingsState.loadingMore) return;
-    const currentGrid = document.querySelector('[data-storage-file-grid]');
-    const keepScrollTop = append && currentGrid ? currentGrid.scrollTop : null;
-    storageSettingsState.kind = nextKind;
-    if(append){
-        if(!storageSettingsState.hasMore) return;
-        storageSettingsState.loadingMore = true;
-    } else {
-        storageSettingsState.items = [];
-        storageSettingsState.offset = 0;
-        storageSettingsState.total = 0;
-        storageSettingsState.hasMore = false;
-        storageSettingsState.selected = new Set();
-        storageSettingsState.loading = true;
-    }
-    if(!append) renderStorageSettingsModal();
-    try {
-        const offset = append ? storageSettingsState.offset : 0;
-        const limit = storageSettingsState.pageSize || 80;
-        const data = await apiJson(`/api/storage-files?kind=${encodeURIComponent(storageSettingsState.kind)}&offset=${encodeURIComponent(offset)}&limit=${encodeURIComponent(limit)}`);
-        const items = data.items || [];
-        storageSettingsState.items = append ? [...storageSettingsState.items, ...items] : items;
-        storageSettingsState.offset = offset + items.length;
-        storageSettingsState.total = Number(data.total || storageSettingsState.items.length || 0);
-        storageSettingsState.hasMore = Boolean(data.has_more);
-        storageSettingsState.selected = new Set([...storageSettingsState.selected].filter(id => storageSettingsState.items.some(item => item.id === id)));
-    } finally {
-        storageSettingsState.loading = false;
-        storageSettingsState.loadingMore = false;
-        storageSettingsState.restoreScrollTop = keepScrollTop;
-        renderStorageSettingsModal();
-    }
-}
-function handleStorageFileGridScroll(event){
-    const grid = event.currentTarget;
-    if(!grid || storageSettingsState.loading || storageSettingsState.loadingMore || !storageSettingsState.hasMore) return;
-    if(grid.scrollTop + grid.clientHeight >= grid.scrollHeight - 260){
-        loadStorageFiles(storageSettingsState.kind, {append:true}).catch(err => setStatus(err.message || '加载更多图片失败'));
-    }
-}
-function renderStorageSettingsModal(){
-    if(!storageSettingsState.open) return;
-    normalizeLocalCaptionSettings();
-    const providers = localCaptionProviders();
-    const models = localCaptionModels();
-    let overlay = document.getElementById('storageSettingsOverlay');
-    if(!overlay){
-        overlay = document.createElement('div');
-        overlay.id = 'storageSettingsOverlay';
-        overlay.className = 'storage-settings-overlay';
-        document.body.appendChild(overlay);
-    }
-    const dirs = storageSettingsState.dirs || {};
-    const kind = storageSettingsState.kind || 'generated';
-    const selectedCount = storageSettingsState.selected.size;
-    const rows = ['upload','generated','local'].map(key => `
-        <label class="storage-dir-row">
-            <span>${STORAGE_KIND_LABELS[key]}</span>
-            <input id="storageDir_${key}" value="${escapeAttr(dirs[key] || '')}" placeholder="${escapeAttr(storageSettingsState.defaults?.[key] || '')}">
-        </label>
-    `).join('');
-    const tabs = ['generated','upload','local'].map(key => `
-        <button class="${kind === key ? 'active' : ''}" type="button" data-storage-kind="${key}">
-            <span>${STORAGE_KIND_LABELS[key]}</span>
-        </button>
-    `).join('');
-    const loadedCount = storageSettingsState.items.length;
-    const cards = storageSettingsState.loading
-        ? `<div class="storage-empty">正在读取目录...</div>`
-        : storageSettingsState.items.length
-        ? storageSettingsState.items.map(item => `
-            <label class="storage-file-card ${storageSettingsState.selected.has(item.id) ? 'selected' : ''}">
-                <input type="checkbox" data-storage-file="${escapeAttr(item.id)}" data-storage-rel="${escapeAttr(item.rel)}" ${storageSettingsState.selected.has(item.id) ? 'checked' : ''}>
-                <img src="${escapeAttr(item.url)}" alt="">
-                <span title="${escapeAttr(item.name)}">${escapeHtml(item.name)}</span>
-                <em>${formatFileSize(item.size)}${item.width ? ` · ${item.width}×${item.height}` : ''}</em>
-            </label>
-        `).join('') + (storageSettingsState.hasMore || storageSettingsState.loadingMore
-            ? `<div class="storage-load-more">${storageSettingsState.loadingMore ? '继续加载中...' : `已加载 ${loadedCount} / ${storageSettingsState.total || loadedCount}，向下滚动继续`}</div>`
-            : `<div class="storage-load-more done">已加载全部 ${loadedCount} 张</div>`)
-        : `<div class="storage-empty">这个目录里暂时没有图片</div>`;
-    const activePrefTab = storageSettingsState.tab || 'prefs';
-    const captionOpen = storageSettingsState.editor === 'caption';
-    const classifyOpen = storageSettingsState.editor === 'classify';
-    const prefsBody = `
-        <div class="asset-pref-section">
-            <div class="asset-pref-title"><i data-lucide="wand-sparkles"></i><span>基础偏好</span></div>
-            <div class="asset-pref-grid">
-                <label class="storage-dir-row">
-                    <span>平台</span>
-                    <select id="prefCaptionProvider">
-                        ${providers.length ? providers.map(p => `<option value="${escapeAttr(p.id)}" ${p.id === localCaptionProvider ? 'selected' : ''}>${escapeHtml(p.name || p.id)}</option>`).join('') : '<option value="">暂无聊天平台</option>'}
-                    </select>
-                </label>
-                <label class="storage-dir-row">
-                    <span>模型</span>
-                    <select id="prefCaptionModel">
-                        ${models.length ? models.map(m => `<option value="${escapeAttr(m)}" ${m === localCaptionModel ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('') : '<option value="">暂无模型</option>'}
-                    </select>
-                </label>
-            </div>
-        </div>
-        <div class="asset-pref-section">
-            <button class="asset-pref-fold ${captionOpen ? 'open' : ''}" type="button" data-pref-editor="caption">
-                <span><i data-lucide="message-square-text"></i><b>反推提示词</b></span>
-                <em>${escapeHtml(localCaptionPrompt || '描述图片')}</em>
-                <i data-lucide="${captionOpen ? 'chevron-up' : 'chevron-down'}"></i>
-            </button>
-            ${captionOpen ? `
-                <div class="asset-pref-editor">
-                    <label class="storage-dir-row">
-                        <span>反推提示词</span>
-                        <textarea id="prefCaptionPrompt" placeholder="描述图片">${escapeHtml(localCaptionPrompt || '描述图片')}</textarea>
-                    </label>
-                    <div class="asset-pref-editor-actions">
-                        <button class="asset-btn primary" type="button" data-pref-editor-save="caption"><i data-lucide="save"></i><span>保存</span></button>
-                    </div>
-                </div>
-            ` : ''}
-            <button class="asset-pref-fold ${classifyOpen ? 'open' : ''}" type="button" data-pref-editor="classify">
-                <span><i data-lucide="tags"></i><b>智能分类提示词</b></span>
-                <em>编辑分类规则和追加要求</em>
-                <i data-lucide="${classifyOpen ? 'chevron-up' : 'chevron-down'}"></i>
-            </button>
-            ${classifyOpen ? `
-                <div class="asset-pref-editor">
-                    <label class="storage-dir-row">
-                        <span>智能分类追加要求</span>
-                        <textarea id="prefClassifyPrompt" placeholder="可追加分类要求，例如：增加家装风格、镜头焦段、商业用途、人物年龄段、产品材质。">${escapeHtml(localClassifyPrompt || '')}</textarea>
-                    </label>
-                    <label class="storage-dir-row">
-                        <span>智能分类规则 <button class="asset-inline-link" type="button" data-class-rule-reset>恢复内置规则</button></span>
-                        <textarea id="prefClassificationRulePrompt" class="asset-pref-rule-textarea" placeholder="这里显示内置分类提示词，可按你的素材体系编辑后保存。">${escapeHtml(storageSettingsState.classificationPrompt || storageSettingsState.defaultClassificationPrompt || '')}</textarea>
-                    </label>
-                    <div class="asset-pref-editor-actions">
-                        <button class="asset-btn primary" type="button" data-pref-editor-save="classify"><i data-lucide="save"></i><span>保存</span></button>
-                    </div>
-                </div>
-            ` : ''}
-        </div>
-    `;
-    const manageBody = `
-        <div class="asset-pref-section">
-            <div class="asset-pref-title"><i data-lucide="folder-cog"></i><span>保存目录</span></div>
-            <div class="storage-dir-grid">${rows}</div>
-            <div class="storage-settings-actions inline">
-                <button class="asset-btn primary" type="button" data-storage-save><i data-lucide="save"></i><span>保存目录</span></button>
-            </div>
-        </div>
-        <div class="storage-file-head">
-            <div class="storage-tabs">${tabs}</div>
-            <div class="storage-file-actions">
-                <button class="asset-btn" type="button" data-storage-select-all ${storageSettingsState.items.length ? '' : 'disabled'}><i data-lucide="check-square"></i><span>全选</span></button>
-                <button class="asset-btn danger" type="button" data-storage-delete ${selectedCount ? '' : 'disabled'}><i data-lucide="trash-2"></i><span>删除 ${selectedCount || ''}</span></button>
-            </div>
-        </div>
-        <div class="storage-file-grid" data-storage-file-grid>${cards}</div>
-    `;
-    overlay.innerHTML = `
-        <div class="storage-settings-modal">
-            <div class="storage-settings-head">
-                <div>
-                    <strong>偏好设置</strong>
-                    <span>分开管理默认反推设置和素材目录文件。</span>
-                </div>
-                <button type="button" data-storage-close><i data-lucide="x"></i></button>
-            </div>
-            <div class="asset-pref-tabs">
-                <button class="${activePrefTab === 'prefs' ? 'active' : ''}" type="button" data-pref-tab="prefs"><i data-lucide="sliders-horizontal"></i><span>偏好设置</span></button>
-                <button class="${activePrefTab === 'manage' ? 'active' : ''}" type="button" data-pref-tab="manage"><i data-lucide="images"></i><span>素材管理</span></button>
-            </div>
-            <div class="asset-pref-body">${activePrefTab === 'manage' ? manageBody : prefsBody}</div>
-        </div>
-    `;
-    const fileGrid = overlay.querySelector('[data-storage-file-grid]');
-    fileGrid?.addEventListener('scroll', handleStorageFileGridScroll, {passive:true});
-    if(fileGrid && storageSettingsState.restoreScrollTop !== null){
-        fileGrid.scrollTop = storageSettingsState.restoreScrollTop;
-        storageSettingsState.restoreScrollTop = null;
-    }
-    refreshIcons();
-}
-async function deleteSelectedStorageFiles(){
-    const selected = storageSettingsState.items.filter(item => storageSettingsState.selected.has(item.id));
-    if(!selected.length) return;
-    if(!await StudioDialog.confirm(`确认删除 ${selected.length} 张图片？此操作会删除磁盘文件。`, {type:'danger'})) return;
-    const data = await apiJson('/api/storage-files/delete', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({kind:storageSettingsState.kind, items:selected.map(item => item.rel)})
-    });
-    storageSettingsState.selected.clear();
-    await loadStorageFiles(storageSettingsState.kind);
-    setStatus(`已删除 ${data.removed || 0} 个文件`);
-}
 function formatDate(value){
     const num = Number(value || 0);
     if(!num) return '未知';
@@ -510,14 +226,10 @@ function activeAssetCategory(){
     return cats.find(cat => cat.id === activeAssetCategoryId) || cats[0] || null;
 }
 function assetViewTitle(){
-    const entry = activeAssetClassEntry();
-    if(entry) return entry.tag || '智能分类';
     return activeAssetCategory()?.name || '资产素材';
 }
 function assetViewSubtitle(items){
     const libName = activeAssetLibrary()?.name || '资产库';
-    const entry = activeAssetClassEntry();
-    if(entry) return `${libName} / 智能分类：${entry.label} / ${items.length} 个素材`;
     return `${libName} / ${items.length} 个素材`;
 }
 function activeWorkflowCategory(){
@@ -543,11 +255,9 @@ function promptLibraries(){
     return [...system, ...others];
 }
 function isSystemPromptLibrary(lib){
-    return !lib || ['system','skills'].includes(lib.id);
+    return !lib || lib.id === 'system';
 }
-function isSkillPromptLibrary(lib){
-    return Boolean(lib && (lib.id === 'skills' || lib.kind === 'skill' || lib.type === 'skill'));
-}
+
 function activePromptLibrary(){
     const libs = promptLibraries();
     return libs.find(lib => lib.id === activePromptLibraryId) || libs[0] || null;
@@ -561,34 +271,6 @@ function activePromptCategories(){
     return promptCategoriesFor(activePromptLibrary());
 }
 const PROMPT_BUILTIN_CATEGORY_IDS = new Set(['view','storyboard','character','product','lighting','custom']);
-const ASSET_CLASS_GROUPS = [
-    {id:'environment', name:'环境', dims:['environment','scene','space','mood']},
-    {id:'composition', name:'构图', dims:['composition']},
-    {id:'lighting', name:'光影', dims:['lighting','color']},
-    {id:'model', name:'模特', dims:['model','people']},
-    {id:'subject', name:'主体', dims:['subject','objects','materials']},
-    {id:'style', name:'风格', dims:['style','use_case','quality']},
-    {id:'tags', name:'标签', dims:['tags']},
-];
-const ASSET_CLASS_GROUP_BY_DIM = new Map(ASSET_CLASS_GROUPS.flatMap(group => group.dims.map(dim => [dim, group])));
-const ASSET_CLASSIFICATION_LABELS = {
-    environment:'环境',
-    scene:'场景',
-    space:'空间',
-    subject:'主体',
-    model:'模特',
-    people:'人物',
-    style:'风格',
-    lighting:'光影',
-    color:'色彩',
-    composition:'构图',
-    mood:'氛围',
-    use_case:'用途',
-    objects:'物体',
-    materials:'材质',
-    quality:'质量',
-    tags:'标签'
-};
 function promptCategoryLabel(category=PROMPT_UNCATEGORIZED_CATEGORY_ID){
     const found = activePromptCategories().find(cat => cat.id === category);
     if(found?.name) return found.name;
@@ -629,120 +311,6 @@ function materialNameParts(item){
 function materialNameStem(value){
     return String(value || '').trim().replace(/\.(png|jpe?g|webp|gif|bmp|avif|svg|mp4|webm|mov|m4v|avi|mkv|flv|mp3|wav|m4a|aac|ogg|flac|txt|md|markdown|json|csv|yaml|yml|log)$/i, '');
 }
-function assetClassificationChips(item, limit=10){
-    const flat = Array.isArray(item?.classification?.flat) ? item.classification.flat : [];
-    return flat.slice(0, limit).map(entry => {
-        const label = entry?.label || entry?.dimension || '分类';
-        const tag = entry?.tag || '';
-        const key = assetClassFilterKey(entry);
-        return tag ? {label, tag, key, dimension:entry?.dimension || ''} : null;
-    }).filter(Boolean);
-}
-function assetClassFilterKey(entry){
-    const dimension = String(entry?.dimension || '').trim();
-    const tag = String(entry?.tag || '').trim();
-    return dimension && tag ? `${dimension}::${tag}` : '';
-}
-function parseAssetClassFilterKey(key=''){
-    const text = String(key || '');
-    const index = text.indexOf('::');
-    if(index < 0) return null;
-    return {dimension:text.slice(0, index), tag:text.slice(index + 2)};
-}
-function assetClassificationEntriesForLibrary(lib=activeAssetLibrary()){
-    const items = [];
-    (lib?.categories || []).filter(cat => (cat.type || 'image') === 'image').forEach(cat => items.push(...(cat.items || [])));
-    return assetClassificationEntriesForItems(items);
-}
-function assetClassificationEntriesForItems(items=[]){
-    const groups = new Map();
-    (items || []).forEach(item => {
-        const flat = Array.isArray(item?.classification?.flat) ? item.classification.flat : [];
-        flat.forEach(entry => {
-            const key = assetClassFilterKey(entry);
-            if(!key) return;
-            const current = groups.get(key) || {
-                key,
-                dimension:String(entry.dimension || ''),
-                label:String(entry.label || entry.dimension || '分类'),
-                tag:String(entry.tag || ''),
-                count:0
-            };
-            current.count += 1;
-            groups.set(key, current);
-        });
-    });
-    return [...groups.values()].sort((a, b) => {
-        if(a.label !== b.label) return a.label.localeCompare(b.label, 'zh-Hans-CN', {numeric:true, sensitivity:'base'});
-        return b.count - a.count || a.tag.localeCompare(b.tag, 'zh-Hans-CN', {numeric:true, sensitivity:'base'});
-    });
-}
-function assetClassificationEntryGroup(entry){
-    const dim = String(entry?.dimension || '');
-    if(dim === 'subject' && /人|人物|模特|男|女|儿童|老人|青年|肖像|半身|全身/.test(String(entry?.tag || ''))) {
-        return ASSET_CLASS_GROUPS.find(group => group.id === 'model') || ASSET_CLASS_GROUPS[0];
-    }
-    return ASSET_CLASS_GROUP_BY_DIM.get(dim) || ASSET_CLASS_GROUPS.find(group => group.id === 'tags') || ASSET_CLASS_GROUPS[0];
-}
-function assetClassificationSearchText(item){
-    const classification = item?.classification || {};
-    const flat = Array.isArray(classification.flat) ? classification.flat : [];
-    const flatText = flat.map(entry => {
-        const group = assetClassificationEntryGroup(entry);
-        return [group?.name, entry?.label, entry?.dimension, entry?.tag].filter(Boolean).join(' ');
-    }).join(' ');
-    const categoryText = classification.categories && typeof classification.categories === 'object'
-        ? Object.entries(classification.categories).map(([key, values]) => {
-            const group = ASSET_CLASS_GROUP_BY_DIM.get(String(key || ''));
-            const label = ASSET_CLASSIFICATION_LABELS[key] || key;
-            const list = Array.isArray(values) ? values : [values];
-            return [group?.name, label, key, ...list].filter(Boolean).join(' ');
-        }).join(' ')
-        : '';
-    const tags = Array.isArray(classification.tags) ? classification.tags.join(' ') : '';
-    return [classification.summary, flatText, categoryText, tags].filter(Boolean).join(' ');
-}
-function groupedAssetClassificationEntries(entries=[]){
-    const byGroup = new Map(ASSET_CLASS_GROUPS.map(group => [group.id, {...group, count:0, entries:[]}]));
-    (entries || []).forEach(entry => {
-        const group = assetClassificationEntryGroup(entry);
-        const bucket = byGroup.get(group.id) || byGroup.get('tags');
-        bucket.entries.push(entry);
-        bucket.count += Number(entry.count || 0);
-    });
-    return [...byGroup.values()].filter(group => group.entries.length);
-}
-function assetClassificationGroupIdForFilter(key='', entries=[]){
-    const entry = (entries || []).find(item => item.key === key);
-    return entry ? assetClassificationEntryGroup(entry)?.id || '' : '';
-}
-function activeAssetClassEntry(){
-    return assetClassificationEntriesForLibrary().find(entry => entry.key === activeAssetClassFilter) || null;
-}
-function assetItemsForClassFilter(key=activeAssetClassFilter){
-    const parsed = parseAssetClassFilterKey(key);
-    if(!parsed) return [];
-    return assetCategories().flatMap(cat => cat.items || []).filter(item => {
-        const flat = Array.isArray(item?.classification?.flat) ? item.classification.flat : [];
-        return flat.some(entry => String(entry.dimension || '') === parsed.dimension && String(entry.tag || '') === parsed.tag);
-    });
-}
-function renderClassificationChips(item, limit=10, options={}){
-    const chips = assetClassificationChips(item, limit);
-    const kind = options.kind || '';
-    const libAttr = options.libraryId ? ` data-asset-class-lib="${escapeAttr(options.libraryId)}"` : '';
-    const activeKey = kind === 'localup' ? activeLocalUploadClassFilter : kind === 'asset' ? activeAssetClassFilter : '';
-    return chips.length
-        ? `<div class="classification-chips">${chips.map(chip => {
-            const filterAttr = kind === 'localup'
-                ? ` data-localup-class-filter="${escapeAttr(chip.key)}"`
-                : kind === 'asset'
-                    ? ` data-asset-class-filter="${escapeAttr(chip.key)}"${libAttr}`
-                    : '';
-            return `<button class="${activeKey === chip.key ? 'active' : ''}" type="button"${filterAttr} title="${escapeAttr(chip.label)}">${escapeHtml(chip.tag)}</button>`;
-        }).join('')}</div>`
-        : '';
-}
 function workflowKindLabel(item){
     const format = String(item?.format || '').toLowerCase();
     const url = String(item?.url || '').toLowerCase();
@@ -750,6 +318,7 @@ function workflowKindLabel(item){
     return 'ZIP 工作流包';
 }
 function assetKindLabel(item){
+    if(window.StudioMedia?.category(item) === 'music') return i18nText('asset.music','音乐');
     const kind = assetKind(item);
     if(kind === 'video') return '视频';
     if(kind === 'audio') return '音频';
@@ -778,7 +347,8 @@ function assetPreviewUrl(url, w=256){
 function assetThumb(item){
     const kind = assetKind(item);
     // 视频用 poster（服务端生成的一帧）+ preload=none：不再为每个视频加载元数据，素材多时滚动顺畅。
-    if(kind === 'video') return `<video src="${escapeAttr(item.url)}" poster="${escapeAttr(assetPreviewUrl(item.url, 256))}" muted preload="none" playsinline></video>`;
+    if(kind === 'video') return `<img src="${escapeAttr(assetPreviewUrl(item.url, 256))}" data-video-poster="${escapeAttr(item.url)}" alt="${escapeAttr(i18nText('asset.videoCover','视频封面'))}" loading="lazy">`;
+    if(window.StudioMedia?.category(item) === 'music') return `<div class="asset-file-icon asset-music-icon"><i data-lucide="music-2"></i><span>${i18nText('asset.music','音乐')}</span></div>`;
     if(kind === 'audio') return `<div class="asset-audio-waveform" aria-label="音频">
         <div class="asset-audio-bars" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
         <i data-lucide="audio-lines"></i><strong>音频</strong><small>双击播放</small>
@@ -856,8 +426,7 @@ function renderLocalCaptionTools(imageCount){
     normalizeLocalCaptionSettings();
     const providers = localCaptionProviders();
     const models = localCaptionModels();
-    const captionDisabled = !imageCount || !providers.length || !localCaptionModel || localCaptionBusy || localClassifyBusy;
-    const classifyDisabled = !imageCount || !providers.length || !localCaptionModel || localCaptionBusy || localClassifyBusy;
+    const captionDisabled = !imageCount || !providers.length || !localCaptionModel || localCaptionBusy;
     return `
         <div class="local-caption-tools">
             <div class="local-caption-main-row">
@@ -868,11 +437,8 @@ function renderLocalCaptionTools(imageCount){
                 ${models.length ? models.map(m => `<option value="${escapeAttr(m)}" ${m === localCaptionModel ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('') : '<option value="">暂无模型</option>'}
             </select>
             <input id="localCaptionPrompt" class="local-caption-prompt-input" type="text" value="${escapeAttr(localCaptionPrompt || '描述图片')}" placeholder="描述图片">
-            <button class="asset-btn" type="button" data-local-classify-run ${classifyDisabled ? 'disabled' : ''}><i data-lucide="${localClassifyBusy ? 'loader-2' : 'tags'}"></i><span>${localClassifyBusy ? '分类中' : '智能分类'}</span></button>
             <button class="asset-btn primary" type="button" data-local-caption-run ${captionDisabled ? 'disabled' : ''}><i data-lucide="${localCaptionBusy ? 'loader-2' : 'wand-sparkles'}"></i><span>${localCaptionBusy ? '反推中' : '提示词反推'}</span></button>
-            <button class="asset-icon-btn" type="button" data-local-classify-toggle title="智能分类要求"><i data-lucide="${localClassifyPromptOpen ? 'chevron-up' : 'sliders-horizontal'}"></i></button>
             </div>
-            ${localClassifyPromptOpen ? `<textarea id="localClassifyPrompt" class="local-classify-prompt-input" placeholder="默认已内置室内/室外、空间、主体、光影、模特、风格、色彩等分类。这里可以追加你的分类要求，例如：增加家装风格、镜头焦段、商业用途、人物年龄段、产品材质。">${escapeHtml(localClassifyPrompt || '')}</textarea>` : ''}
         </div>
     `;
 }
@@ -916,7 +482,6 @@ async function loadLocalAssets(){
         localUploadTree = {id:'__root__', path:'', name:'全部上传', count:0, items:[], children:[]};
     }
     if(activeLocalUploadFolder && !localUploadFolderExists(activeLocalUploadFolder)) activeLocalUploadFolder = '';
-    if(activeLocalUploadClassFilter && !activeLocalUploadClassEntry()) activeLocalUploadClassFilter = '';
     selectedLocalUploadIds = new Set([...selectedLocalUploadIds].filter(id => localAssets.some(item => item.id === id)));
     localAssetsLoaded = true;
     return localAssets;
@@ -994,14 +559,12 @@ async function openSharedFolder(folderId){
 }
 function currentAssetItems(){
     const query = assetQuery.trim().toLowerCase();
-    const source = activeAssetClassFilter
-        ? assetItemsForClassFilter(activeAssetClassFilter)
-        : query
+    const source = query
             ? assetCategories().flatMap(cat => cat.items || [])
             : (activeAssetCategory()?.items || []);
     return source.filter(item => {
         if(!query) return true;
-        return [item.name, item.url, assetKindLabel(item), assetClassificationSearchText(item)].join(' ').toLowerCase().includes(query);
+        return [item.name, item.url, assetKindLabel(item)].join(' ').toLowerCase().includes(query);
     });
 }
 function currentWorkflowItems(){
@@ -1012,14 +575,8 @@ function currentWorkflowItems(){
     });
 }
 function canvasAssetCategories(){
-    const counts = canvasAssetsData.counts || {};
-    return [
-        {id:'all', name:'全部', count:Number(counts.all || 0)},
-        {id:'image', name:'图片', count:Number(counts.image || 0)},
-        {id:'video', name:'视频', count:Number(counts.video || 0)},
-        {id:'audio', name:'音频', count:Number(counts.audio || 0)},
-        {id:'text', name:'文本', count:Number(counts.text || 0)}
-    ];
+    const items = canvasAssetsData.items || [];
+    return [['all','全部'],['text','文本'],['image','图片'],['video','视频'],['audio','音频'],['music','音乐']].map(([id,name]) => ({id,name:id==='music'?i18nText('asset.music',name):name,count:items.filter(item=>id==='all'||StudioMedia.category(item)===id).length}));
 }
 function activeCanvasAssetCategoryInfo(){
     return canvasAssetCategories().find(cat => cat.id === activeCanvasAssetCategory) || canvasAssetCategories()[0];
@@ -1045,6 +602,7 @@ function canvasAssetViewSubtitle(items){
     return `${items.length} 个结果 / ${escapeHtml(canvasAssetSortLabel())}`;
 }
 function canvasAssetKindLabel(item){
+    if(StudioMedia.category(item)==='music') return i18nText('asset.music','音乐');
     const kind = String(item?.kind || assetKind(item)).toLowerCase();
     if(kind === 'video') return '视频';
     if(kind === 'audio') return '音频';
@@ -1059,7 +617,7 @@ function canvasAssetSortLabel(){
 function currentCanvasAssetItems(){
     const q = String(canvasAssetQuery || '').trim().toLowerCase();
     let list = uniqueCanvasAssets(canvasAssetsData.items || []).filter(item => {
-        if(activeCanvasAssetCategory !== 'all' && String(item.kind || '').toLowerCase() !== activeCanvasAssetCategory) return false;
+        if(activeCanvasAssetCategory !== 'all' && StudioMedia.category(item) !== activeCanvasAssetCategory) return false;
         if(!q) return true;
         return [item.name, item.display_name, item.original_name, item.url, canvasAssetKindLabel(item)].join(' ').toLowerCase().includes(q);
     });
@@ -1114,48 +672,9 @@ function currentPromptItems(){
         return [item.name, item.scene, item.positive, item.negative, item.category].join(' ').toLowerCase().includes(query);
     });
 }
-// 认证支持的平台键（与后端 AVATAR_SUPPORTED_PLATFORMS 保持一致；新增平台时同步）
-const AVATAR_SUPPORTED_PLATFORMS = ['apimart', 'volcengine'];
-const AVATAR_PLATFORM_LABELS = {apimart:'APIMart', volcengine:'火山引擎'};
-function providerAvatarPlatform(p){
-    const proto = String(p?.protocol || '').toLowerCase();
-    const base = String(p?.base_url || '').toLowerCase();
-    if(proto === 'apimart' || base.includes('apimart.ai')) return 'apimart';
-    if(proto === 'volcengine') return 'volcengine';
-    return '';
-}
-function providerAvatarSupported(p){
-    return AVATAR_SUPPORTED_PLATFORMS.includes(providerAvatarPlatform(p));
-}
-function avatarPlatformLabel(platform){
-    return AVATAR_PLATFORM_LABELS[String(platform || '')] || String(platform || '平台');
-}
 // 列出 API 设置里所有启用的 provider 作为认证候选（以 API 设置为中心，由用户自己选平台）；
 // 不支持的平台也列出，在下拉里标注「待接入」，避免用户以为漏了。
-function avatarCandidateProviders(){
-    return (apiProviders || []).filter(p => p && p.enabled !== false);
-}
-function activeAvatarProvider(){
-    const list = avatarCandidateProviders();
-    if(!list.length) return null;
-    return list.find(p => p.id === avatarRegisterProvider)
-        || list.find(p => providerAvatarSupported(p))
-        || list[0];
-}
-function avatarProviderOptionLabel(p){
-    const name = p.name || p.id;
-    const platform = providerAvatarPlatform(p);
-    if(!platform) return `${name}（暂不支持，待接入）`;
-    if(!providerAvatarSupported(p)) return `${name}（${avatarPlatformLabel(platform)}·待接入）`;
-    return `${name}（${avatarPlatformLabel(platform)}）`;
-}
 // 找出某平台当前可用的 provider_id（优先注册时记录的，其次同平台任一启用 provider）
-function avatarProviderIdForPlatform(platform, preferredId=''){
-    const list = avatarCandidateProviders();
-    if(preferredId && list.some(p => p.id === preferredId)) return preferredId;
-    const match = list.find(p => providerAvatarPlatform(p) === platform);
-    return match ? match.id : '';
-}
 function findAssetItem(id){
     for(const lib of assetLibraries()) for(const cat of lib.categories || []) for(const item of cat.items || []) if(item.id === id) return item;
     return null;
@@ -1275,7 +794,6 @@ function normalizeAssetState(){
     if(!activeAssetLibraryId || !libs.some(lib => lib.id === activeAssetLibraryId)) activeAssetLibraryId = assetLibrary.active_library_id || libs[0]?.id || '';
     const cats = assetCategories();
     if(!activeAssetCategoryId || !cats.some(cat => cat.id === activeAssetCategoryId)) activeAssetCategoryId = cats[0]?.id || '';
-    if(activeAssetClassFilter && !activeAssetClassEntry()) activeAssetClassFilter = '';
     const items = currentAssetItems();
     if(selectedAssetId && !items.some(item => item.id === selectedAssetId)) selectedAssetId = '';
     if(!selectedAssetId && items.length) selectedAssetId = items[0].id;
@@ -1394,7 +912,6 @@ function render(){
 function renderInputMaterialsManager(){
     if(activeInputScope === 'temporary'){
         activeLocalUploadFolder = '';
-        activeLocalUploadClassFilter = '';
         renderLocalManager();
     }
     else renderAssetManager();
@@ -1502,8 +1019,7 @@ function renderCanvasAssetsManager(){
             <div class="manage-tools">
                 <span>已选择 ${selectedCanvasAssetIds.size} 个生成结果，支持拖拽框选或逐个勾选。</span>
                 <div class="asset-tools">
-                    <button class="asset-btn" type="button" data-canvas-asset-select-all ${items.length ? '' : 'disabled'}><i data-lucide="check-square"></i><span>全选</span></button>
-                    <button class="asset-btn" type="button" data-canvas-asset-clear-selection ${selectedCanvasAssetIds.size ? '' : 'disabled'}><i data-lucide="square"></i><span>清空</span></button>
+                    ${renderSelectToggle("canvas-asset", items, selectedCanvasAssetIds)}
                     <button class="asset-btn primary" type="button" data-canvas-asset-download-selected ${selectedCanvasAssetIds.size ? '' : 'disabled'}><i data-lucide="download"></i><span>下载所选</span></button>
                     <button class="asset-btn danger" type="button" data-result-delete-selected ${selectedCanvasAssetIds.size ? '' : 'disabled'}><i data-lucide="trash-2"></i><span>删除所选</span></button>
                 </div>
@@ -1521,7 +1037,7 @@ function renderCanvasAssetsManager(){
     `;
 }
 function renderCanvasAssetTreeBranch(cat){
-    const icons = {all:'layers-3', image:'image', video:'video', audio:'audio-lines', text:'file-text'};
+    const icons = {all:'layers-3', text:'file-text', image:'image', video:'video', audio:'audio-lines', music:'music-2'};
     return `<div class="tree-branch">
         <button class="tree-row tree-parent ${cat.id === activeCanvasAssetCategory ? 'active' : ''}" type="button" data-canvas-asset-cat="${escapeAttr(cat.id)}">
             <span class="tree-row-icon"><i data-lucide="${icons[cat.id] || 'file'}"></i></span>
@@ -1550,14 +1066,14 @@ function renderCanvasAssetCard(item){
         <input class="asset-card-check" type="checkbox" data-canvas-asset-check="${escapeAttr(item.id)}" ${selectedCanvasAssetIds.has(item.id) ? 'checked' : ''}>
         <div class="asset-thumb canvas-asset-thumb">${assetThumb(item)}${renderCanvasAssetKindBadge(item)}${assetPreviewCue(item)}</div>
         <div class="asset-card-body">
-            <div class="asset-card-name" data-result-rename="${escapeAttr(item.id)}" title="编辑名称">${escapeHtml(item.name || item.display_name || '生成结果')}</div>
+            <div class="asset-card-name" data-result-rename="${escapeAttr(item.id)}" title="编辑名称" data-i18n-title="asset.rename">${escapeHtml(item.name || item.display_name || '生成结果')}</div>
             <div class="asset-card-meta">${escapeHtml(canvasAssetKindLabel(item))} · ${escapeHtml(formatDate(item.created_at))}</div>
         </div>
     </article>`;
 }
 function renderCanvasAssetKindBadge(item){
     const kind = assetKind(item);
-    const icon = kind === 'video' ? 'play' : kind === 'audio' ? 'file-audio' : kind === 'text' ? 'file-text' : 'image';
+    const icon = StudioMedia.category(item)==='music' ? 'music-2' : kind === 'video' ? 'play' : kind === 'audio' ? 'audio-lines' : kind === 'text' ? 'file-text' : 'image';
     return `<span class="asset-kind-badge ${escapeAttr(kind)}" title="${escapeAttr(canvasAssetKindLabel(item))}"><i data-lucide="${icon}"></i></span>`;
 }
 function renderCanvasAssetDetail(item){
@@ -1572,13 +1088,11 @@ function renderCanvasAssetDetail(item){
             <div class="panel-title"><strong>生成结果详情</strong><span>${escapeHtml(canvasAssetKindLabel(item))}</span></div>
             <div class="panel-actions">
                 ${canPreview ? `<button class="asset-icon-btn" type="button" data-canvas-asset-preview="${escapeAttr(item.id)}" title="${previewTitle}"><i data-lucide="${previewIcon}"></i></button>` : ''}
-                ${canEditText ? `<button class="asset-icon-btn" type="button" data-text-edit="canvas-asset:${escapeAttr(item.id)}" title="编辑文本内容"><i data-lucide="pencil-line"></i></button>` : ''}
-                <button class="asset-icon-btn" type="button" data-result-promote="${escapeAttr(item.id)}" title="收藏到资产素材"><i data-lucide="bookmark-plus"></i></button>
-                <button class="asset-icon-btn" type="button" data-canvas-asset-open="${escapeAttr(item.id)}" title="打开链接"><i data-lucide="external-link"></i></button>
-                <button class="asset-icon-btn" type="button" data-canvas-asset-copy="${escapeAttr(item.id)}" title="复制链接"><i data-lucide="copy"></i></button>
-                <button class="asset-icon-btn" type="button" data-result-rename="${escapeAttr(item.id)}" title="编辑名称"><i data-lucide="pencil"></i></button>
-                <button class="asset-btn primary" type="button" data-canvas-asset-download="${escapeAttr(item.id)}"><i data-lucide="download"></i><span>下载</span></button>
-                <button class="asset-icon-btn danger" type="button" data-result-delete="${escapeAttr(item.id)}" title="删除结果"><i data-lucide="trash-2"></i></button>
+                ${canEditText ? `<button class="asset-icon-btn" type="button" data-text-edit="canvas-asset:${escapeAttr(item.id)}" title="编辑文本内容" data-i18n-title="asset.editText"><i data-lucide="pencil-line"></i></button>` : ''}
+                <button class="asset-icon-btn" type="button" data-canvas-asset-download="${escapeAttr(item.id)}" title="下载素材" data-i18n-title="asset.download"><i data-lucide="download"></i></button>
+                <button class="asset-icon-btn" type="button" data-result-rename="${escapeAttr(item.id)}" title="编辑名称" data-i18n-title="asset.rename"><i data-lucide="pencil"></i></button>
+                <button class="asset-icon-btn" type="button" data-result-promote="${escapeAttr(item.id)}" title="收藏到资产素材" data-i18n-title="asset.promote"><i data-lucide="bookmark-plus"></i></button>
+                <button class="asset-icon-btn danger" type="button" data-result-delete="${escapeAttr(item.id)}" title="删除结果" data-i18n-title="asset.deleteResult"><i data-lucide="trash-2"></i></button>
             </div>
         </div>
         <div class="detail-scroll">
@@ -1633,7 +1147,7 @@ function localUploadItems(){
     const q = String(localUploadQuery || '').trim().toLowerCase();
     let list = Array.isArray(localAssets) ? localAssets.slice() : [];
     if(q) list = list.filter(it => {
-        return [it.name, it.file, assetKindLabel(it), assetClassificationSearchText(it)].join(' ').toLowerCase().includes(q);
+        return [it.name, it.file, assetKindLabel(it)].join(' ').toLowerCase().includes(q);
     });
     return list;
 }
@@ -1663,34 +1177,16 @@ function localUploadFolderByPath(path=''){
     return match;
 }
 function localUploadFolderTitle(){
-    const entry = activeLocalUploadClassEntry();
-    if(entry) return entry.tag || '智能分类';
     if(!activeLocalUploadFolder) return '临时素材';
     return localUploadFolderByPath(activeLocalUploadFolder)?.name || activeLocalUploadFolder.split('/').pop() || '临时素材';
 }
 function localUploadViewSubtitle(items){
-    const entry = activeLocalUploadClassEntry();
-    if(entry) return `智能分类：${entry.label} / ${items.length} 个素材`;
     return `${items.length} / ${(localAssets || []).length} 个素材`;
-}
-function localUploadClassEntries(){
-    return assetClassificationEntriesForItems((localAssets || []).filter(item => assetKind(item) === 'image'));
-}
-function activeLocalUploadClassEntry(){
-    return localUploadClassEntries().find(entry => entry.key === activeLocalUploadClassFilter) || null;
-}
-function localUploadItemsForClassFilter(key=activeLocalUploadClassFilter){
-    const parsed = parseAssetClassFilterKey(key);
-    if(!parsed) return [];
-    return (localAssets || []).filter(item => {
-        const flat = Array.isArray(item?.classification?.flat) ? item.classification.flat : [];
-        return flat.some(entry => String(entry.dimension || '') === parsed.dimension && String(entry.tag || '') === parsed.tag);
-    });
 }
 function renderLocalUploadFolderBranch(folder, depth=0){
     if(!folder) return '';
     const path = folder.path || '';
-    const active = !activeLocalUploadClassFilter && path === activeLocalUploadFolder;
+    const active = path === activeLocalUploadFolder;
     const contains = !active && (folder.children || []).some(child => localUploadFolderContainsActive(child));
     return `<div class="tree-branch">
         <button class="tree-row ${depth ? 'tree-child' : 'tree-parent'} ${active ? 'active' : ''} ${contains ? 'contains-active' : ''}" type="button" data-localup-folder="${escapeAttr(path)}">
@@ -1704,32 +1200,8 @@ function renderLocalUploadFolderBranch(folder, depth=0){
 }
 function localUploadFolderContainsActive(folder){
     if(!folder) return false;
-    if(activeLocalUploadClassFilter) return false;
     if(String(folder.path || '') === activeLocalUploadFolder) return true;
     return (folder.children || []).some(child => localUploadFolderContainsActive(child));
-}
-function renderLocalUploadSmartClassTree(){
-    const entries = localUploadClassEntries();
-    const groups = groupedAssetClassificationEntries(entries);
-    const activeEntry = activeLocalUploadClassEntry();
-    const activeGroup = activeEntry ? assetClassificationEntryGroup(activeEntry)?.id : '';
-    return `<div class="tree-smart-class">
-        <button class="tree-row tree-parent ${activeLocalUploadClassFilter ? 'contains-active' : ''}" type="button" data-localup-class-root>
-            <span class="tree-row-icon"><i data-lucide="tags"></i></span>
-            <span class="tree-row-name">智能分类</span>
-            <span class="tree-row-count">${groups.length}</span>
-        </button>
-        ${groups.length ? groups.map(group => `<div class="smart-class-group">
-            <button class="smart-class-group-btn ${openLocalUploadClassGroup === group.id ? 'open' : ''} ${activeGroup === group.id ? 'active' : ''}" type="button" data-localup-class-group="${escapeAttr(group.id)}">
-                <span>${escapeHtml(group.name)}</span><small>${group.entries.length}</small><i data-lucide="${openLocalUploadClassGroup === group.id ? 'chevron-up' : 'chevron-down'}"></i>
-            </button>
-            ${openLocalUploadClassGroup === group.id ? `<div class="smart-class-pills">
-                ${group.entries.map(entry => `<button class="smart-class-pill ${activeLocalUploadClassFilter === entry.key ? 'active' : ''}" type="button" data-localup-class-filter="${escapeAttr(entry.key)}" title="${escapeAttr(entry.label)}">
-                    <span>${escapeHtml(entry.tag)}</span><small>${entry.count}</small>
-                </button>`).join('')}
-            </div>` : ''}
-        </div>`).join('') : '<div class="tree-empty">暂无分类，先选择图片点“智能分类”</div>'}
-    </div>`;
 }
 function selectedLocalUploadImageItems(){
     return [...selectedLocalUploadIds].map(id => findLocalUpload(id)).filter(item => item && assetKind(item) === 'image');
@@ -1774,17 +1246,12 @@ function renderLocalManager(){
                     <span class="manage-group-title">管理</span>
                     <span class="manage-summary">已选 ${selectedLocalUploadIds.size} 个，其中 ${imageCount} 张图片</span>
                     <div class="asset-tools local-manage-actions">
-                        <button class="asset-btn" type="button" data-localup-select-all ${items.length ? '' : 'disabled'}><i data-lucide="check-square"></i><span>全选</span></button>
-                        <button class="asset-btn" type="button" data-localup-clear ${selectedLocalUploadIds.size ? '' : 'disabled'}><i data-lucide="square"></i><span>清空</span></button>
-                        <button class="asset-btn" type="button" data-localup-download-selected ${selectedLocalUploadIds.size ? '' : 'disabled'}><i data-lucide="download"></i><span>下载</span></button>
-                        <button class="asset-btn" type="button" data-localup-canvas-selected ${selectedLocalUploadIds.size ? '' : 'disabled'}><i data-lucide="clipboard-paste"></i><span>复制到画布</span></button>
-                        <button class="asset-btn danger" type="button" data-localup-delete-selected ${selectedLocalUploadIds.size ? '' : 'disabled'}><i data-lucide="trash-2"></i><span>删除</span></button>
+                        ${renderSelectToggle("localup", items, selectedLocalUploadIds)}
+                        <button class="asset-btn" type="button" data-localup-download-selected ${selectedLocalUploadIds.size ? '' : 'disabled'}><i data-lucide="download"></i><span>下载所选</span></button>
+                        <button class="asset-btn danger" type="button" data-localup-delete-selected ${selectedLocalUploadIds.size ? '' : 'disabled'}><i data-lucide="trash-2"></i><span>删除所选</span></button>
                     </div>
                 </div>
-                <div class="manage-group manage-ai-group">
-                    <span class="manage-group-title">AI 处理</span>
-                    ${renderLocalCaptionTools(imageCount)}
-                </div>
+
             </div>
             <div class="content-scroll">
                 <div class="asset-grid">
@@ -1831,10 +1298,10 @@ function renderLocalUploadDetail(item){
             <div class="panel-title"><strong>素材预览</strong><span>${escapeHtml(assetKindLabel(item))}</span></div>
             <div class="panel-actions">
                 <button class="asset-icon-btn" type="button" data-localup-preview="${escapeAttr(item.id)}" title="${previewTitle}"><i data-lucide="${previewIcon}"></i></button>
-                ${canEditText ? `<button class="asset-icon-btn" type="button" data-text-edit="localup:${escapeAttr(item.id)}" title="编辑文本内容"><i data-lucide="pencil-line"></i></button>` : ''}
-                <button class="asset-icon-btn" type="button" data-localup-promote="${escapeAttr(item.id)}" title="收藏到资产素材"><i data-lucide="bookmark-plus"></i></button>
-                <button class="asset-icon-btn" type="button" data-localup-rename="${escapeAttr(item.id)}" title="重命名"><i data-lucide="pencil"></i></button>
-                <button class="asset-icon-btn" type="button" data-localup-download="${escapeAttr(item.id)}" title="下载"><i data-lucide="download"></i></button>
+                ${canEditText ? `<button class="asset-icon-btn" type="button" data-text-edit="localup:${escapeAttr(item.id)}" title="编辑文本内容" data-i18n-title="asset.editText"><i data-lucide="pencil-line"></i></button>` : ''}
+                <button class="asset-icon-btn" type="button" data-localup-download="${escapeAttr(item.id)}" title="下载素材" data-i18n-title="asset.download"><i data-lucide="download"></i></button>
+                <button class="asset-icon-btn" type="button" data-localup-rename="${escapeAttr(item.id)}" title="编辑名称" data-i18n-title="asset.rename"><i data-lucide="pencil"></i></button>
+                <button class="asset-icon-btn" type="button" data-localup-promote="${escapeAttr(item.id)}" title="收藏到资产素材" data-i18n-title="asset.promote"><i data-lucide="bookmark-plus"></i></button>
                 <button class="asset-icon-btn danger" type="button" data-localup-delete-one="${escapeAttr(item.id)}" title="删除"><i data-lucide="trash-2"></i></button>
             </div>
         </div>
@@ -1849,16 +1316,12 @@ function renderLocalUploadDetail(item){
                     <div class="detail-meta"><span>来源</span><strong>本地上传</strong></div>
                 </div>
                 <div class="detail-url">${escapeHtml(item.url || '')}</div>
-                ${isImage ? `<div class="detail-caption-card">
-                    <div class="detail-caption-head"><strong>智能分类</strong></div>
-                    <div class="detail-classification-body">${renderClassificationChips(item, 28, {kind:'localup'}) || '<span class="classification-empty">暂无智能分类，可以上传时自动生成或后续批量分类。</span>'}</div>
-                </div>` : ''}
                 ${isImage ? `
                     <div class="detail-caption-card">
                         <div class="detail-caption-head">
                             <strong>反推提示词</strong>
                             <div class="detail-caption-actions">
-                                <button class="asset-btn" type="button" data-localup-caption-one="${escapeAttr(item.id)}" ${localCaptionBusy || localClassifyBusy ? 'disabled' : ''}><i data-lucide="${localCaptionBusy ? 'loader-2' : 'wand-sparkles'}"></i><span>${localCaptionBusy ? '反推中' : '反推'}</span></button>
+                                <button class="asset-btn" type="button" data-localup-caption-one="${escapeAttr(item.id)}" ${localCaptionBusy ? 'disabled' : ''}><i data-lucide="${localCaptionBusy ? 'loader-2' : 'wand-sparkles'}"></i><span>${localCaptionBusy ? '反推中' : '反推'}</span></button>
                                 <button class="asset-btn" type="button" data-localup-caption-copy="${escapeAttr(item.id)}"><i data-lucide="copy"></i><span>复制</span></button>
                                 <button class="asset-btn primary" type="button" data-localup-caption-save="${escapeAttr(item.id)}"><i data-lucide="save"></i><span>保存</span></button>
                             </div>
@@ -1935,7 +1398,7 @@ function renderLocalDetail(item){
             <div class="panel-title"><strong>本地预览</strong><span>${escapeHtml(assetKindLabel(item))}</span></div>
             <div class="panel-actions">
                 <button class="asset-icon-btn" type="button" data-local-preview="${escapeAttr(item.id)}" title="${previewTitle}"><i data-lucide="${previewIcon}"></i></button>
-                ${canEditText ? `<button class="asset-icon-btn" type="button" data-text-edit="local:${escapeAttr(item.id)}" title="编辑文本内容"><i data-lucide="pencil-line"></i></button>` : ''}
+                ${canEditText ? `<button class="asset-icon-btn" type="button" data-text-edit="local:${escapeAttr(item.id)}" title="编辑文本内容" data-i18n-title="asset.editText"><i data-lucide="pencil-line"></i></button>` : ''}
                 <button class="asset-btn primary" type="button" data-local-import-one="${escapeAttr(item.id)}"><i data-lucide="download"></i><span>导入</span></button>
             </div>
         </div>
@@ -2009,23 +1472,16 @@ function renderAssetManager(){
                     <span class="manage-group-title">管理</span>
                     <span class="manage-summary">已选 ${selectedAssetIds.size} 个，其中 ${imageCount} 张图片</span>
                     <div class="asset-tools">
-                        <button class="asset-btn" type="button" data-asset-select-all ${items.length ? '' : 'disabled'}><i data-lucide="check-square"></i><span>全选</span></button>
-                        <button class="asset-btn" type="button" data-asset-clear-selection ${selectedAssetIds.size ? '' : 'disabled'}><i data-lucide="square"></i><span>清空</span></button>
-                        <button class="asset-btn" type="button" data-asset-cut-selected ${selectedAssetIds.size ? '' : 'disabled'}><i data-lucide="scissors"></i><span>剪切</span></button>
-                        <button class="asset-btn" type="button" data-asset-copy-selected ${selectedAssetIds.size ? '' : 'disabled'}><i data-lucide="copy"></i><span>复制</span></button>
+                        ${renderSelectToggle("asset", items, selectedAssetIds)}
                         <button class="asset-btn" type="button" data-asset-download-selected ${selectedAssetIds.size ? '' : 'disabled'}><i data-lucide="download"></i><span>下载所选</span></button>
-                        <button class="asset-btn" type="button" data-asset-copy-to-canvas ${selectedAssetIds.size ? '' : 'disabled'}><i data-lucide="clipboard-paste"></i><span>复制到画布</span></button>
                         <button class="asset-btn danger" type="button" data-asset-delete-selected ${selectedAssetIds.size ? '' : 'disabled'}><i data-lucide="trash-2"></i><span>删除所选</span></button>
                     </div>
                 </div>
-                <div class="manage-group manage-ai-group">
-                    <span class="manage-group-title">AI 处理</span>
-                    <button class="asset-btn" type="button" data-asset-classify-selected ${imageCount && !assetClassifyBusy ? '' : 'disabled'}><i data-lucide="${assetClassifyBusy ? 'loader-2' : 'tags'}"></i><span>${assetClassifyBusy ? '分类中' : '智能分类'}</span></button>
-                </div>
+
             </div>
             <div class="content-scroll">
                 <div class="asset-grid">
-                    ${activeAssetClassFilter ? '' : renderUploadCard(cat)}
+                    ${renderUploadCard(cat)}
                     ${items.map(item => renderAssetCard(item)).join('')}
                     ${items.length ? '' : '<div class="empty-state">当前分组还没有素材，可以上传，或从智能画布输出保存到素材库。</div>'}
                 </div>
@@ -2088,8 +1544,7 @@ function renderWorkflowManager(){
             <div class="manage-tools">
                 <span>已选择 ${selectedWorkflowIds.size} 个工作流。</span>
                 <div class="asset-tools">
-                    <button class="asset-btn" type="button" data-workflow-select-all ${items.length ? '' : 'disabled'}><i data-lucide="check-square"></i><span>全选</span></button>
-                    <button class="asset-btn" type="button" data-workflow-clear-selection ${selectedWorkflowIds.size ? '' : 'disabled'}><i data-lucide="square"></i><span>清空</span></button>
+                    ${renderSelectToggle("workflow", items, selectedWorkflowIds)}
                     <button class="asset-btn" type="button" data-workflow-export-selected ${selectedWorkflowIds.size ? '' : 'disabled'}><i data-lucide="download"></i><span>导出所选</span></button>
                     <button class="asset-btn danger" type="button" data-workflow-delete-selected ${selectedWorkflowIds.size ? '' : 'disabled'}><i data-lucide="trash-2"></i><span>删除所选</span></button>
                 </div>
@@ -2121,7 +1576,7 @@ function renderWorkflowTreeActionBar(){
     if(editHtml) return editHtml;
     const deleteKey = `workflow-cat:${activeWorkflowLibraryId}:${activeWorkflowCategoryId}`;
     return `<div class="tree-action-bar child-actions">
-        <button type="button" data-workflow-cat-rename><i data-lucide="pencil"></i><span>重命名</span></button>
+        <button type="button" data-workflow-cat-rename><i data-lucide="pencil"></i><span data-i18n="asset.rename">重命名</span></button>
         <button type="button" class="danger ${pendingTreeDelete === deleteKey ? 'detail-confirm' : ''}" data-workflow-cat-delete><i data-lucide="trash-2"></i><span>${pendingTreeDelete === deleteKey ? '确认删除' : '删除'}</span></button>
     </div>`;
 }
@@ -2152,7 +1607,7 @@ function renderWorkflowDetail(item){
             <div class="panel-title"><strong>工作流详情</strong><span>${escapeHtml(workflowKindLabel(item))}</span></div>
             <div class="panel-actions">
                 <button class="asset-icon-btn" type="button" data-workflow-download="${escapeAttr(item.id)}" title="导出工作流"><i data-lucide="download"></i></button>
-                <button class="asset-icon-btn" type="button" data-workflow-rename="${escapeAttr(item.id)}" title="重命名"><i data-lucide="pencil"></i></button>
+                <button class="asset-icon-btn" type="button" data-workflow-rename="${escapeAttr(item.id)}" title="编辑名称" data-i18n-title="asset.rename"><i data-lucide="pencil"></i></button>
                 <button class="asset-icon-btn danger ${pendingDeleteAssetId === item.id ? 'detail-confirm' : ''}" type="button" data-workflow-delete="${escapeAttr(item.id)}" title="${pendingDeleteAssetId === item.id ? '再次点击确认删除' : '删除'}"><i data-lucide="trash-2"></i></button>
             </div>
         </div>
@@ -2196,10 +1651,6 @@ function renderAssetClipboardBar(){
 function renderAssetTreeBranch(lib){
     const isActiveLib = lib.id === activeAssetLibraryId;
     const cats = (lib.categories || []).filter(cat => (cat.type || 'image') === 'image');
-    const smartClasses = isActiveLib ? assetClassificationEntriesForLibrary(lib) : [];
-    const smartGroups = groupedAssetClassificationEntries(smartClasses);
-    const activeClassEntry = isActiveLib ? activeAssetClassEntry() : null;
-    const activeClassGroup = activeClassEntry ? assetClassificationEntryGroup(activeClassEntry)?.id : '';
     const showLibActions = isActiveLib && assetTreeFocus === 'library';
     return `<div class="tree-branch ${isActiveLib ? 'expanded' : ''}">
         <button class="tree-row tree-parent ${isActiveLib ? 'contains-active' : ''} ${showLibActions ? 'active' : ''}" type="button" data-asset-lib="${escapeAttr(lib.id)}">
@@ -2215,23 +1666,7 @@ function renderAssetTreeBranch(lib){
                 <span class="tree-row-name">${escapeHtml(cat.name || '分组')}</span>
                 <span class="tree-row-count">${(cat.items || []).length}</span>
             </button>${isActiveLib && cat.id === activeAssetCategoryId && assetTreeFocus === 'category' ? renderAssetTreeActionBar('category') : ''}`).join('') : '<div class="tree-empty">暂无分组</div>'}
-            ${isActiveLib ? `<div class="tree-smart-class">
-                <button class="tree-row tree-parent ${activeAssetClassFilter ? 'contains-active' : ''}" type="button" data-asset-class-root="${escapeAttr(lib.id)}">
-                    <span class="tree-row-icon"><i data-lucide="tags"></i></span>
-                    <span class="tree-row-name">智能分类</span>
-                    <span class="tree-row-count">${smartGroups.length}</span>
-                </button>
-                ${smartGroups.length ? smartGroups.map(group => `<div class="smart-class-group">
-                    <button class="smart-class-group-btn ${openAssetClassGroup === group.id ? 'open' : ''} ${activeClassGroup === group.id ? 'active' : ''}" type="button" data-asset-class-group="${escapeAttr(group.id)}">
-                        <span>${escapeHtml(group.name)}</span><small>${group.entries.length}</small><i data-lucide="${openAssetClassGroup === group.id ? 'chevron-up' : 'chevron-down'}"></i>
-                    </button>
-                    ${openAssetClassGroup === group.id ? `<div class="smart-class-pills">
-                        ${group.entries.map(entry => `<button class="smart-class-pill ${activeAssetClassFilter === entry.key ? 'active' : ''}" type="button" data-asset-class-filter="${escapeAttr(entry.key)}" data-asset-class-lib="${escapeAttr(lib.id)}" title="${escapeAttr(entry.label)}">
-                            <span>${escapeHtml(entry.tag)}</span><small>${entry.count}</small>
-                        </button>`).join('')}
-                    </div>` : ''}
-                </div>`).join('') : '<div class="tree-empty">暂无分类，先选择图片点“智能分类”</div>'}
-            </div>` : ''}
+
         </div>
     </div>`;
 }
@@ -2242,14 +1677,13 @@ function renderAssetTreeActionBar(kind){
     if(kind === 'library'){
         const isDefaultLibrary = activeAssetLibraryId === 'default';
         return `<div class="tree-action-bar library-actions">
-            <button type="button" data-asset-cat-new><i data-lucide="folder-plus"></i><span>新分组</span></button>
-            <button type="button" data-asset-lib-rename><i data-lucide="pencil"></i><span>重命名</span></button>
+            <button type="button" data-asset-cat-new><i data-lucide="folder-plus"></i><span data-i18n="asset.newGroup">新分组</span></button>
+            <button type="button" data-asset-lib-rename><i data-lucide="pencil"></i><span data-i18n="asset.rename">重命名</span></button>
             ${isDefaultLibrary ? '' : `<button type="button" class="danger ${pendingTreeDelete === deleteKey ? 'detail-confirm' : ''}" data-asset-lib-delete><i data-lucide="trash-2"></i><span>${pendingTreeDelete === deleteKey ? '确认删除' : '删除库'}</span></button>`}
         </div>`;
     }
     return `<div class="tree-action-bar child-actions">
-        <button type="button" data-asset-cat-new><i data-lucide="folder-plus"></i><span>新分组</span></button>
-        <button type="button" data-asset-cat-rename><i data-lucide="pencil"></i><span>重命名</span></button>
+        <button type="button" data-asset-cat-rename><i data-lucide="pencil"></i><span data-i18n="asset.rename">重命名</span></button>
         <button type="button" class="danger ${pendingTreeDelete === deleteKey ? 'detail-confirm' : ''}" data-asset-cat-delete><i data-lucide="trash-2"></i><span>${pendingTreeDelete === deleteKey ? '确认删除' : '删除'}</span></button>
     </div>`;
 }
@@ -2258,7 +1692,7 @@ function renderAssetTreeInlineEdit(kind){
     if(assetTreeEdit.placement === 'head') return '';
     const expectedKinds = kind === 'library'
         ? ['library-new', 'library-rename', 'category-new']
-        : ['category-new', 'category-rename'];
+        : ['category-rename'];
     if(!expectedKinds.includes(assetTreeEdit.kind)) return '';
     const label = assetTreeEdit.label || '名称';
     return `<div class="tree-inline-edit ${kind === 'category' ? 'child-actions' : 'library-actions'}">
@@ -2277,76 +1711,6 @@ function renderAssetCard(item){
             <div class="asset-card-meta">${escapeHtml(assetKindLabel(item))} · ${escapeHtml(formatDate(item.created_at))}</div>
         </div>
     </article>`;
-}
-function renderAvatarRegistrationCard(item, platform, reg, busy){
-    const status = String(reg.status || '');
-    const tag = `<span class="avatar-platform-tag">${escapeHtml(avatarPlatformLabel(platform))}</span>`;
-    const providerId = avatarProviderIdForPlatform(platform, reg.provider_id || '');
-    const provAttr = `data-avatar-prov="${escapeAttr(providerId)}"`;
-    if(status === 'Active' && reg.asset_uri){
-        return `<div class="avatar-card registered">
-            <div class="avatar-head"><i data-lucide="badge-check"></i><span>已认证可用</span>${tag}</div>
-            <div class="avatar-uri" title="只能在 ${escapeAttr(avatarPlatformLabel(platform))} 平台的视频生成中通过 @ 调用">${escapeHtml(reg.asset_uri)}</div>
-            <div class="asset-tools">
-                <button class="asset-btn" type="button" data-avatar-copy="${escapeAttr(reg.asset_uri)}"><i data-lucide="copy"></i><span>复制 asset:// 地址</span></button>
-                <button class="asset-btn" type="button" data-avatar-register="${escapeAttr(item.id)}" ${provAttr} ${busy ? 'disabled' : ''}><i data-lucide="refresh-cw"></i><span>${busy ? '处理中…' : '重新注册'}</span></button>
-            </div>
-        </div>`;
-    }
-    if(status === 'Processing'){
-        return `<div class="avatar-card processing">
-            <div class="avatar-head"><i data-lucide="loader"></i><span>审核中</span>${tag}</div>
-            <div class="avatar-hint">已提交到 ${escapeHtml(avatarPlatformLabel(platform))} 审核（任务 ${escapeHtml(reg.task_id || '')}），通过后会自动生成 asset:// 地址。审核通常需要几十秒到几分钟。</div>
-            <div class="asset-tools">
-                <button class="asset-btn primary" type="button" data-avatar-check="${escapeAttr(item.id)}" ${provAttr} ${busy ? 'disabled' : ''}><i data-lucide="refresh-cw"></i><span>${busy ? '查询中…' : '刷新审核状态'}</span></button>
-            </div>
-        </div>`;
-    }
-    return `<div class="avatar-card failed">
-        <div class="avatar-head"><i data-lucide="x-circle"></i><span>审核未通过</span>${tag}</div>
-        <div class="avatar-hint warn">${escapeHtml(reg.detail || '审核未通过，请更换素材后重试。')}</div>
-        <div class="asset-tools">
-            <button class="asset-btn" type="button" data-avatar-register="${escapeAttr(item.id)}" ${provAttr} ${busy ? 'disabled' : ''}><i data-lucide="refresh-cw"></i><span>${busy ? '处理中…' : '重新提交'}</span></button>
-        </div>
-    </div>`;
-}
-function renderAvatarSection(item){
-    const busy = avatarBusyId === item.id;
-    const regs = (item.registrations && typeof item.registrations === 'object') ? item.registrations : {};
-    const cards = Object.keys(regs)
-        .filter(platform => regs[platform] && regs[platform].task_id)
-        .map(platform => renderAvatarRegistrationCard(item, platform, regs[platform], busy))
-        .join('');
-    const providers = avatarCandidateProviders();
-    if(!providers.length){
-        return `<div class="avatar-section">
-            ${cards}
-            <div class="avatar-head"><i data-lucide="user-round-cog"></i><span>注册为真人/数字人</span></div>
-            <div class="avatar-hint">未检测到可用平台。请先在「API 平台管理」中添加并启用 API 平台（如 APIMart）并填写 Key。</div>
-        </div>`;
-    }
-    const selected = activeAvatarProvider();
-    const selPlatform = providerAvatarPlatform(selected);
-    const supported = providerAvatarSupported(selected);
-    const noKey = selected && selected.has_key === false;
-    const alreadyRegistered = supported && regs[selPlatform] && regs[selPlatform].task_id;
-    const select = `<select class="avatar-provider-select" data-avatar-provider>${providers.map(p => `<option value="${escapeAttr(p.id)}" ${p.id === selected?.id ? 'selected' : ''}>${escapeHtml(avatarProviderOptionLabel(p))}</option>`).join('')}</select>`;
-    let registerUI;
-    if(!supported){
-        registerUI = `<div class="avatar-hint">认证是跨平台功能，但「${escapeHtml(selPlatform ? avatarPlatformLabel(selPlatform) : (selected?.name || selected?.id || '该平台'))}」的资产认证 API 尚未接入（待接入）。请选择已支持的平台，或继续使用官方控制台认证。</div>${select}`;
-    } else {
-        registerUI = `
-            <div class="avatar-hint">提交到 ${escapeHtml(avatarPlatformLabel(selPlatform))} 私域素材审核，通过后生成 asset:// 地址，可在该平台的视频生成中通过 @ 直接调用（一个素材可注册到多个平台，平台间互相隔离）。</div>
-            ${select}
-            ${noKey ? '<div class="avatar-hint warn">该平台尚未配置 API Key。</div>' : ''}
-            ${alreadyRegistered ? '<div class="avatar-hint">该平台已注册，再次提交会覆盖该平台的认证。</div>' : ''}
-            <button class="asset-btn primary" type="button" data-avatar-register="${escapeAttr(item.id)}" data-avatar-prov="${escapeAttr(selected?.id || '')}" ${busy || noKey ? 'disabled' : ''}><i data-lucide="user-round-plus"></i><span>${busy ? '注册中，请稍候…' : (alreadyRegistered ? '重新注册到该平台' : '注册并等待审核')}</span></button>`;
-    }
-    return `<div class="avatar-section">
-        ${cards}
-        <div class="avatar-head"><i data-lucide="user-round-cog"></i><span>注册到平台</span></div>
-        ${registerUI}
-    </div>`;
 }
 function renderAssetDetail(item){
     if(!item) return `<div class="panel-head"><div class="panel-title"><strong>素材预览</strong><span>选择一个素材查看详情</span></div></div><div class="detail-scroll"><div class="detail-empty"><i data-lucide="image"></i><span>暂无可预览素材</span></div></div>`;
@@ -2382,9 +1746,9 @@ function renderAssetDetail(item){
             <div class="panel-title"><strong>素材预览</strong><span>${escapeHtml(assetKindLabel(item))}</span></div>
             <div class="panel-actions">
                 <button class="asset-icon-btn" type="button" data-asset-preview="${escapeAttr(item.id)}" title="${previewTitle}"><i data-lucide="${previewIcon}"></i></button>
-                ${canEditText ? `<button class="asset-icon-btn" type="button" data-text-edit="asset:${escapeAttr(item.id)}" title="编辑文本内容"><i data-lucide="pencil-line"></i></button>` : ''}
-                <button class="asset-icon-btn" type="button" data-asset-download="${escapeAttr(item.id)}" title="下载素材"><i data-lucide="download"></i></button>
-                <button class="asset-icon-btn" type="button" data-asset-rename="${escapeAttr(item.id)}" title="编辑"><i data-lucide="pencil"></i></button>
+                ${canEditText ? `<button class="asset-icon-btn" type="button" data-text-edit="asset:${escapeAttr(item.id)}" title="编辑文本内容" data-i18n-title="asset.editText"><i data-lucide="pencil-line"></i></button>` : ''}
+                <button class="asset-icon-btn" type="button" data-asset-download="${escapeAttr(item.id)}" title="下载素材" data-i18n-title="asset.download"><i data-lucide="download"></i></button>
+                <button class="asset-icon-btn" type="button" data-asset-rename="${escapeAttr(item.id)}" title="编辑名称" data-i18n-title="asset.rename"><i data-lucide="pencil"></i></button>
                 <button class="asset-icon-btn danger ${pendingDeleteAssetId === item.id ? 'detail-confirm' : ''}" type="button" data-asset-delete="${escapeAttr(item.id)}" title="${pendingDeleteAssetId === item.id ? '再次点击确认删除' : '删除'}"><i data-lucide="trash-2"></i></button>
             </div>
         </div>
@@ -2399,11 +1763,6 @@ function renderAssetDetail(item){
                     <div class="detail-meta"><span>分组</span><strong>${escapeHtml(activeAssetCategory()?.name || '分组')}</strong></div>
                 </div>
                 <div class="detail-url">${escapeHtml(item.url || '')}</div>
-                ${isImage ? `<div class="detail-caption-card">
-                    <div class="detail-caption-head"><strong>智能分类</strong></div>
-                    <div class="detail-classification-body">${renderClassificationChips(item, 32, {kind:'asset', libraryId:activeAssetLibraryId}) || '<span class="classification-empty">暂无智能分类，可以选中图片后点击“智能分类”。</span>'}</div>
-                </div>` : ''}
-                ${renderAvatarSection(item)}
             </div>
         </div>
     `;
@@ -2426,13 +1785,12 @@ function renderPromptManager(){
     const libs = promptLibraries();
     const lib = activePromptLibrary();
     const readonly = Boolean(lib?.readonly);
-    const skillLibrary = isSkillPromptLibrary(lib);
     const cats = activePromptCategories();
     const items = currentPromptItems();
     const detail = promptCreateMode ? null : selectedPrompt();
     const promptEmptyText = (lib?.items || []).length
-        ? `当前条件下没有${skillLibrary ? ' Skill' : '提示词'}。可以切换分类或清空搜索条件。`
-        : `${lib?.name || '当前提示词库'} 暂无${skillLibrary ? ' Skill' : '提示词'}，${skillLibrary ? '导入 Markdown 或点击「新增」添加' : '点击「新增」添加'}。`;
+        ? `当前条件下没有提示词。可以切换分类或清空搜索条件。`
+        : `${lib?.name || '当前提示词库'} 暂无提示词，点击「新增」添加。`;
     root.innerHTML = `
         <aside class="asset-panel asset-nav">
             <div class="panel-head">
@@ -2452,11 +1810,10 @@ function renderPromptManager(){
             <div class="content-toolbar">
                 <div class="content-heading">
                     <strong>${escapeHtml(lib?.name || '提示词库')}</strong>
-                    <span>共 ${items.length} 条${skillLibrary ? ' Skill' : '提示词'}</span>
+                    <span>共 ${items.length} 条提示词</span>
                 </div>
                 <div class="asset-tools">
                     <label class="asset-search-wrap"><i data-lucide="search"></i><input id="promptSearch" class="asset-search" type="search" value="${escapeAttr(promptQuery)}" placeholder="搜索名称、说明或正文"></label>
-                    ${skillLibrary ? '<button class="asset-btn" type="button" data-prompt-skill-import><i data-lucide="file-up"></i><span>导入 Markdown</span></button><input data-prompt-skill-file type="file" accept=".md,text/markdown,text/plain" hidden>' : ''}
                     <button class="asset-btn primary" type="button" data-prompt-new ${readonly ? 'disabled' : ''}><i data-lucide="file-plus-2"></i><span>新增</span></button>
                     <button class="asset-btn ${promptManageMode ? 'primary' : ''}" type="button" data-prompt-manage><i data-lucide="list-checks"></i><span>${promptManageMode ? '完成管理' : '批量管理'}</span></button>
                 </div>
@@ -2464,8 +1821,7 @@ function renderPromptManager(){
             <div class="manage-tools">
                 <span>已选择 ${selectedPromptIds.size} 条提示词，支持拖拽框选或逐个勾选。</span>
                 <div class="asset-tools">
-                    <button class="asset-btn" type="button" data-prompt-select-all ${items.length && !readonly ? '' : 'disabled'}><i data-lucide="check-square"></i><span>全选</span></button>
-                    <button class="asset-btn" type="button" data-prompt-clear-selection ${selectedPromptIds.size ? '' : 'disabled'}><i data-lucide="square"></i><span>清空</span></button>
+                    ${renderSelectToggle("prompt", items, selectedPromptIds)}
                     <button class="asset-btn danger" type="button" data-prompt-delete-selected ${readonly || !selectedPromptIds.size ? 'disabled' : ''}><i data-lucide="trash-2"></i><span>删除所选</span></button>
                 </div>
             </div>
@@ -2487,7 +1843,7 @@ function renderPromptTreeBranch(lib){
     const showLibActions = isActiveLib && promptTreeFocus === 'library';
     return `<div class="tree-branch ${isActiveLib ? 'expanded' : ''}">
         <button class="tree-row tree-parent ${isActiveLib ? 'contains-active' : ''} ${showLibActions ? 'active' : ''}" type="button" data-prompt-lib="${libId}">
-            <span class="tree-row-icon"><i data-lucide="${isSkillPromptLibrary(lib) ? 'badge-check' : lib.id === 'system' ? 'sparkles' : 'book-open'}"></i></span>
+            <span class="tree-row-icon"><i data-lucide="${lib.id === 'system' ? 'sparkles' : 'book-open'}"></i></span>
             <span class="tree-row-name">${escapeHtml(lib.name || '提示词库')}</span>
             <span class="tree-row-count">${(lib.items || []).length}</span>
         </button>
@@ -2496,7 +1852,7 @@ function renderPromptTreeBranch(lib){
             <button class="tree-row tree-child ${isActiveLib && activePromptCategory === 'all' && promptTreeFocus === 'category' ? 'active' : ''}" type="button" data-prompt-cat="all" data-prompt-cat-lib="${libId}">
                 <span class="tree-elbow"></span>
                 <span class="tree-row-icon"><i data-lucide="layout-list"></i></span>
-                <span class="tree-row-name">${isSkillPromptLibrary(lib) ? '全部 Skill' : '全部提示词'}</span>
+                <span class="tree-row-name">全部提示词</span>
                 <span class="tree-row-count">${promptCountForCategory('all', lib)}</span>
             </button>
             ${cats.map(cat => {
@@ -2520,8 +1876,8 @@ function renderPromptTreeActionBar(kind){
         const isSystem = isSystemPromptLibrary(lib);
         const deleteKey = `prompt-lib:${lib?.id || ''}`;
         return `<div class="tree-action-bar library-actions">
-            <button type="button" data-prompt-cat-new><i data-lucide="folder-plus"></i><span>新分组</span></button>
-            <button type="button" data-prompt-lib-rename><i data-lucide="pencil"></i><span>重命名</span></button>
+            <button type="button" data-prompt-cat-new><i data-lucide="folder-plus"></i><span data-i18n="asset.newGroup">新分组</span></button>
+            <button type="button" data-prompt-lib-rename><i data-lucide="pencil"></i><span data-i18n="asset.rename">重命名</span></button>
             ${isSystem ? '' : `<button type="button" class="danger" data-prompt-lib-delete><i data-lucide="trash-2"></i><span>删除库</span></button>`}
         </div>`;
     }
@@ -2532,14 +1888,14 @@ function renderPromptTreeActionBar(kind){
         return `<div class="tree-action-bar child-actions muted-actions"><span><i data-lucide="lock"></i>未分类不可删除或重命名</span></div>`;
     }
     return `<div class="tree-action-bar child-actions">
-        <button type="button" data-prompt-cat-rename><i data-lucide="pencil"></i><span>重命名</span></button>
+        <button type="button" data-prompt-cat-rename><i data-lucide="pencil"></i><span data-i18n="asset.rename">重命名</span></button>
         <button type="button" class="danger" data-prompt-cat-delete><i data-lucide="trash-2"></i><span>删除</span></button>
     </div>`;
 }
 function renderPromptTreeInlineEdit(kind){
     if(!promptTreeEdit) return '';
     if(promptTreeEdit.placement === 'head') return '';
-    const expectedKinds = kind === 'library' ? ['library-new', 'library-rename', 'category-new'] : ['category-new', 'category-rename'];
+    const expectedKinds = kind === 'library' ? ['library-new', 'library-rename', 'category-new'] : ['category-rename'];
     if(!expectedKinds.includes(promptTreeEdit.kind)) return '';
     const label = promptTreeEdit.label || '名称';
     return `<div class="tree-inline-edit ${kind === 'category' ? 'child-actions' : 'library-actions'}">
@@ -2972,7 +2328,6 @@ async function uploadLocalAssets(files){
         const data = await apiJson('/api/local-assets/upload', {method:'POST', body:form});
         const uploaded = Array.isArray(data.files) ? data.files : [];
         await loadLocalAssets();
-        activeLocalUploadClassFilter = '';
         selectedLocalUploadId = uploaded[0]?.id || selectedLocalUploadId;
         render();
         setStatus(`已上传 ${uploaded.length} 个素材`);
@@ -2991,7 +2346,6 @@ async function deleteLocalAssets(ids){
             body:JSON.stringify({names})
         });
         await loadLocalAssets();
-        if(activeLocalUploadClassFilter && !activeLocalUploadClassEntry()) activeLocalUploadClassFilter = '';
         selectedLocalUploadIds.clear();
         if(selectedLocalUploadId && !findLocalUpload(selectedLocalUploadId)) selectedLocalUploadId = '';
         render();
@@ -3195,7 +2549,6 @@ async function createLocalUploadFolder(){
         localAssets = Array.isArray(data.items) ? data.items : localAssets;
         localUploadTree = data.tree || localUploadTree;
         activeLocalUploadFolder = data.folder?.path || activeLocalUploadFolder;
-        activeLocalUploadClassFilter = '';
         selectedLocalUploadId = '';
         selectedLocalUploadIds.clear();
         render();
@@ -3221,7 +2574,6 @@ async function renameLocalUploadFolder(){
         localAssets = Array.isArray(data.items) ? data.items : localAssets;
         localUploadTree = data.tree || localUploadTree;
         activeLocalUploadFolder = data.folder?.path || activeLocalUploadFolder;
-        activeLocalUploadClassFilter = '';
         selectedLocalUploadId = '';
         selectedLocalUploadIds.clear();
         render();
@@ -3267,7 +2619,7 @@ async function runLocalUploadCaptionSelected(){
 }
 async function runLocalUploadCaptionOne(id){
     const item = findLocalUpload(id);
-    if(!item || assetKind(item) !== 'image' || localCaptionBusy || localClassifyBusy) return;
+    if(!item || assetKind(item) !== 'image' || localCaptionBusy) return;
     normalizeLocalCaptionSettings();
     if(!localCaptionProvider || !localCaptionModel){
         setStatus('请先在 API 设置中配置可用的聊天/视觉模型');
@@ -3313,75 +2665,6 @@ async function copyLocalUploadCaption(id){
     const ok = await copyTextToClipboard(text);
     setStatus(ok ? '已复制提示词' : '复制失败，请手动复制');
 }
-async function runLocalUploadClassifySelected(){
-    const images = selectedLocalUploadImageItems();
-    if(!images.length || localClassifyBusy) return;
-    normalizeLocalCaptionSettings();
-    if(!localCaptionProvider || !localCaptionModel){
-        setStatus('请先在 API 设置中配置可用的聊天/视觉模型');
-        return;
-    }
-    localClassifyBusy = true;
-    render();
-    setStatus(`正在智能分类 ${images.length} 张本地图片...`);
-    try {
-        const data = await apiJson('/api/local-assets/classify', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({
-                names:images.map(item => item.file || item.id),
-                provider:localCaptionProvider,
-                model:localCaptionModel,
-                prompt:(localClassifyPrompt || '').trim()
-            })
-        });
-        await loadLocalAssets();
-        if(images[0]?.id) selectedLocalUploadId = images[0].id;
-        render();
-        const failed = (data.items || []).filter(item => !item.ok);
-        setStatus(failed.length ? `处理完成 ${data.count || 0} 张，${failed.length} 张失败：${failed[0].error || '分类失败'}` : `处理完成 ${data.count || images.length} 张图片`);
-    } catch(err) {
-        setStatus(err.message || '智能分类失败');
-    } finally {
-        localClassifyBusy = false;
-        render();
-    }
-}
-async function runAssetClassifySelected(){
-    const images = selectedAssetImageItems();
-    if(!images.length || assetClassifyBusy) return;
-    normalizeLocalCaptionSettings();
-    if(!localCaptionProvider || !localCaptionModel){
-        setStatus('请先在 API 设置中配置可用的聊天/视觉模型');
-        return;
-    }
-    assetClassifyBusy = true;
-    render();
-    setStatus(`正在智能分类 ${images.length} 张资产图片...`);
-    try {
-        const data = await apiJson('/api/asset-library/items/classify', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({
-                library_id:activeAssetLibraryId,
-                ids:images.map(item => item.id),
-                provider:localCaptionProvider,
-                model:localCaptionModel,
-                prompt:(localClassifyPrompt || '').trim()
-            })
-        });
-        assetLibrary = data.library || assetLibrary;
-        if(images[0]?.id) selectedAssetId = images[0].id;
-        render();
-        const failed = (data.items || []).filter(item => !item.ok);
-        setStatus(failed.length ? `处理完成 ${data.count || 0} 张，${failed.length} 张失败：${failed[0].error || '分类失败'}` : `处理完成 ${data.count || images.length} 张资产图片`);
-    } catch(err) {
-        setStatus(err.message || '智能分类失败');
-    } finally {
-        assetClassifyBusy = false;
-        render();
-    }
-}
 async function saveLocalUploadCaption(id){
     const item = findLocalUpload(id);
     if(!item || assetKind(item) !== 'image') return;
@@ -3403,68 +2686,6 @@ async function saveLocalUploadCaption(id){
 }
 async function handleClick(event){
     const target = event.target;
-    if(target.closest?.('[data-storage-close]')){ closeStorageSettings(); return; }
-    const prefTabBtn = target.closest?.('[data-pref-tab]');
-    if(prefTabBtn){
-        syncStorageSettingsInputsToState();
-        storageSettingsState.tab = prefTabBtn.dataset.prefTab || 'prefs';
-        storageSettingsState.editor = '';
-        renderStorageSettingsModal();
-        return;
-    }
-    const prefEditorSaveBtn = target.closest?.('[data-pref-editor-save]');
-    if(prefEditorSaveBtn){
-        try {
-            const editor = prefEditorSaveBtn.dataset.prefEditorSave || '';
-            await saveStorageSettings({saveDirs:false, saveClassification:editor === 'classify'});
-            storageSettingsState.editor = '';
-            renderStorageSettingsModal();
-        } catch(err){
-            setStatus(err.message || '保存偏好设置失败');
-        }
-        return;
-    }
-    const prefEditorBtn = target.closest?.('[data-pref-editor]');
-    if(prefEditorBtn){
-        syncStorageSettingsInputsToState();
-        const editor = prefEditorBtn.dataset.prefEditor || '';
-        storageSettingsState.editor = storageSettingsState.editor === editor ? '' : editor;
-        renderStorageSettingsModal();
-        return;
-    }
-    if(target.closest?.('[data-storage-save]')){
-        try { await saveStorageSettings({saveDirs:true, saveClassification:false}); }
-        catch(err){ setStatus(err.message || '保存存储设置失败'); }
-        return;
-    }
-    const storageKindBtn = target.closest?.('[data-storage-kind]');
-    if(storageKindBtn){
-        await loadStorageFiles(storageKindBtn.dataset.storageKind || 'generated');
-        return;
-    }
-    const storageFileInput = target.closest?.('[data-storage-file]');
-    if(storageFileInput){
-        const id = storageFileInput.dataset.storageFile || '';
-        if(storageFileInput.checked) storageSettingsState.selected.add(id);
-        else storageSettingsState.selected.delete(id);
-        renderStorageSettingsModal();
-        return;
-    }
-    if(target.closest?.('[data-storage-select-all]')){
-        storageSettingsState.items.forEach(item => storageSettingsState.selected.add(item.id));
-        renderStorageSettingsModal();
-        return;
-    }
-    if(target.closest?.('[data-storage-delete]')){
-        try { await deleteSelectedStorageFiles(); }
-        catch(err){ setStatus(err.message || '删除文件失败'); }
-        return;
-    }
-    if(target.closest?.('[data-class-rule-reset]')){
-        const ta = document.getElementById('prefClassificationRulePrompt');
-        if(ta) ta.value = storageSettingsState.defaultClassificationPrompt || '';
-        return;
-    }
     if(guardMatchesManagedSelection(target)){
         event.preventDefault();
         event.stopPropagation();
@@ -3588,30 +2809,7 @@ async function handleClick(event){
     const localUpFolder = target.closest?.('[data-localup-folder]');
     if(localUpFolder){
         activeLocalUploadFolder = localUpFolder.dataset.localupFolder || '';
-        activeLocalUploadClassFilter = '';
         selectedLocalUploadId = '';
-        selectedLocalUploadIds.clear();
-        pendingBatchDelete = '';
-        render();
-        return;
-    }
-    if(target.closest?.('[data-localup-class-root]')){
-        if(!localUploadClassEntries().length) setStatus('暂无智能分类，请先选择图片并点击“智能分类”');
-        return;
-    }
-    const localUpClassGroup = target.closest?.('[data-localup-class-group]');
-    if(localUpClassGroup){
-        const groupId = localUpClassGroup.dataset.localupClassGroup || '';
-        openLocalUploadClassGroup = openLocalUploadClassGroup === groupId ? '' : groupId;
-        render();
-        return;
-    }
-    const localUpClass = target.closest?.('[data-localup-class-filter]');
-    if(localUpClass){
-        const nextFilter = localUpClass.dataset.localupClassFilter || '';
-        activeLocalUploadClassFilter = activeLocalUploadClassFilter === nextFilter ? '' : nextFilter;
-        // 不再联动展开左侧「智能分类」分组；也不再清空预览选中——切换分类时保持当前预览的那张图，
-        // 方便频繁切分类找相似图片。
         selectedLocalUploadIds.clear();
         pendingBatchDelete = '';
         render();
@@ -3623,7 +2821,7 @@ async function handleClick(event){
         render();
         return;
     }
-    if(target.closest?.('[data-localup-select-all]')){ localUploadItems().forEach(item => selectedLocalUploadIds.add(item.id)); render(); return; }
+    if(target.closest?.('[data-localup-select-all]')){ toggleMaterialSelection(localUploadItems(), selectedLocalUploadIds); render(); return; }
     if(target.closest?.('[data-localup-clear]')){ selectedLocalUploadIds.clear(); render(); return; }
     if(target.closest?.('[data-localup-download-selected]')){ await downloadSelectedLocalUploads(); return; }
     if(target.closest?.('[data-localup-canvas-selected]')){ copySelectedLocalUploadsToCanvas(); return; }
@@ -3633,8 +2831,6 @@ async function handleClick(event){
     const localUpDownload = target.closest?.('[data-localup-download]');
     if(localUpDownload){ downloadLocalUpload(localUpDownload.dataset.localupDownload || ''); return; }
     if(target.closest?.('[data-localup-delete-selected]')){ await deleteLocalAssets([...selectedLocalUploadIds]); return; }
-    if(target.closest?.('[data-local-classify-toggle]')){ localClassifyPromptOpen = !localClassifyPromptOpen; render(); return; }
-    if(target.closest?.('[data-local-classify-run]')){ await runLocalUploadClassifySelected(); return; }
     if(target.closest?.('[data-local-caption-run]')){ await runLocalUploadCaptionSelected(); return; }
     const localUpCaptionOne = target.closest?.('[data-localup-caption-one]');
     if(localUpCaptionOne){ await runLocalUploadCaptionOne(localUpCaptionOne.dataset.localupCaptionOne || ''); return; }
@@ -3700,7 +2896,7 @@ async function handleClick(event){
         return;
     }
     if(target.closest?.('[data-canvas-asset-refresh]')){ await refreshCanvasAssets(); return; }
-    if(target.closest?.('[data-canvas-asset-select-all]')){ currentCanvasAssetItems().forEach(item => selectedCanvasAssetIds.add(item.id)); render(); return; }
+    if(target.closest?.('[data-canvas-asset-select-all]')){ toggleMaterialSelection(currentCanvasAssetItems(), selectedCanvasAssetIds); render(); return; }
     if(target.closest?.('[data-canvas-asset-clear-selection]')){ selectedCanvasAssetIds.clear(); render(); return; }
     if(target.closest?.('[data-canvas-asset-download-selected]')){ await downloadCanvasAssetItems([...selectedCanvasAssetIds]); return; }
     if(target.closest?.('[data-result-delete-selected]')){ await deleteGenerationResults([...selectedCanvasAssetIds]); return; }
@@ -3712,10 +2908,6 @@ async function handleClick(event){
     if(canvasAssetDownload){ await downloadCanvasAssetItems([canvasAssetDownload.dataset.canvasAssetDownload || '']); return; }
     const resultDelete = target.closest?.('[data-result-delete]');
     if(resultDelete){ await deleteGenerationResults([resultDelete.dataset.resultDelete || '']); return; }
-    const canvasAssetOpen = target.closest?.('[data-canvas-asset-open]');
-    if(canvasAssetOpen){ const it = findCanvasAssetItem(canvasAssetOpen.dataset.canvasAssetOpen || ''); if(it?.url) window.open(it.url, '_blank', 'noopener'); return; }
-    const canvasAssetCopy = target.closest?.('[data-canvas-asset-copy]');
-    if(canvasAssetCopy){ const it = findCanvasAssetItem(canvasAssetCopy.dataset.canvasAssetCopy || ''); const ok = await copyTextToClipboard(it?.url || ''); setStatus(ok ? '已复制生成结果链接' : '复制失败'); return; }
     const canvasAssetCheck = target.closest?.('[data-canvas-asset-check]');
     if(canvasAssetCheck){
         event.preventDefault();
@@ -3797,7 +2989,7 @@ async function handleClick(event){
         render();
         return;
     }
-    if(target.closest?.('[data-workflow-select-all]')){ currentWorkflowItems().forEach(item => selectedWorkflowIds.add(item.id)); render(); return; }
+    if(target.closest?.('[data-workflow-select-all]')){ toggleMaterialSelection(currentWorkflowItems(), selectedWorkflowIds); render(); return; }
     if(target.closest?.('[data-workflow-clear-selection]')){ selectedWorkflowIds.clear(); render(); return; }
     if(target.closest?.('[data-workflow-export-selected]')){ await exportWorkflowItems([...selectedWorkflowIds]); return; }
     if(target.closest?.('[data-workflow-delete-selected]')){ await deleteSelectedWorkflows(); return; }
@@ -3864,7 +3056,7 @@ async function handleClick(event){
         render();
         return;
     }
-    if(target.closest?.('[data-asset-select-all]')){ currentAssetItems().forEach(item => selectedAssetIds.add(item.id)); pendingBatchDelete = ''; render(); return; }
+    if(target.closest?.('[data-asset-select-all]')){ toggleMaterialSelection(currentAssetItems(), selectedAssetIds); pendingBatchDelete = ''; render(); return; }
     if(target.closest?.('[data-asset-clear-selection]')){ selectedAssetIds.clear(); pendingBatchDelete = ''; render(); return; }
     if(target.closest?.('[data-asset-cut-selected]')){ setAssetClipboard('cut'); return; }
     if(target.closest?.('[data-asset-copy-selected]')){ setAssetClipboard('copy'); return; }
@@ -3878,18 +3070,6 @@ async function handleClick(event){
     if(assetDownload){ downloadAssetItem(assetDownload.dataset.assetDownload || ''); return; }
     const assetOpen = target.closest?.('[data-asset-open]');
     if(assetOpen){ openAssetItem(assetOpen.dataset.assetOpen || ''); return; }
-    const avatarCopy = target.closest?.('[data-avatar-copy]');
-    if(avatarCopy){
-        const uri = avatarCopy.dataset.avatarCopy || '';
-        const ok = await copyTextToClipboard(uri);
-        setStatus(ok ? '已复制 asset:// 地址' : `复制失败，请手动复制：${uri}`);
-        return;
-    }
-    const avatarRegister = target.closest?.('[data-avatar-register]');
-    if(avatarRegister){ await registerAssetAvatar(avatarRegister.dataset.avatarRegister || '', avatarRegister.dataset.avatarProv || ''); return; }
-    const avatarCheck = target.closest?.('[data-avatar-check]');
-    if(avatarCheck){ await checkAssetAvatarStatus(avatarCheck.dataset.avatarCheck || '', false, avatarCheck.dataset.avatarProv || ''); return; }
-    if(target.closest?.('[data-asset-classify-selected]')){ await runAssetClassifySelected(); return; }
     if(target.closest?.('[data-asset-download-selected]')){ await downloadSelectedAssets(); return; }
     if(target.closest?.('[data-asset-copy-to-canvas]')){ copySelectedAssetsToCanvas(); return; }
     if(target.closest?.('[data-asset-delete-selected]')){ await deleteSelectedAssets(); return; }
@@ -3914,12 +3094,11 @@ async function handleClick(event){
     }
     if(target.closest?.('[data-asset-cat-new]')){
         const row = target.closest('[data-asset-lib]');
-        const catRow = target.closest('[data-asset-cat]');
         if(row) activeAssetLibraryId = row.dataset.assetLib || activeAssetLibraryId;
-        if(catRow) activeAssetLibraryId = catRow.dataset.assetCatLib || activeAssetLibraryId;
+        assetTreeFocus = 'library';
         assetTreeEdit = {kind:'category-new', value:'新分组', label:'分组名称'};
         pendingTreeDelete = '';
-        render(); return;
+        render(); focusTreeEditInput('assetTreeEditInput'); return;
     }
     if(target.closest?.('[data-asset-cat-rename]')){
         const row = target.closest('[data-asset-cat]');
@@ -3935,37 +3114,9 @@ async function handleClick(event){
         await deleteAssetCategory(); return;
     }
     const assetLib = target.closest?.('[data-asset-lib]');
-    if(assetLib){ activeAssetLibraryId = assetLib.dataset.assetLib || ''; assetTreeFocus = 'library'; activeAssetClassFilter = ''; activeAssetCategoryId = assetCategories()[0]?.id || ''; selectedAssetId = ''; selectedAssetIds.clear(); render(); return; }
-    const assetClassRoot = target.closest?.('[data-asset-class-root]');
-    if(assetClassRoot){
-        activeAssetLibraryId = assetClassRoot.dataset.assetClassRoot || activeAssetLibraryId;
-        assetTreeFocus = 'class';
-        if(!assetClassificationEntriesForLibrary(activeAssetLibrary()).length) setStatus('暂无智能分类，请先选择图片并点击“智能分类”');
-        return;
-    }
-    const assetClassGroup = target.closest?.('[data-asset-class-group]');
-    if(assetClassGroup){
-        openAssetClassGroup = openAssetClassGroup === (assetClassGroup.dataset.assetClassGroup || '') ? '' : (assetClassGroup.dataset.assetClassGroup || '');
-        render();
-        return;
-    }
-    const assetClass = target.closest?.('[data-asset-class-filter]');
-    if(assetClass){
-        activeAssetLibraryId = assetClass.dataset.assetClassLib || activeAssetLibraryId;
-        const nextFilter = assetClass.dataset.assetClassFilter || '';
-        activeAssetClassFilter = activeAssetClassFilter === nextFilter ? '' : nextFilter;
-        if(activeAssetClassFilter) {
-            openAssetClassGroup = assetClassificationGroupIdForFilter(activeAssetClassFilter, assetClassificationEntriesForLibrary(activeAssetLibrary())) || openAssetClassGroup;
-        }
-        assetTreeFocus = 'class';
-        selectedAssetId = '';
-        selectedAssetIds.clear();
-        pendingBatchDelete = '';
-        render();
-        return;
-    }
+    if(assetLib){ activeAssetLibraryId = assetLib.dataset.assetLib || ''; assetTreeFocus = 'library'; activeAssetCategoryId = assetCategories()[0]?.id || ''; selectedAssetId = ''; selectedAssetIds.clear(); render(); return; }
     const assetCat = target.closest?.('[data-asset-cat]');
-    if(assetCat){ activeAssetLibraryId = assetCat.dataset.assetCatLib || activeAssetLibraryId; activeAssetCategoryId = assetCat.dataset.assetCat || ''; activeAssetClassFilter = ''; assetTreeFocus = 'category'; selectedAssetId = ''; selectedAssetIds.clear(); render(); return; }
+    if(assetCat){ activeAssetLibraryId = assetCat.dataset.assetCatLib || activeAssetLibraryId; activeAssetCategoryId = assetCat.dataset.assetCat || ''; assetTreeFocus = 'category'; selectedAssetId = ''; selectedAssetIds.clear(); render(); return; }
     const assetCheck = target.closest?.('[data-asset-check]');
     if(assetCheck){
         event.preventDefault();
@@ -4012,17 +3163,13 @@ async function handleClick(event){
         render();
         return;
     }
-    if(target.closest?.('[data-prompt-select-all]')){ currentPromptItems().forEach(item => selectedPromptIds.add(item.id)); pendingBatchDelete = ''; render(); return; }
+    if(target.closest?.('[data-prompt-select-all]')){ toggleMaterialSelection(currentPromptItems(), selectedPromptIds); pendingBatchDelete = ''; render(); return; }
     if(target.closest?.('[data-prompt-clear-selection]')){ selectedPromptIds.clear(); pendingBatchDelete = ''; render(); return; }
     const promptEdit = target.closest?.('[data-prompt-edit]');
     if(promptEdit){ await editPromptItem(promptEdit.dataset.promptEdit || ''); return; }
     const promptDelete = target.closest?.('[data-prompt-delete]');
     if(promptDelete){ await deletePromptItem(promptDelete.dataset.promptDelete || ''); return; }
     if(target.closest?.('[data-prompt-delete-selected]')){ await deleteSelectedPrompts(); return; }
-    if(target.closest?.('[data-prompt-skill-import]')){
-        root.querySelector('[data-prompt-skill-file]')?.click();
-        return;
-    }
     const promptNewBtn = target.closest?.('[data-prompt-new]');
     if(promptNewBtn){
         const libId = promptNewBtn.dataset.libId || target.closest('[data-prompt-lib]')?.dataset.promptLib;
@@ -4113,12 +3260,13 @@ async function showDetailPreview(source, id){
     overlay.dataset.x = '0';
     overlay.dataset.y = '0';
     overlay.innerHTML = `
+        <div class="media-preview-exit-hints"><span>${i18nText("asset.previewEsc","ESC 退出预览")}</span><span>${i18nText("asset.previewBackdrop","点击黑色区域也可退出")}</span></div>
         <div class="asset-lightbox-inner" role="dialog" aria-modal="true" aria-label="${kind === 'video' ? '视频预览' : kind === 'audio' ? '音频播放' : kind === 'text' ? '文本预览' : '图片预览'}">
             ${kind === 'video'
                 ? `<video class="asset-lightbox-video" src="${escapeAttr(url)}" controls autoplay playsinline preload="metadata"></video>`
                 : kind === 'audio'
                     ? `<div class="asset-lightbox-audio">
-                        <div class="asset-audio-waveform" aria-hidden="true"><div class="asset-audio-bars"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><i data-lucide="audio-lines"></i></div>
+                        <div class="asset-audio-waveform" aria-hidden="true"><div class="asset-audio-bars"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><i data-lucide="${StudioMedia.category(item)==='music'?'music-2':'audio-lines'}"></i></div>
                         <strong>${escapeHtml(item.name || '音频素材')}</strong>
                         <audio src="${escapeAttr(url)}" controls autoplay preload="metadata"></audio>
                     </div>`
@@ -4406,7 +3554,7 @@ async function saveAssetTreeEdit(){
         data = await apiJson('/api/asset-library/libraries', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})});
         assetLibrary = data.library || assetLibrary;
         activeAssetLibraryId = data.asset_library?.id || activeAssetLibraryId;
-        activeAssetClassFilter = '';
+
         assetTreeFocus = 'library';
     } else if(assetTreeEdit.kind === 'library-rename'){
         const lib = activeAssetLibrary();
@@ -4418,7 +3566,7 @@ async function saveAssetTreeEdit(){
         data = await apiJson('/api/asset-library/categories', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:activeAssetLibraryId, name, type:'image'})});
         assetLibrary = data.library || assetLibrary;
         activeAssetCategoryId = data.category?.id || activeAssetCategoryId;
-        activeAssetClassFilter = '';
+
         assetTreeFocus = 'category';
     } else if(assetTreeEdit.kind === 'category-rename'){
         const cat = activeAssetCategory();
@@ -4515,7 +3663,7 @@ async function deleteAssetLibrary(){
     assetLibrary = data.library || assetLibrary;
     activeAssetLibraryId = assetLibrary.active_library_id || assetLibraries()[0]?.id || '';
     activeAssetCategoryId = '';
-    activeAssetClassFilter = '';
+
     selectedAssetId = '';
     selectedAssetIds.clear();
     pendingTreeDelete = '';
@@ -4548,7 +3696,7 @@ async function deleteAssetCategory(){
     const data = await apiJson(`/api/asset-library/categories/${encodeURIComponent(cat.id)}`, {method:'DELETE'});
     assetLibrary = data.library || assetLibrary;
     activeAssetCategoryId = '';
-    activeAssetClassFilter = '';
+
     selectedAssetId = '';
     selectedAssetIds.clear();
     pendingTreeDelete = '';
@@ -4585,76 +3733,6 @@ async function saveAssetInlineName(id, name){
     selectedAssetId = id;
     render();
     setStatus('素材名称已保存');
-}
-async function registerAssetAvatar(id, providerId=''){
-    const item = findAssetItem(id);
-    if(!item) return;
-    const provider = (providerId && (apiProviders || []).find(p => p.id === providerId)) || activeAvatarProvider();
-    if(!provider){ setStatus('请先在 API 平台管理中添加并启用 API 平台'); return; }
-    if(!providerAvatarSupported(provider)){ setStatus(`「${avatarPlatformLabel(providerAvatarPlatform(provider))}」的资产认证 API 尚未接入`); return; }
-    if(avatarBusyId) return;
-    avatarBusyId = id;
-    selectedAssetId = id;
-    render();
-    setStatus(`正在上传素材并提交 ${avatarPlatformLabel(providerAvatarPlatform(provider))} 审核…`);
-    try {
-        const data = await apiJson(`/api/asset-library/items/${encodeURIComponent(id)}/register-avatar`, {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({library_id:activeAssetLibraryId, provider_id:provider.id})
-        });
-        assetLibrary = data.library || assetLibrary;
-        setStatus(`已提交审核，正在等待 ${avatarPlatformLabel(providerAvatarPlatform(provider))} 通过…`);
-        scheduleAvatarPoll(id, provider.id);
-    } catch(err) {
-        setStatus(err.message || '数字人提交失败');
-    } finally {
-        avatarBusyId = '';
-        render();
-    }
-}
-function avatarRegistrationOf(item, platform){
-    const regs = (item && item.registrations && typeof item.registrations === 'object') ? item.registrations : {};
-    return regs[platform] || null;
-}
-async function checkAssetAvatarStatus(id, silent=false, providerId=''){
-    const item = findAssetItem(id);
-    if(!item) return;
-    const provider = (providerId && (apiProviders || []).find(p => p.id === providerId)) || activeAvatarProvider();
-    if(!provider) return;
-    const platform = providerAvatarPlatform(provider);
-    const reg = avatarRegistrationOf(item, platform);
-    if(!reg || !reg.task_id) return;
-    if(!silent){ avatarBusyId = id; render(); setStatus('正在查询审核状态…'); }
-    try {
-        const data = await apiJson(`/api/asset-library/items/${encodeURIComponent(id)}/avatar-status`, {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({library_id:activeAssetLibraryId, provider_id:provider.id})
-        });
-        assetLibrary = data.library || assetLibrary;
-        const newReg = (data.item?.registrations && data.item.registrations[platform]) || {};
-        const status = newReg.status || '';
-        if(status === 'Active') setStatus('审核通过，已生成 asset:// 地址，可在视频生成中通过 @ 调用');
-        else if(status === 'Failed') setStatus(newReg.detail || '审核未通过');
-        else { setStatus('仍在审核中，稍后会自动刷新…'); scheduleAvatarPoll(id, provider.id); }
-    } catch(err) {
-        if(!silent) setStatus(err.message || '查询审核状态失败');
-    } finally {
-        avatarBusyId = '';
-        render();
-    }
-}
-function scheduleAvatarPoll(id, providerId){
-    setTimeout(() => {
-        const item = findAssetItem(id);
-        const provider = (apiProviders || []).find(p => p.id === providerId);
-        if(!item || !provider) return;
-        const reg = avatarRegistrationOf(item, providerAvatarPlatform(provider));
-        if(reg && reg.task_id && reg.status === 'Processing'){
-            checkAssetAvatarStatus(id, true, providerId);
-        }
-    }, 6000);
 }
 async function deleteAssetItem(id){
     const item = findAssetItem(id);
@@ -4801,19 +3879,6 @@ async function createPromptLibrary(){
     pendingTreeDelete = '';
     render();
     focusTreeEditInput('promptTreeEditInput');
-}
-async function importPromptSkillFile(file){
-    if(!file) return;
-    const form = new FormData();
-    form.append('file', file);
-    setStatus('正在导入 Skill...');
-    const data = await apiJson('/api/prompt-libraries/skills/import', {method:'POST', body:form});
-    promptLibrary = data.library || promptLibrary;
-    activePromptLibraryId = 'skills';
-    activePromptCategory = 'all';
-    selectedPromptId = data.item?.id || '';
-    render();
-    setStatus('Skill 已导入');
 }
 async function savePromptTreeEdit(){
     if(!promptTreeEdit) return;
@@ -5009,10 +4074,6 @@ root.addEventListener('click', event => {
     handleClick(event).catch(err => setStatus(err.message || '操作失败'));
 });
 document.addEventListener('click', event => {
-    if(event.target.closest?.('#storageSettingsOverlay')){
-        handleClick(event).catch(err => setStatus(err.message || '操作失败'));
-        return;
-    }
     if(event.target.closest?.('.asset-lightbox') && !event.target.closest?.('.asset-lightbox-image,.asset-lightbox-video,.asset-lightbox-audio,.asset-lightbox-text')) closeDetailPreview();
 });
 document.addEventListener('keydown', event => {
@@ -5072,19 +4133,8 @@ root.addEventListener('input', event => {
         localCaptionPrompt = event.target.value || '';
         writeLocalCaptionSettings();
     }
-    if(event.target?.id === 'localClassifyPrompt'){
-        localClassifyPrompt = event.target.value || '';
-        writeLocalCaptionSettings();
-    }
 });
 root.addEventListener('change', event => {
-    const skillFile = event.target.closest?.('[data-prompt-skill-file]');
-    if(skillFile){
-        const file = skillFile.files?.[0];
-        if(file) importPromptSkillFile(file).catch(err => setStatus(err.message || 'Skill 导入失败'));
-        skillFile.value = '';
-        return;
-    }
     const inlineLocalUploadName = event.target.closest?.('[data-localup-inline-name]');
     if(inlineLocalUploadName){
         saveLocalUploadInlineName(inlineLocalUploadName.dataset.localupInlineName || '', inlineLocalUploadName.value || '').catch(err => setStatus(err.message || '保存失败'));
@@ -5135,23 +4185,6 @@ root.addEventListener('change', event => {
         writeLocalCaptionSettings();
         render();
     }
-    const avatarProvider = event.target.closest?.('[data-avatar-provider]');
-    if(avatarProvider){
-        avatarRegisterProvider = avatarProvider.value || '';
-        render();
-    }
-});
-document.addEventListener('change', event => {
-    if(!event.target?.closest?.('#storageSettingsOverlay')) return;
-    if(event.target?.id === 'prefCaptionProvider'){
-        localCaptionProvider = event.target.value || '';
-        localCaptionModel = '';
-        normalizeLocalCaptionSettings();
-        renderStorageSettingsModal();
-    }
-    if(event.target?.id === 'prefCaptionModel'){
-        localCaptionModel = event.target.value || '';
-    }
 });
 root.addEventListener('dragover', event => {
     const drop = event.target.closest?.('#assetDrop, #localUploadDrop, #workflowDrop');
@@ -5193,8 +4226,38 @@ document.querySelectorAll('[data-tab]').forEach(btn => {
     });
 });
 refreshBtn?.addEventListener('click', () => loadAll().catch(err => setStatus(err.message || '加载失败')));
-storageSettingsBtn?.addEventListener('click', () => openStorageSettings().catch(err => setStatus(err.message || '打开偏好设置失败')));
 window.addEventListener('message', event => {
     if(event.data?.type === 'studio-theme') window.StudioTheme?.apply?.(event.data.theme);
 });
 document.addEventListener('DOMContentLoaded', () => loadAll().catch(err => setStatus(err.message || '加载失败')));
+
+function renderSelectToggle(prefix, items, selected){
+    const all = items.length > 0 && items.every(item=>selected.has(item.id));
+    return `<button class="asset-btn" type="button" data-${prefix}-select-all role="checkbox" aria-checked="${all?'true':selected.size?'mixed':'false'}" ${items.length?'':'disabled'}><i data-lucide="${all?'check-square':selected.size?'minus-square':'square'}"></i><span>${all?i18nText('asset.clear','清空'):i18nText('asset.selectAll','全选')}</span></button>`;
+}
+function toggleMaterialSelection(items, selected){
+    if(items.length && items.every(item=>selected.has(item.id))) selected.clear();
+    else items.forEach(item=>selected.add(item.id));
+}
+async function copyLibraryMaterials(){
+    let items=[], selected=new Set(), focused='';
+    if(activeTab==='results'){ items=currentCanvasAssetItems();selected=selectedCanvasAssetIds;focused=selectedCanvasAssetId; }
+    else if(activeTab==='assets' && activeInputScope==='temporary'){ items=localUploadItems();selected=selectedLocalUploadIds;focused=selectedLocalUploadId; }
+    else if(activeTab==='assets'){ items=currentAssetItems();selected=selectedAssetIds;focused=selectedAssetId; }
+    else if(activeTab==='workflows'){ items=currentWorkflowItems();selected=selectedWorkflowIds;focused=selectedWorkflowId; }
+    else if(activeTab==='prompts'){ items=currentPromptItems().map(item=>({...item,kind:'text',text:[item.positive,item.negative].filter(Boolean).join('\n\n')}));selected=selectedPromptIds;focused=selectedPromptId; }
+    const chosen=items.filter(item=>selected.size?selected.has(item.id):item.id===focused);
+    if(!chosen.length) return;
+    try { await StudioMedia.copy(chosen);setStatus(i18nText('asset.copiedMaterials','素材已复制，可粘贴到其他应用')); }
+    catch(error){setStatus(error.message);}
+}
+document.addEventListener('keydown',event=>{
+    if((event.metaKey||event.ctrlKey)&&!event.shiftKey&&event.key.toLowerCase()==='c'&&!event.target.closest('textarea,[contenteditable="true"],input:not([type=checkbox]):not([type=radio]):not([type=button])')){
+        event.preventDefault();copyLibraryMaterials();
+    }
+});
+// 浏览器菜单“复制”和系统原生复制命令也使用同一素材出口。
+document.addEventListener('copy',event=>{
+    if(event.target.closest?.('textarea,[contenteditable="true"],input:not([type=checkbox]):not([type=radio]):not([type=button])') || window.getSelection()?.toString()) return;
+    event.preventDefault();copyLibraryMaterials();
+});

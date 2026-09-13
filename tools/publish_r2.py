@@ -12,6 +12,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from static.release_update import allowed_file, validate_package
+from tools.check_regression import module_boundary_errors
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +35,9 @@ def build(root, output):
     for required in ("main.py", "model_capabilities.py", "project_storage.py", "VERSION", "requirements.txt"):
         if required not in files:
             raise ValueError(f"发布缺少 {required}")
+    errors = module_boundary_errors(root, packaged_files=set(files))
+    if errors:
+        raise ValueError('\n'.join(errors))
     output.mkdir(parents=True, exist_ok=True)
     package = output / "update.zip"
     records = []

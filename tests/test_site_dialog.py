@@ -11,13 +11,6 @@ class SiteDialogTests(unittest.TestCase):
         "static/js/api-settings.js",
         "static/js/comfyui-settings.js",
         "static/index.html",
-        "static/angle.html",
-        "static/enhance.html",
-        "static/klein.html",
-        "static/online.html",
-        "static/zimage.html",
-        "static/gpt-chat.html",
-        "static/js/history-bulk-manager.js",
         "static/js/asset-manager.js",
     )
 
@@ -54,22 +47,17 @@ class SiteDialogTests(unittest.TestCase):
         self.assertIn("type:'danger'", api)
         self.assertIn("type:'danger'", comfy)
 
-    def test_home_and_legacy_generators_use_async_dialogs(self):
+    def test_home_uses_async_dialogs(self):
         home = (ROOT / "static/index.html").read_text(encoding="utf-8")
-        angle = (ROOT / "static/angle.html").read_text(encoding="utf-8")
 
         self.assertIn("await StudioDialog.prompt(promptMsg", home)
         self.assertIn("await StudioDialog.confirm", home)
-        self.assertIn("await StudioDialog.confirm", angle)
 
-    def test_chat_history_and_assets_use_shared_dialogs(self):
-        chat = (ROOT / "static/gpt-chat.html").read_text(encoding="utf-8")
-        history = (ROOT / "static/js/history-bulk-manager.js").read_text(encoding="utf-8")
+    def test_retired_asset_preferences_no_longer_require_a_dialog(self):
         assets = (ROOT / "static/js/asset-manager.js").read_text(encoding="utf-8")
 
-        self.assertIn("await StudioDialog.confirm", chat)
-        self.assertIn("await StudioDialog.confirm", history)
-        self.assertIn("await StudioDialog.confirm", assets)
+        self.assertNotIn("storageSettingsModal", assets)
+        self.assertIn("pendingDeleteAssetId !== id", assets)
 
 
 if __name__ == "__main__":

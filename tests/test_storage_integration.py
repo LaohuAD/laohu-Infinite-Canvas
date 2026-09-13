@@ -78,7 +78,6 @@ class StorageIntegrationTests(unittest.IsolatedAsyncioTestCase):
             patch.object(main, "OUTPUT_OUTPUT_DIR", str(self.storage.results_dir)),
             patch.object(main, "RESULTS_DIR", str(self.storage.results_dir)),
             patch.object(main, "ASSET_LIBRARY_PATH", str(self.asset_library_path)),
-            patch.object(main, "classify_asset_image_best_effort", new=AsyncMock(return_value=None)),
         ]
         for active_patch in self.patches:
             active_patch.start()
@@ -87,6 +86,26 @@ class StorageIntegrationTests(unittest.IsolatedAsyncioTestCase):
         for active_patch in reversed(self.patches):
             active_patch.stop()
         self.temp.cleanup()
+
+    async def test_creation_recipe_round_trip_reuses_file_and_keeps_distinct_origins(self):
+        source = self.root / 'fixture.png'
+        source.write_bytes(b'creation-fixture')
+        result = self.storage.store_result_file(source, '林澈_妆造_正常.png', move=True)
+        def node(node_id, creation_id, prompt):
+            return {'id': node_id, 'type': 'smart-image-generator', 'title': '林澈_妆造_正常',
+                    'creationId': creation_id, 'creationOwnerNodeId': node_id,
+                    'runSettings': {'model': 'fixture', 'apiKey': 'must-not-leak'},
+                    'promptDraftText': prompt,
+                    'resultVersions': [{'id': creation_id + '_v1', 'images': [{'resultId': result['id'], 'url': result['url']}]}]}
+        original = {'id': 'canvas-fixture', 'kind': 'smart', 'nodes': [node('a', 'shared', '正常妆造')]}
+        main.sync_canvas_result_origins(original)
+        main.sync_canvas_result_origins(original)
+        main.sync_canvas_result_origins({'id': 'canvas-fixture', 'kind': 'smart', 'nodes': [node('b', 'branch', '受伤妆造')]})
+        recipes = (await main.result_creation_recipe(result['id']))['recipes']
+        self.assertEqual({record['creationId'] for record in recipes}, {'shared', 'branch'})
+        self.assertNotIn('must-not-leak', json.dumps(recipes))
+        self.assertEqual(len(self.storage.list_results()), 1)
+        self.assertEqual(self.storage.get_result(result['id'])['path'], result['path'])
 
     async def test_canvas_upload_reuses_same_material_and_returns_stable_id(self):
         first = UploadFile(filename="封面.png", file=io.BytesIO(b"same-content"))
@@ -241,7 +260,7 @@ class StorageIntegrationTests(unittest.IsolatedAsyncioTestCase):
             canvas_id="canvas-media-tools",
             canvas_title="媒体工具",
         )
-        with patch.object(main.shutil, "which", side_effect=lambda name: f"/usr/bin/{name}"), patch.object(main.subprocess, "run", side_effect=fake_run):
+        with patch.object(main, "resolve_media_tool", side_effect=lambda name: f"/usr/bin/{name}"), patch.object(main.subprocess, "run", side_effect=fake_run):
             result = await main.transform_canvas_media(payload)
 
         stored = self.storage.get_result(result["id"])
@@ -274,7 +293,7 @@ class StorageIntegrationTests(unittest.IsolatedAsyncioTestCase):
             canvas_id="canvas-media-tools",
             canvas_title="媒体工具",
         )
-        with patch.object(main.shutil, "which", side_effect=lambda name: f"/usr/bin/{name}"), patch.object(main.subprocess, "run", side_effect=fake_run):
+        with patch.object(main, "resolve_media_tool", side_effect=lambda name: f"/usr/bin/{name}"), patch.object(main.subprocess, "run", side_effect=fake_run):
             result = await main.transform_canvas_media(payload)
 
         stored = self.storage.get_result(result["id"])
@@ -283,6 +302,27 @@ class StorageIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored["derivation"]["operation"], "extract_audio")
         self.assertEqual(stored["derivation"]["source_result_id"], source["id"])
         self.assertEqual(stored["derivation"]["duration"], 4.75)
+
+    async def test_upload_and_agent_grouping_never_call_a_model_and_keep_stable_url(self):
+        with patch.object(main.httpx, "AsyncClient", side_effect=AssertionError("上传和分组不能调用模型")):
+            uploaded = await main.upload_local_assets([
+                UploadFile(filename="分类测试.png", file=io.BytesIO(b"group-test-image"))
+            ], folder="")
+            material = uploaded["files"][0]
+            added = await main.add_asset_library_item(main.AssetLibraryAddRequest(
+                library_id="default", category_id="characters", url=material["url"], name="分类测试.png"
+            ))
+            category = await main.create_asset_library_category(main.AssetLibraryCategoryRequest(
+                library_id="default", name="Agent 分组", type="image"
+            ))
+            moved = await main.batch_move_asset_library_items(main.AssetLibraryBatchMoveRequest(
+                ids=[added["item"]["id"]], library_id="default", target_library_id="default",
+                target_category_id=category["category"]["id"]
+            ))
+        self.assertEqual(moved["moved"], 1)
+        destination = main.find_asset_category_in_library(main.load_asset_library(), category["category"]["id"], "default")
+        self.assertEqual(destination["items"][0]["url"], material["url"])
+        self.assertEqual(len(self.storage.list_materials()), 1)
 
     async def test_asset_category_is_logical_and_does_not_recreate_legacy_directory(self):
         legacy_library = self.root / "assets" / "library"
@@ -498,7 +538,7 @@ class StorageIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])
 
     async def test_canvas_media_capabilities_report_ffmpeg_and_ffprobe(self):
-        with patch.object(main.shutil, "which", side_effect=lambda name: f"/usr/bin/{name}"):
+        with patch.object(main, "resolve_media_tool", side_effect=lambda name: f"/usr/bin/{name}"):
             response = await main.canvas_media_capabilities()
 
         self.assertTrue(response["media_transform"])
@@ -506,7 +546,7 @@ class StorageIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(response["capabilities"]["ffprobe"]["available"])
         self.assertEqual(response["message"], "媒体处理环境可用")
 
-        with patch.object(main.shutil, "which", return_value=None):
+        with patch.object(main, "resolve_media_tool", return_value=None):
             response = await main.canvas_media_capabilities()
 
         self.assertFalse(response["media_transform"])

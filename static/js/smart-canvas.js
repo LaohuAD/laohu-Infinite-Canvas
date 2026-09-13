@@ -1,3 +1,9 @@
+const canvasTitleEditor=CanvasNodeView.createTitleEditor({
+    getNode:id=>nodes.find(n=>n.id===id),text:(zh,en)=>capabilityUiText(zh,en),render:()=>render(),
+    commit:(node,name)=>{pushUndo();node.title=name;node.creationRevision=Number(node.creationRevision||0)+1;scheduleSave();}
+});
+let canvasProductionView = null;
+const canvasModelClient = CanvasModelClient.create({request:(...args)=>fetch(...args),errorMessage:response=>smartResponseErrorMessage(response, tr('smart.errRunFailed'))});
 const params = new URLSearchParams(location.search);
 const canvasId = params.get('id') || '';
 const sourceProjectId = params.get('project') || '';
@@ -153,8 +159,6 @@ let mentionSource = 'input';
 let mentionAssetCategoryId = '';
 let assetLibraryUpdatedAt = 0;
 let assetLibraryRefreshTimer = null;
-let activeAssetSmartClassId = '';
-const ASSET_SMART_CATEGORY_PREFIX = '__smart_class__::';
 const PROMPT_PRESETS_KEY = 'smart_canvas_prompt_presets_v1';
 const PROMPT_TEMPLATE_GROUPS_KEY = 'smart_canvas_prompt_template_groups_v1';
 const PROMPT_TEMPLATE_OVERRIDES_KEY = 'smart_canvas_prompt_template_overrides_v1';
@@ -709,7 +713,7 @@ function isSmartPreviewImage(img){
 function bindSmartPreviewImageFallbacks(root=document){
     root.querySelectorAll?.('img[data-preview-src][data-original-src]:not([data-preview-fallback-bound])').forEach(img => {
         img.dataset.previewFallbackBound = '1';
-        img.addEventListener('error', () => {
+        const fallback = () => {
             const original = img.dataset.originalSrc || '';
             const preview = img.dataset.previewSrc || '';
             const highResTarget = img.dataset.selectedHighResTarget || '';
@@ -719,13 +723,15 @@ function bindSmartPreviewImageFallbacks(root=document){
                 return;
             }
             if(img.dataset.previewKind === 'video'){
-                const tpl = document.createElement('template');
-                tpl.innerHTML = smartVideoFallbackHtml(original, img.dataset.videoFallbackAttrs || '');
-                img.replaceWith(tpl.content.firstElementChild);
+                if(img.dataset.videoFallback) return;
+                img.dataset.videoFallback='1';
+                StudioMedia.firstFrame(displayMediaUrl({url:original})).then(src=>{if(img.isConnected)img.src=src;}).catch(()=>{img.alt=capabilityUiText('视频封面不可用，双击播放','Preview unavailable. Double-click to play');});
                 return;
             }
             if(original && img.getAttribute('src') !== original) img.src = original;
-        });
+        };
+        img.addEventListener('error', fallback);
+        if(img.complete && !img.naturalWidth) fallback();
     });
 }
 const SMART_SELECTED_HIGH_RES_DELAY = 320;
@@ -995,12 +1001,13 @@ function selectedSmartWorkflowPayload(){
         canvas_type:'smart',
         exported_at:Date.now(),
         nodes:selectedNodes,
-        connections:selectedConnections
+        connections:selectedConnections,
+        settings:ids.length ? {} : {agentDefaults:canvasDefaultSmartSettings.agentDefaults || {}}
     };
 }
 function normalizeImportedSmartWorkflow(data){
     if(Array.isArray(data)) return {nodes:data, connections:[]};
-    if(Array.isArray(data?.nodes)) return {nodes:data.nodes, connections:Array.isArray(data.connections) ? data.connections : []};
+    if(Array.isArray(data?.nodes)) return {nodes:data.nodes, connections:Array.isArray(data.connections) ? data.connections : [],settings:data.settings || data.workflow?.settings || {}};
     if(Array.isArray(data?.workflow?.nodes)) return {nodes:data.workflow.nodes, connections:Array.isArray(data.workflow.connections) ? data.workflow.connections : []};
     return {nodes:[], connections:[]};
 }
@@ -1059,7 +1066,7 @@ async function exportSelectedSmartWorkflow(includeResources=false){
         if(smartWorkflowExportMeta){
             smartWorkflowExportMeta.classList.remove('busy');
             smartWorkflowExportMeta.classList.add('success');
-            smartWorkflowExportMeta.textContent = `已导出 ${payload.nodes.length} 个节点，包含可找到的本地资源`;
+            smartWorkflowExportMeta.textContent = `已导出 ${payload.nodes.length} 个节点和完整本地资源`;
         }
         toast('已导出包含资源的智能画布工作流包');
         setTimeout(() => {
@@ -1069,6 +1076,15 @@ async function exportSelectedSmartWorkflow(includeResources=false){
         smartWorkflowExportMeta?.classList.remove('busy', 'success');
         toast(err.message || '导出工作流失败');
     }
+}
+function remapImportedWorkflowNodeRefs(value, idMap){
+    if(typeof value === 'string'){
+        if(idMap.has(value)) return idMap.get(value);
+        return value.replace(/(data-(?:source-)?node-id=["'])([^"']+)(["'])/g, (match,prefix,id,suffix)=>prefix+(idMap.get(id)||id)+suffix);
+    }
+    if(Array.isArray(value)) return value.map(item=>remapImportedWorkflowNodeRefs(item,idMap));
+    if(value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,remapImportedWorkflowNodeRefs(item,idMap)]));
+    return value;
 }
 function insertSmartWorkflowIntoCanvas(imported){
     const srcNodes = (imported.nodes || []).filter(Boolean);
@@ -1094,6 +1110,8 @@ function insertSmartWorkflowIntoCanvas(imported){
     const newConnections = srcConnections
         .map(conn => ({...JSON.parse(JSON.stringify(conn)), from:idMap.get(conn.from), to:idMap.get(conn.to)}))
         .filter(conn => conn.from && conn.to);
+    newNodes.forEach((node,index)=>{newNodes[index]=remapImportedWorkflowNodeRefs(node,idMap);clearSmartNodeTransientRunState(newNodes[index]);});
+    if(!nodes.length && imported.settings?.agentDefaults) canvasDefaultSmartSettings.agentDefaults=JSON.parse(JSON.stringify(imported.settings.agentDefaults));
     nodes.push(...newNodes);
     canvas.connections = [...(canvas.connections || []), ...newConnections];
     selectedIds = newNodes.length > 1 ? newNodes.map(node => node.id) : [];
@@ -1102,7 +1120,8 @@ function insertSmartWorkflowIntoCanvas(imported){
     activeComposerSubject = null;
     render();
     scheduleSave();
-    toast(`已导入 ${newNodes.length} 个节点`);
+    fitAllNodesViewport(newNodes);
+    toast(capabilityUiText(`已导入 ${newNodes.length} 个节点`,`Imported ${newNodes.length} nodes`));
 }
 async function importSmartWorkflowFile(file){
     if(!canvas || !file) return;
@@ -1188,6 +1207,46 @@ function saveCapabilityOptionOrder(scope, order){
 function renderPreferenceHandle(scope, id){
     return `<span class="model-order-handle" draggable="false" data-preference-sort-handle data-preference-scope="${escapeAttr(scope)}" title="${escapeAttr(capabilityUiText('拖动调整顺序','Drag to reorder'))}" aria-hidden="true"><i data-lucide="grip-vertical"></i></span>`;
 }
+const manualNodeSettingsFingerprints = new Map();
+function manualExecutionSettingsSnapshot(node, source){
+    const descriptor = executionSelectionDescriptor(node);
+    const keys = ['engine','apiKind','count','videoUseFrameRoles','jimengUpscaleRes'];
+    if(descriptor) keys.push(descriptor.providerKey, descriptor.modelKey, descriptor.familyKey);
+    else if(node?.type === SMART_NODE_TYPES.aiApp) keys.push('rhConfigKey','rhAppId','rhMode','rhPayment','rhInstanceType','rhParams','rhRandomActive');
+    else if(node?.type === SMART_NODE_TYPES.comfyWorkflow) keys.push('comfyMode','comfyWorkflow','comfyParams');
+    else return null;
+    const snapshot = Object.fromEntries(keys.filter(key => key && source[key] !== undefined).map(key => [key, cloneSmartSettings({value:source[key]}).value]));
+    if(node?.type === SMART_NODE_TYPES.aiApp){
+        const allowed = new Set(rhActiveFields(source).filter(field => ['number','slider','boolean','select'].includes(rhFieldKind(field))).map(field => rhParamKey(field.nodeId, field.fieldName)));
+        snapshot.rhParams = Object.fromEntries(Object.entries(snapshot.rhParams || {}).filter(([key]) => allowed.has(key)));
+    }
+    if(node?.type === SMART_NODE_TYPES.comfyWorkflow){
+        const fields = comfyWorkflowCache[source.comfyWorkflow]?.config?.fields || [];
+        const allowed = new Set(fields.filter(field => ['number','slider','boolean','dropdown'].includes(field.type)).map(field => field.id));
+        snapshot.comfyParams = Object.fromEntries(Object.entries(snapshot.comfyParams || {}).filter(([key]) => allowed.has(key)));
+    }
+    if(descriptor){
+        const profile = capabilityProfileFor(source[descriptor.providerKey], source[descriptor.modelKey], descriptor.nodeType);
+        const parameters = profile ? capabilityParameterValues(profile, source) : source.capabilityParameters?.[source[descriptor.modelKey]] || {};
+        // 素材、正文及上一任务引用不属于可复用的模型设置。
+        const reusable = Object.fromEntries(Object.entries(parameters).filter(([key]) => !/^(prompt|text|lyrics|instructions|input|(?:(?:source|upstream)_?)?task_?id|reference_?urls?)$/i.test(key)));
+        snapshot.capabilityParameters = {[source[descriptor.modelKey]]:cloneSmartSettings(reusable)};
+    }
+    return snapshot;
+}
+function rememberManualExecutionSettings(node, source){
+    const snapshot = manualExecutionSettingsSnapshot(node, source);
+    if(!snapshot) return;
+    const fingerprint = JSON.stringify(snapshot);
+    if(manualNodeSettingsFingerprints.get(node.id) === fingerprint) return;
+    manualNodeSettingsFingerprints.set(node.id, fingerprint);
+    recentSmartSettingsByMode.__manualByType ||= {};
+    recentSmartSettingsByMode.__manualByType[node.type] = snapshot;
+    saveRecentSmartSettings();
+}
+function manualExecutionSettingsForType(type){
+    return cloneSmartSettings(recentSmartSettingsByMode.__manualByType?.[type] || {});
+}
 function smartSettingsModeKey(source=settings){
     const engine = ['api','volcengine','modelscope','comfy','runninghub'].includes(source?.engine) ? source.engine : 'api';
     if(engine === 'api') return `api:${['text','image','video','audio'].includes(source?.apiKind) ? source.apiKind : 'image'}`;
@@ -1252,7 +1311,7 @@ function clearVolcengineSelectionOutsideVolcengine(target=settings){
     return target;
 }
 function isSmartImageNode(node){
-    return Boolean(node && (node.type === SMART_NODE_TYPES.material || node.type === 'smart-image' || !node.type));
+    return Boolean(node && (node.type === SMART_NODE_TYPES.material || node.type === 'smart-image' || isSmartExecutionNode(node) || !node.type));
 }
 function isSmartMaterialNode(node){
     return Boolean(node && node.type === SMART_NODE_TYPES.material);
@@ -1521,6 +1580,7 @@ function persistActiveSmartSettings(){
     settings = SMART_NODE_CONTRACT.normalizeExecutionSettings(subject, settings);
     subject.runSettings = settingsForStorage(settings);
     rememberRecentSmartSettings(settings, subject);
+    rememberManualExecutionSettings(subject, settings);
 }
 function rememberCanvasListProject(projectId){
     const pid = projectId || 'default';
@@ -1941,6 +2001,7 @@ function createTextMaterialNodeAt(point, text='', options={}){
     node.scale = MEDIA_NODE_DEFAULT_SCALE;
     node.w = EMPTY_UPLOAD_NODE_WIDTH;
     node.h = EMPTY_UPLOAD_NODE_HEIGHT;
+    CanvasCreation.ensure(node);
     nodes.push(node);
     if(options.select !== false) selectedId = node.id;
     render();
@@ -1962,6 +2023,7 @@ function createAngleControlNode(point, options={}){
         zoom:5,
         created_at:Date.now()
     };
+    CanvasCreation.ensure(node);
     nodes.push(node);
     if(options.select !== false) selectedId = node.id;
     render();
@@ -1981,6 +2043,7 @@ function createImageCompareNode(point, options={}){
         comparePosition:50,
         created_at:Date.now()
     };
+    CanvasCreation.ensure(node);
     nodes.push(node);
     if(options.select !== false) selectedId = node.id;
     render();
@@ -2726,11 +2789,16 @@ function imageLayout(images, scale=1, node=null){
         return {cols:1, rows:1, width:Math.round(Number(node.w) || smartLoopWidth(node)), height:Math.round(Math.max(Number(node.h) || 0, smartLoopHeight(node))), thumb:96, single:true};
     }
     if(isSmartExecutionNode(node)){
+        const media=images?.length===1?images[0]:null,size=media?mediaLayoutSize(media):null;
+        if(media&&['image','video'].includes(mediaKindForItem(media))&&size?.width>0&&size?.height>0&&node.mediaSizeMode!=='manual'){
+            const width=Math.max(180,Number(node.w)||380);
+            return {cols:1,rows:1,width,height:Math.max(48,Math.round(width*size.height/size.width)),thumb:96,single:true};
+        }
         return {
             cols:1,
             rows:1,
-            width:SMART_NODE_CONTRACT.EXECUTION_NODE_SIZE.width,
-            height:SMART_NODE_CONTRACT.EXECUTION_NODE_SIZE.height,
+            width:Math.max(316, Number(node.w) || 380),
+            height:Math.max(194, Number(node.h) || (node.images?.length ? 260 : 194)),
             thumb:96,
             single:true
         };
@@ -2811,23 +2879,6 @@ function nodeRect(node){
     const layout = imageLayout(node.images || [], nodeScale(node), node);
     return {x:node.x || 0, y:node.y || 0, width:layout.width, height:layout.height};
 }
-function connectedSmartClusterIds(seedId){
-    const ids = new Set(nodes.map(n => n.id));
-    if(!ids.has(seedId)) return [];
-    const seen = new Set([seedId]);
-    const queue = [seedId];
-    while(queue.length){
-        const id = queue.shift();
-        (canvas?.connections || []).forEach(conn => {
-            if(conn.from !== id && conn.to !== id) return;
-            const next = conn.from === id ? conn.to : conn.from;
-            if(!ids.has(next) || seen.has(next)) return;
-            seen.add(next);
-            queue.push(next);
-        });
-    }
-    return [...seen];
-}
 function smartArrangeAtomicIds(ids){
     const out = new Set((ids || []).filter(id => nodes.some(n => n.id === id)));
     let changed = true;
@@ -2858,68 +2909,31 @@ function moveSmartNodeAtom(node, x, y){
     const dy = Math.round(y - (Number(node.y) || 0));
     translateSmartNodeWithMembers(node, dx, dy);
 }
-function arrangeSmartIdsByConnections(ids){
-    const idSet = new Set(smartArrangeAtomicIds(ids));
-    const selectedNodes = [...idSet].map(id => nodes.find(n => n.id === id)).filter(Boolean);
-    if(selectedNodes.length < 2) return false;
-    const rects = selectedNodes.map(node => ({node, rect:nodeRect(node)}));
-    const startX = Math.min(...rects.map(item => item.rect.x));
-    const startY = Math.min(...rects.map(item => item.rect.y));
-    const internal = (canvas?.connections || []).filter(c => idSet.has(c.from) && idSet.has(c.to));
-    const depth = new Map(selectedNodes.map(node => [node.id, 0]));
-    if(internal.length){
-        const indegree = new Map(selectedNodes.map(node => [node.id, 0]));
-        internal.forEach(c => indegree.set(c.to, (indegree.get(c.to) || 0) + 1));
-        const roots = [...indegree.entries()].filter(([, n]) => n === 0).map(([id]) => id);
-        const queue = roots.length ? roots.slice() : [selectedNodes[0].id];
-        const seen = new Set(queue);
-        while(queue.length){
-            const id = queue.shift();
-            internal.filter(c => c.from === id).forEach(c => {
-                depth.set(c.to, Math.max(depth.get(c.to) || 0, (depth.get(id) || 0) + 1));
-                if(!seen.has(c.to)){
-                    seen.add(c.to);
-                    queue.push(c.to);
-                }
-            });
-        }
-    }
-    const groups = new Map();
-    selectedNodes.forEach(node => {
-        const d = depth.get(node.id) || 0;
-        if(!groups.has(d)) groups.set(d, []);
-        groups.get(d).push(node);
+function arrangeSmartIdsOnGrid(ids){
+    const atoms=smartArrangeAtomicIds(ids),chosen=new Set(atoms);
+    if(!atoms.length)return false;
+    const allAtoms=smartArrangeAtomicIds(nodes.map(n=>n.id));
+    const rectFor=id=>({id,...nodeRect(nodes.find(n=>n.id===id))});
+    const placements=CanvasNodeView.alignToGrid(atoms.map(rectFor),allAtoms.filter(id=>!chosen.has(id)).map(rectFor),{
+        width:EMPTY_UPLOAD_NODE_WIDTH,height:EMPTY_UPLOAD_NODE_HEIGHT
     });
-    const sortedDepths = [...groups.keys()].sort((a, b) => a - b);
-    let x = startX;
-    sortedDepths.forEach(d => {
-        const col = groups.get(d).slice().sort((a, b) => nodeRect(a).y - nodeRect(b).y || String(a.id).localeCompare(String(b.id)));
-        let y = startY;
-        let maxW = 0;
-        col.forEach(node => {
-            const rect = nodeRect(node);
-            moveSmartNodeAtom(node, x, y);
-            y += Math.max(110, rect.height) + 56;
-            maxW = Math.max(maxW, Math.max(180, rect.width));
-        });
-        x += maxW + 180;
-    });
+    const changes=placements.filter(p=>{const n=nodes.find(n=>n.id===p.id);return n.x!==p.x||n.y!==p.y;});
+    if(!changes.length)return false;
+    pushUndo();
+    changes.forEach(p=>moveSmartNodeAtom(nodes.find(n=>n.id===p.id),p.x,p.y));
     return true;
 }
 function arrangeSelectedSmartNodes(){
-    if(!canvas) return;
-    const explicit = selectedNodeIds().filter(id => nodes.some(n => n.id === id));
-    if(!explicit.length) return;
-    const ids = smartArrangeAtomicIds(explicit.length > 1 ? explicit : connectedSmartClusterIds(explicit[0]));
-    if(ids.length < 2) return;
-    pushUndo();
-    if(!arrangeSmartIdsByConnections(ids)) return;
-    render();
-    scheduleSave();
-    toast('已整理选中节点');
+    if(!canvas)return;
+    const ids=selectedNodeIds().filter(id=>nodes.some(n=>n.id===id));
+    if(!ids.length)return;
+    if(!arrangeSmartIdsOnGrid(ids))return;
+    render();scheduleSave();
+    toast(capabilityUiText('已按附近宫格对齐选中节点','Selected nodes aligned to nearby grid cells'));
 }
 function applyViewport(){
     world.style.transform = `translate3d(${viewport.x}px, ${viewport.y}px, 0) scale(${viewport.scale})`;
+    CanvasNodeView.layoutOverlays(world,viewport.scale,shell.clientWidth);
     // world 被 transform:scale 缩放后，其内部带 backdrop-filter 的卡片（参数设置/合成卡等）
     // 会被部分浏览器（Chrome/Edge 等 Blink 内核）当作独立合成层先按 1x 栅格化、再整体缩放，
     // 缩小时位图被降采样 → 组件发虚。缩放态下关闭这些 backdrop-filter（底色本身已接近不透明，
@@ -3003,8 +3017,8 @@ function centerViewportOnWorldPoint(point){
     applyViewport();
     scheduleSave();
 }
-function fitAllNodesViewport(){
-    if(!nodes.length){
+function fitAllNodesViewport(targetNodes=nodes){
+    if(!targetNodes.length){
         viewport.scale = 0.45;
         viewport.x = shell.clientWidth / 2;
         viewport.y = shell.clientHeight / 2;
@@ -3012,7 +3026,7 @@ function fitAllNodesViewport(){
         scheduleSave();
         return;
     }
-    const rects = nodes.map(nodeRect);
+    const rects = targetNodes.map(nodeRect);
     const minX = Math.min(...rects.map(r => r.x));
     const minY = Math.min(...rects.map(r => r.y));
     const maxX = Math.max(...rects.map(r => r.x + r.width));
@@ -3119,7 +3133,7 @@ function executionPlatformEntries(kind=executionPlatformKind()){
 function renderExecutionChoiceControl(label, icon, className, optionsHtml, disabled=false, invalid=false, displayValue=''){
     const triggerText = displayValue || label;
     return `<div class="smart-control ${escapeAttr(className)} execution-config-field ${invalid ? 'is-invalid' : ''}">
-        <button class="smart-pill execution-choice-pill" type="button" title="${escapeAttr(label)}" ${disabled ? 'disabled' : ''}><i data-lucide="${escapeAttr(icon)}"></i><span class="execution-control-label">${escapeHtml(triggerText)}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
+        <button class="smart-pill execution-choice-pill" type="button" title="${escapeAttr(displayValue ? `${label}：${displayValue}` : label)}" ${disabled ? 'disabled' : ''}><i data-lucide="${escapeAttr(icon)}"></i><span class="execution-control-label">${escapeHtml(triggerText)}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
         <div class="smart-popover compact-popover"><div class="smart-popover-title">${escapeHtml(label)}</div><div class="model-list">${optionsHtml}</div></div>
     </div>`;
 }
@@ -3348,7 +3362,8 @@ function ensureExecutionSelectionDefaults(target, node, {resetSelection=false}={
     if(!descriptor || !target || typeof target !== 'object') return false;
     if(descriptor.kind !== 'text' && !['api',''].includes(String(target.engine || 'api'))) return false;
     const {inputCounts, inputRoles} = executionSelectionInputState(node, descriptor);
-    const parameterIntent = capabilityParameterIntent(target[descriptor.providerKey], target[descriptor.modelKey], descriptor.nodeType, target);
+    // 候选模型按输入筛选；当前模型的参数不能排除其他模型。运行前仍校验全部提交值。
+    const parameterIntent = {};
     if(descriptor.kind === 'video'){
         const currentProfile = capabilityProfileFor(target[descriptor.providerKey], target[descriptor.modelKey], descriptor.nodeType);
         parameterIntent.__execution_mode = videoExecutionModeFor(currentProfile, visibleReferenceImagesFor(node), target);
@@ -3452,7 +3467,7 @@ function renderCapabilityVariantControl(selection, settingKey){
 }
 function renderExecutionModeFallbackControl(){
     const label = tr('smart.mode') || '运行模式';
-    const value = capabilityUiText('默认模式', 'Default mode');
+    const value = capabilityUiText('标准模式', 'Standard mode');
     const note = capabilityUiText('当前平台没有可切换的运行模式。', 'This provider has no alternate run modes.');
     return renderExecutionChoiceControl(label, 'list-filter', 'model-variant-control', `<div class="muted-note">${escapeHtml(note)}</div>`, true, false, value);
 }
@@ -3514,25 +3529,12 @@ function renderCapabilityParameters(profile, apiKind){
         settingsControl:bundle.settingsControl
     };
 }
-function renderCapabilityNumber(paramKey, param, current, label){
-    const minimum = Number.isFinite(Number(param?.min)) ? Number(param.min) : 0;
-    const maximum = Number.isFinite(Number(param?.max)) ? Number(param.max) : 100;
-    const value = Math.max(minimum, Math.min(maximum, Number(current ?? param?.default ?? minimum)));
-    settings[paramKey] = value;
-    return `<div class="smart-control capability-param-control" title="${escapeAttr(label)}">
-        <button class="smart-pill" type="button"><i data-lucide="sliders-horizontal"></i><span class="sub">${escapeHtml(label)} · ${value}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
-        <div class="smart-popover compact-popover"><div class="smart-popover-title">${escapeHtml(label)}</div>
-            <input type="range" min="${minimum}" max="${maximum}" step="${param?.type === 'number' ? '0.1' : '1'}" value="${value}" data-param="${escapeAttr(paramKey)}">
-        </div>
-    </div>`;
-}
-
 const CAPABILITY_PARAMETER_UNSET = '__canvas_unset__';
 function capabilityParameterIsOptional(spec){
     return ['optional', 'advanced'].includes(String(spec?.level || '').toLowerCase());
 }
 function capabilityParameterDefaultValue(profile, key, spec={}){
-    if(capabilityParameterIsOptional(spec)) return CAPABILITY_PARAMETER_UNSET;
+    if(spec.ui_hidden === true && capabilityParameterIsOptional(spec)) return CAPABILITY_PARAMETER_UNSET;
     if(spec.default !== undefined && spec.default !== null && spec.default !== '') return spec.default;
     const options = Array.isArray(spec.options) ? spec.options : [];
     if(options.length) return options[0];
@@ -3540,7 +3542,7 @@ function capabilityParameterDefaultValue(profile, key, spec={}){
     if(type === 'model') return String(profile?.model_id || '').trim() || undefined;
     if(type === 'boolean') return false;
     if(['integer','number'].includes(type) && Number.isFinite(Number(spec.min))) return Number(spec.min);
-    return undefined;
+    return capabilityParameterIsOptional(spec) ? CAPABILITY_PARAMETER_UNSET : undefined;
 }
 function capabilityProfileHasParameterDefaults(profile){
     return Object.entries(profile?.parameters || {}).every(([key, spec]) => (
@@ -3559,6 +3561,12 @@ function capabilityDefaultProfileForFamily(family){
     return capabilitySafeDefaultProfileForFamily(family) || resolved || variants[0] || null;
 }
 function capabilityParameterValues(profile, source=settings){
+    if(profile?._externalEngine){
+        const store=profile._externalEngine==='rh'?source.rhParams:source.comfyParams;
+        return Object.fromEntries(Object.entries(profile.parameters || {}).map(([key,spec])=>{
+            const saved=store?.[key];return [key,(saved && typeof saved==='object' ? saved.value : saved) ?? spec.default];
+        }));
+    }
     const modelId = String(profile?.model_id || '').trim();
     if(!modelId) return {};
     const store = source?.capabilityParameters && typeof source.capabilityParameters === 'object'
@@ -3566,7 +3574,7 @@ function capabilityParameterValues(profile, source=settings){
         : {};
     const values = store[modelId] && typeof store[modelId] === 'object' ? {...store[modelId]} : {};
     Object.entries(profile?.parameters || {}).forEach(([key, spec]) => {
-        if(values[key] !== undefined) return;
+        if(values[key] !== undefined && values[key] !== CAPABILITY_PARAMETER_UNSET) return;
         const defaultValue = capabilityParameterDefaultValue(profile, key, spec);
         if(defaultValue !== undefined) values[key] = defaultValue;
     });
@@ -3584,6 +3592,20 @@ function capabilityParameterSubmissionValues(profile, source=settings){
     )));
 }
 function setCapabilityParameter(profile, key, value){
+    const spec=profile?.parameters?.[key];
+    if(spec && ['integer','number'].includes(spec.type) && typeof value==='number'){
+        if(!Number.isFinite(value))return;
+        if(spec.min!==undefined)value=Math.max(Number(spec.min),value);
+        if(spec.max!==undefined)value=Math.min(Number(spec.max),value);
+        if(spec.type==='integer')value=Math.round(value);
+    }
+    if(profile?._externalEngine){
+        const storeKey=profile._externalEngine==='rh'?'rhParams':'comfyParams';
+        settings[storeKey]=settings[storeKey] || {};
+        const current=settings[storeKey][key];
+        settings[storeKey][key]=profile._externalEngine==='rh'?{...(current && typeof current==='object'?current:{}),value}:value;
+        persistActiveSmartSettings();scheduleSave();return;
+    }
     const modelId = String(profile?.model_id || '').trim();
     if(!modelId || !key) return;
     settings.capabilityParameters = settings.capabilityParameters && typeof settings.capabilityParameters === 'object'
@@ -3630,12 +3652,12 @@ function generatedCapabilityParameterLabel(key, spec={}){
 }
 function capabilityParameterLabel(key, spec, profile=null){
     const known = {
-        resolution:'分辨率', size:'尺寸', aspect_ratio:'画面比例', ratio:'画面比例', duration:'时长', generate_audio:'生成音频',
+        resolution:'分辨率', size:'尺寸', aspect_ratio:'画幅', ratio:'画幅', duration:'时长', generate_audio:'生成音频',
         count:'数量', quality:'质量', format:'格式', sample_rate:'采样率', speech_rate:'语速',
         loudness_rate:'音量', pitch_rate:'音调', speaker:'音色',
         negativePrompt:'负向提示词', negative_prompt:'负向提示词', seed:'种子',
         return_last_frame:'返回尾帧', voice_id:'音色', volume:'音量', pitch:'音高',
-        emotion:'情绪', outputFormat:'输出格式', output_format:'输出格式', webSearch:'联网搜索',
+        emotion:'情绪', style:'风格', outputFormat:'输出格式', output_format:'输出格式', webSearch:'联网搜索',
         returnLastFrame:'返回尾帧', realPersonMode:'真人保护模式', conversionSlots:'真人转换范围', bitrateMode:'码率模式',
         pronunciation_dict:'发音词典', enable_base64_output:'Base64 输出', english_normalization:'英文文本规范化',
         reasoning_effort:'推理强度', max_output_tokens:'最大输出长度', temperature:'随机度',
@@ -3649,7 +3671,7 @@ function capabilityParameterLabel(key, spec, profile=null){
         count:'Count', quality:'Quality', format:'Format', sample_rate:'Sample Rate', speech_rate:'Speech Rate',
         loudness_rate:'Volume', pitch_rate:'Pitch', speaker:'Voice', negativePrompt:'Negative Prompt',
         negative_prompt:'Negative Prompt', seed:'Seed', return_last_frame:'Return Last Frame', voice_id:'Voice',
-        volume:'Volume', pitch:'Pitch', emotion:'Emotion', outputFormat:'Output Format', webSearch:'Web Search',
+        volume:'Volume', pitch:'Pitch', emotion:'Emotion', style:'Style', outputFormat:'Output Format', webSearch:'Web Search',
         returnLastFrame:'Return Last Frame', realPersonMode:'Real Person Protection', conversionSlots:'Person Conversion Range', bitrateMode:'Bitrate Mode',
         pronunciation_dict:'Pronunciation Dictionary', enable_base64_output:'Base64 Output', english_normalization:'English Text Normalization',
         output_format:'Output Format', reasoning_effort:'Reasoning Effort', max_output_tokens:'Maximum Output Length',
@@ -3673,7 +3695,7 @@ function capabilityParameterLabel(key, spec, profile=null){
         : '';
     const knownLabel = known[key] ? capabilityUiText(known[key], knownEn[key] || generatedCapabilityParameterLabel(key, spec)) : '';
     const rawLabel = String(spec?.label || '').trim();
-    const localizedRawLabel = window.StudioI18n?.lang?.() === 'en' || /[\u3400-\u9fff]/.test(rawLabel) ? rawLabel : '';
+    const localizedRawLabel = window.StudioI18n?.lang?.() === 'en' ? (spec?.label_en || spec?.labelEn || (!/[\u3400-\u9fff]/.test(rawLabel) ? rawLabel : '')) : rawLabel;
     return String((translated[key] ? tr(translated[key]) : '') || contextualLabel || knownLabel || localizedRawLabel || generatedCapabilityParameterLabel(key, spec)).trim();
 }
 function capabilityRunValue(profile, key, fallback, source=settings){
@@ -3792,7 +3814,7 @@ function capabilityActiveParameterSummary(profile, source=settings){
         const missing = value === undefined || value === CAPABILITY_PARAMETER_UNSET || value === '';
         const display = missing
             ? capabilityParameterIsOptional(spec)
-                ? capabilityUiText('使用默认','Use default')
+                ? capabilityUiText('未设置，不发送','Not set; omitted')
                 : capabilityUiText('未填写（必填）','Missing (required)')
             : capabilityOptionLabel(key, value);
         return `${capabilityParameterLabel(key, spec, profile)}：${display}`;
@@ -3920,9 +3942,11 @@ function syncExecutionCountControl(profile){
 function capabilityParameterControlKind(key, spec){
     const type = String(spec?.type || 'text').toLowerCase();
     if(capabilityParameterSemantic(key, spec) === 'aspect_ratio') return 'segments';
-    if(key === 'duration') return 'select';
+    if(capabilityParameterSemantic(key, spec) === 'duration') return 'select';
+    if(capabilityParameterSemantic(key, spec) === 'resolution') return 'select';
+    if(['integer','number'].includes(type) && capabilityParameterChoiceOptions(key,spec).length) return 'segments';
     if(type === 'boolean') return 'segments';
-    if(type === 'enum') return ['aspect_ratio', 'ratio', 'resolution', 'quality', 'count'].includes(key) ? 'segments' : 'select';
+    if(type === 'enum') return ['aspect_ratio', 'resolution', 'quality'].includes(capabilityParameterSemantic(key, spec)) || key === 'count' ? 'segments' : 'select';
     if(type === 'integer' && key === 'count') return 'segments';
     if(['integer', 'number'].includes(type) && Number.isFinite(Number(spec?.min)) && Number.isFinite(Number(spec?.max))) return 'range';
     if(['integer', 'number'].includes(type)) return 'stepper';
@@ -3937,18 +3961,20 @@ const CAPABILITY_DEFAULT_ASPECT_RATIOS = Object.freeze([
 function capabilityParameterChoiceOptions(key, spec){
     if(Array.isArray(spec?.options) && spec.options.length) return spec.options;
     if(capabilityParameterSemantic(key, spec) === 'aspect_ratio') return CAPABILITY_DEFAULT_ASPECT_RATIOS;
-    if(key !== 'count' && capabilityParameterSemantic(key, spec) !== 'duration') return [];
-    const minimum = Number(spec?.min);
-    const maximum = Number(spec?.max);
-    const step = Number(spec?.step || 1);
+    if(capabilityParameterSemantic(key,spec)==='resolution' && ['enum','text','string'].includes(spec?.type))return ['1K','2K','4K'];
+    if(key !== 'count' && capabilityParameterSemantic(key, spec) !== 'duration' && !['integer','number'].includes(spec?.type)) return [];
+    const isDuration=capabilityParameterSemantic(key,spec)==='duration';
+    const minimum = Number(spec?.min ?? (isDuration ? 1 : NaN));
+    const maximum = Number(spec?.max ?? (isDuration ? Math.max(30,minimum) : NaN));
+    const step = Number(spec?.step || (spec?.type==='number'&&!isDuration ? .1 : 1));
     if(!Number.isFinite(minimum) || !Number.isFinite(maximum) || step <= 0) return [];
     const optionCount = Math.floor((maximum - minimum) / step) + 1;
-    return optionCount > 0 && optionCount <= (capabilityParameterSemantic(key, spec) === 'duration' ? 120 : 16)
-        ? Array.from({length:optionCount}, (_, index) => minimum + index * step)
+    return optionCount > 0 && optionCount <= (isDuration ? 600 : 120)
+        ? Array.from({length:optionCount}, (_, index) => Number((minimum + index * step).toFixed(8)))
         : [];
 }
 function renderCapabilityUnsetChoice(key, active, compact=false){
-    return `<button type="button" class="capability-option capability-unset-option ${active ? 'active' : ''}" data-capability-unset data-capability-param="${escapeAttr(key)}" title="${escapeAttr(capabilityUiText('不向平台提交该参数','Do not submit this parameter'))}">${escapeHtml(capabilityUiText(compact ? '默认' : '使用默认',compact ? 'Default' : 'Use default'))}</button>`;
+    return `<button type="button" class="capability-option capability-unset-option ${active ? 'active' : ''}" data-capability-unset data-capability-param="${escapeAttr(key)}" title="${escapeAttr(capabilityUiText('不向平台提交该参数','Do not submit this parameter'))}">${escapeHtml(capabilityUiText('默认','Default'))}</button>`;
 }
 function capabilityParameterIcon(key, type=''){
     const icons = {
@@ -3964,14 +3990,15 @@ function capabilityParameterIcon(key, type=''){
     return 'sliders-horizontal';
 }
 function capabilityParameterPreview(key, spec, value, unset){
-    if(unset || value === CAPABILITY_PARAMETER_UNSET || value === undefined || value === '') return capabilityUiText('默认','Default');
+    if(unset || value === CAPABILITY_PARAMETER_UNSET || value === undefined || value === '') return capabilityUiText('未设置','Not set');
     const type = String(spec?.type || 'text').toLowerCase();
     if(type === 'boolean') return value === true || ['true','1'].includes(String(value).toLowerCase()) ? capabilityUiText('是','Yes') : capabilityUiText('否','No');
-    const label = capabilityOptionLabel(key, value);
-    if(key === 'duration') return `${label}s`;
+    const label = spec?.option_labels?.[String(value)] ?? capabilityOptionLabel(key, value);
+    if(capabilityParameterSemantic(key, spec) === 'duration') return /(?:s|秒)$/i.test(String(label)) ? label : capabilityUiText(`${label}秒`,`${label}s`);
+    if(capabilityParameterSemantic(key, spec) === 'resolution' && /^\d+(?:\.\d+)?[kp]$/i.test(String(label))) return String(label).toUpperCase();
     if(key === 'count') return capabilityUiText(`${label} 个`,`${label}`);
     const text = String(label || '').trim();
-    return text.length > 22 ? `${text.slice(0, 22)}…` : text;
+    return text;
 }
 function capabilityParameterControlClass(key){
     return `capability-${String(key || 'parameter').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'parameter'}-control`;
@@ -3985,7 +4012,7 @@ function renderCapabilityParameterControl(key, label, spec, profile, value, unse
             ? label
             : capabilityParameterPreview(key, spec, value, false);
     return `<div class="smart-control capability-param-control ${controlClass} ${escapeAttr(extraClass)}" data-control-key="${escapeAttr(controlClass)}" data-param-key="${escapeAttr(key)}">
-        <button class="smart-pill capability-param-pill" type="button" title="${escapeAttr(label)}"><i data-lucide="${capabilityParameterIcon(key, type)}"></i><span class="capability-param-label">${escapeHtml(triggerText)}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
+        <button class="smart-pill capability-param-pill" type="button" title="${escapeAttr(`${label} · ${triggerText}`)}"><i data-lucide="${capabilityParameterIcon(key, type)}"></i><span class="capability-param-label">${escapeHtml(triggerText)}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
         <div class="smart-popover capability-param-popover"><div class="smart-popover-title">${escapeHtml(label)}</div>${body}</div>
     </div>`;
 }
@@ -4044,12 +4071,12 @@ function capabilityParameterDescription(key, spec={}, profile=null){
     if(semantic === 'resolution') return capabilityUiText('决定输出素材的像素尺寸和清晰度；更高分辨率通常会增加生成时间、文件大小或费用。','Controls output pixel dimensions and clarity; higher resolutions usually increase time, file size, or cost.');
     if(semantic === 'duration') return capabilityUiText('决定生成内容的播放时长；时长越长通常生成越慢、费用越高。','Controls playback length; longer outputs usually take more time and cost more.');
     if(semantic === 'aspect_ratio') return capabilityUiText('决定画面的横竖构图，应根据最终发布位置选择。','Controls frame shape and should match the final publishing destination.');
-    if(type === 'boolean') return capabilityUiText(`决定是否启用“${label}”。选择“默认”时不提交该字段，由平台采用自身默认行为。`,`Controls whether “${label}” is enabled. Default omits the field and lets the provider decide.`);
+    if(type === 'boolean') return capabilityUiText(`决定是否启用“${label}”。选“是”或“否”后按所选值提交。`,`Controls whether “${label}” is enabled. Yes or No sends the selected value.`);
     if(type === 'enum') return capabilityUiText(`决定“${label}”采用哪种预设方案；不同选项会改变结果或处理方式。`,`Chooses the preset used for “${label}”; each option changes the result or processing behavior.`);
     if(['integer','number'].includes(type)) return capabilityUiText(`控制“${label}”的数值。请在模型允许范围内调整，并观察它对结果、耗时或费用的影响。`,`Controls the numeric value for “${label}”. Keep it within the model range and consider effects on output, time, or cost.`);
     const required = !capabilityParameterIsOptional(spec);
     return capabilityUiText(
-        `向平台传递“${label}”对应的附加信息。${required ? '这是当前模型的必填项，请按平台要求的格式填写。' : '不确定时保持默认，只有明确知道平台要求时再填写。'}`,
+        `向平台传递“${label}”对应的附加信息。${required ? '这是当前模型的必填项，请按平台要求的格式填写。' : '可留空；填写后按原文提交。'}`,
         `Passes additional information for “${label}”. ${required ? 'This model requires it; use the provider format.' : 'Keep the default unless the provider explicitly requires a value.'}`
     );
 }
@@ -4094,7 +4121,7 @@ function renderCapabilityParameterHelp(label, description){
 }
 function capabilityParameterSemantic(key, spec={}){
     const normalized = `${key || ''} ${spec?.source_field || ''}`.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-    if(/(^|_)(aspect_?ratio|ratio|frame_?ratio)($|_)/.test(normalized)) return 'aspect_ratio';
+    if((Array.isArray(spec?.options) && spec.options.some(value => /^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(String(value)))) || /(^|_)(aspect_?ratio|ratio|frame_?ratio)($|_)/.test(normalized)) return 'aspect_ratio';
     if(/(^|_)(duration|video_?duration|generation_?duration|seconds|length_?seconds)($|_)/.test(normalized)) return 'duration';
     if(/(^|_)(resolution|output_?resolution|video_?resolution|image_?resolution|size|output_?size|image_?size)($|_)/.test(normalized)) return 'resolution';
     if(/(^|_)(quality|image_?quality|output_?quality)($|_)/.test(normalized)) return 'quality';
@@ -4108,13 +4135,29 @@ function capabilityAspectIconHtml(option){
     const height = Math.max(1, Number(match[2]));
     return `<span class="capability-aspect-icon"><span style="--aspect-width:${width};--aspect-height:${height}"></span></span>`;
 }
-function capabilityChoiceContent(key, option, semantic=''){
-    let label = capabilityOptionLabel(key, option);
-    if(semantic === 'duration' && Number.isFinite(Number(option)) && Number(option) >= 0 && !/s$/i.test(String(label))) label = `${label}s`;
-    if(semantic === 'resolution' && /^\d+k$/i.test(String(label))) label = String(label).toUpperCase();
+function capabilityChoiceContent(key, option, semantic='', spec={}){
+    let label = spec.option_labels?.[String(option)] ?? capabilityOptionLabel(key, option);
+    if(semantic === 'duration' && Number.isFinite(Number(option)) && Number(option) >= 0 && !/(?:s|秒)$/i.test(String(label))) label = capabilityUiText(`${label}秒`,`${label}s`);
+    if(semantic === 'resolution' && /^\d+(?:\.\d+)?k$/i.test(String(label))) label = String(label).toUpperCase();
     return semantic === 'aspect_ratio'
         ? `${capabilityAspectIconHtml(option)}<span>${escapeHtml(label)}</span>`
         : `<span>${escapeHtml(label)}</span>`;
+}
+function capabilityInputValue(control){
+    const type = control.dataset.capabilityType;
+    if(!['integer','number'].includes(type)) return control.value;
+    if(control.value.trim() === '' || !Number.isFinite(Number(control.value))) return undefined;
+    let value = Number(control.value);
+    if(control.min !== '') value = Math.max(Number(control.min), value);
+    if(control.max !== '') value = Math.min(Number(control.max), value);
+    if(type === 'integer') value = Math.round(value);
+    return value;
+}
+function syncCapabilityNumericControls(control, value){
+    const root = control.closest('.capability-range-field,.capability-stepper');
+    if(!root) return;
+    root.querySelectorAll('input[data-capability-param]').forEach(peer => {if(peer !== control) peer.value=String(value);});
+    if(control.type === 'number' && document.activeElement !== control) control.value=String(value);
 }
 function renderCapabilityParameterEditor(key, spec, profile, values){
     const label = capabilityParameterLabel(key, spec, profile);
@@ -4127,7 +4170,7 @@ function renderCapabilityParameterEditor(key, spec, profile, values){
     const controlKind = capabilityParameterControlKind(key, spec);
     const choices = capabilityParameterChoiceOptions(key, spec);
     const optionScope = capabilityOptionOrderScope(profile, key);
-    const optionButton = option => `<button type="button" class="capability-option ${semantic === 'aspect_ratio' ? 'capability-aspect-option' : ''} ${String(option) === String(value) ? 'active' : ''}" data-capability-option data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" data-capability-value="${escapeAttr(option)}" title="${escapeAttr(capabilityOptionLabel(key, option))}">${capabilityChoiceContent(key, option, semantic)}</button>`;
+    const optionButton = option => `<button type="button" class="capability-option ${semantic === 'aspect_ratio' ? 'capability-aspect-option' : ''} ${String(option) === String(value) ? 'active' : ''}" data-capability-option data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" data-capability-value="${escapeAttr(option)}" title="${escapeAttr(capabilityOptionLabel(key, option))}">${capabilityChoiceContent(key, option, semantic, spec)}</button>`;
     if((controlKind === 'segments' || controlKind === 'select') && choices.length){
         const gridClass = semantic === 'aspect_ratio'
             ? 'capability-aspect-options'
@@ -4151,16 +4194,16 @@ function renderCapabilityParameterEditor(key, spec, profile, values){
         const hasRange = Number.isFinite(minimum) && Number.isFinite(maximum) && maximum > minimum;
         if(hasRange){
             const rangeValue = unset ? (spec?.default ?? minimum) : value;
-            const body = `<div class="capability-range-field"><div class="capability-range-value"><span>${escapeHtml(capabilityUiText('当前值','Current'))}</span><output>${escapeHtml(unset ? capabilityUiText('默认','Default') : String(rangeValue))}</output></div>${optional ? `<div class="capability-optional-mode">${renderCapabilityUnsetChoice(key, unset, true)}<button type="button" class="capability-option ${unset ? '' : 'active'}" data-capability-enable data-capability-param="${escapeAttr(key)}" data-capability-value="${escapeAttr(rangeValue)}"><span>${escapeHtml(capabilityUiText('自定义','Custom'))}</span></button></div>` : ''}<input type="range" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" value="${escapeAttr(rangeValue)}" min="${escapeAttr(minimum)}" max="${escapeAttr(maximum)}" step="${escapeAttr(step)}" ${unset ? 'disabled' : ''}></div>`;
+            const body = `<div class="capability-range-field"><div class="capability-range-value"><span>${escapeHtml(capabilityUiText('当前值','Current'))}</span><input class="capability-number-value" type="number" aria-label="${escapeAttr(label)}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" value="${escapeAttr(rangeValue)}" min="${escapeAttr(minimum)}" max="${escapeAttr(maximum)}" step="${escapeAttr(step)}" ${unset ? 'disabled' : ''}></div>${optional ? `<div class="capability-optional-mode">${renderCapabilityUnsetChoice(key, unset, true)}<button type="button" class="capability-option ${unset ? '' : 'active'}" data-capability-enable data-capability-param="${escapeAttr(key)}" data-capability-value="${escapeAttr(rangeValue)}"><span>${escapeHtml(capabilityUiText('自定义','Custom'))}</span></button></div>` : ''}<input type="range" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" value="${escapeAttr(rangeValue)}" min="${escapeAttr(minimum)}" max="${escapeAttr(maximum)}" step="${escapeAttr(step)}" ${unset ? 'disabled' : ''}></div>`;
             return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value:rangeValue, unset, body, extraClass:'capability-range-control'};
         }
         const stepValue = unset ? (spec?.default ?? 0) : value;
-        const body = `${optional ? `<div class="capability-optional-mode">${renderCapabilityUnsetChoice(key, unset, true)}<button type="button" class="capability-option ${unset ? '' : 'active'}" data-capability-enable data-capability-param="${escapeAttr(key)}" data-capability-value="${escapeAttr(stepValue)}"><span>${escapeHtml(capabilityUiText('自定义','Custom'))}</span></button></div>` : ''}<div class="capability-stepper ${unset ? 'is-disabled' : ''}"><button type="button" data-capability-step="-1" data-capability-delta="${escapeAttr(step)}" data-capability-min="${spec?.min !== undefined ? escapeAttr(spec.min) : ''}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" aria-label="${escapeAttr(capabilityUiText('减少','Decrease'))}" ${unset ? 'disabled' : ''}>−</button><output>${escapeHtml(unset ? capabilityUiText('默认','Default') : String(stepValue))}</output><button type="button" data-capability-step="1" data-capability-delta="${escapeAttr(step)}" data-capability-min="${spec?.min !== undefined ? escapeAttr(spec.min) : ''}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" aria-label="${escapeAttr(capabilityUiText('增加','Increase'))}" ${unset ? 'disabled' : ''}>+</button></div>`;
+        const body = `${optional ? `<div class="capability-optional-mode">${renderCapabilityUnsetChoice(key, unset, true)}<button type="button" class="capability-option ${unset ? '' : 'active'}" data-capability-enable data-capability-param="${escapeAttr(key)}" data-capability-value="${escapeAttr(stepValue)}"><span>${escapeHtml(capabilityUiText('自定义','Custom'))}</span></button></div>` : ''}<div class="capability-stepper ${unset ? 'is-disabled' : ''}"><button type="button" data-capability-step="-1" data-capability-delta="${escapeAttr(step)}" data-capability-min="${spec?.min !== undefined ? escapeAttr(spec.min) : ''}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" aria-label="${escapeAttr(capabilityUiText('减少','Decrease'))}" ${unset ? 'disabled' : ''}>−</button><input class="capability-number-value" type="number" aria-label="${escapeAttr(label)}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" value="${escapeAttr(stepValue)}" ${spec?.min !== undefined ? `min="${escapeAttr(spec.min)}"` : ''} ${spec?.max !== undefined ? `max="${escapeAttr(spec.max)}"` : ''} step="${escapeAttr(step)}" ${unset ? 'disabled' : ''}><button type="button" data-capability-step="1" data-capability-delta="${escapeAttr(step)}" data-capability-min="${spec?.min !== undefined ? escapeAttr(spec.min) : ''}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" aria-label="${escapeAttr(capabilityUiText('增加','Increase'))}" ${unset ? 'disabled' : ''}>+</button></div>`;
         return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value:stepValue, unset, body, extraClass:'capability-stepper-control'};
     }
-    const isLongText = ['lyrics','prompt','instructions','negative_prompt','negativePrompt'].includes(key);
+    const isLongText = spec.ui_multiline === true || ['lyrics','prompt','instructions','negative_prompt','negativePrompt'].includes(key);
     const textValue = value === CAPABILITY_PARAMETER_UNSET ? '' : value;
-    const placeholder = optional ? capabilityUiText('可选，不填写则使用默认','Optional; leave blank for default') : capabilityUiText('请输入内容','Enter content');
+    const placeholder = optional ? capabilityUiText('可选，留空不发送','Optional; leave blank to omit') : capabilityUiText('请输入内容','Enter content');
     const body = `<div class="capability-text-field ${isLongText ? 'is-long' : ''}">${isLongText ? `<textarea data-capability-param="${escapeAttr(key)}" data-capability-type="text" placeholder="${escapeAttr(placeholder)}">${escapeHtml(textValue)}</textarea>` : `<input type="text" data-capability-param="${escapeAttr(key)}" data-capability-type="text" value="${escapeAttr(textValue)}" placeholder="${escapeAttr(placeholder)}">`}</div>`;
     return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value:textValue, unset, body, extraClass:`capability-text-control ${isLongText ? 'is-long' : ''}`};
 }
@@ -5006,30 +5049,19 @@ function textGenerationRequestForNode(node=activeSettingsSubject()){
     );
 }
 function textGenerationMediaForNode(node){
-    const texts = [];
-    const media = [];
-    upstreamConnectionsForKinds(node, ['input']).forEach(connection => {
-        const source = nodes.find(item => item.id === connection.from);
-        if(!source) return;
-        const sourceMedia = imagesForNode(source).filter(item => {
-            return item?.url || SMART_NODE_CONTRACT.textContentForMediaItem(item);
-        });
-        if(!sourceMedia.length){
-            const fallbackText = textForNode(source).trim();
-            if(fallbackText) texts.push(fallbackText);
-            return;
-        }
-        sourceMedia.forEach(item => {
-            const kind = SMART_NODE_CONTRACT.mediaKindForReference(item);
-            const text = SMART_NODE_CONTRACT.textContentForMediaItem(item);
-            if(kind === 'text'){
-                if(text) texts.push(text);
-                return;
-            }
-            if(['image', 'video', 'audio'].includes(kind) && item?.url) media.push({...item, kind});
-        });
+    const refs=[];
+    upstreamConnectionsForKinds(node,['input']).forEach(connection=>{
+        const source=nodes.find(item=>item.id===connection.from);if(!source)return;
+        const media=imagesForNode(source).filter(hasMentionReferenceContent);
+        if(media.length)refs.push(...media);
+        else {const text=textForNode(source).trim();if(text)refs.push({kind:'text',text,nodeId:source.id,imageIndex:0});}
     });
-    return {texts, media};
+    refs.push(...manualReferenceImagesFor(node));
+    const ordered=orderedInputReferencesForNode(node,uniqueReferenceImages(refs));
+    return {
+        texts:ordered.filter(item=>mediaKindForItem(item)==='text').map(item=>SMART_NODE_CONTRACT.textContentForMediaItem(item)).filter(Boolean),
+        media:ordered.filter(item=>['image','video','audio'].includes(mediaKindForItem(item))&&item.url).map(item=>({...item,kind:mediaKindForItem(item)}))
+    };
 }
 function textGenerationCandidateInputCounts(request){
     return {...(request?.inputCounts || {}), text:1};
@@ -5042,7 +5074,7 @@ function verifiedTextGenerationModels(node=activeSettingsSubject()){
         'text_generation',
         inputCounts,
         request.inputRoles,
-        capabilityParameterIntent(settings.textProvider, settings.textModel, 'text_generation')
+        {}
     ) || [];
     return models.filter(model => {
         const enabledIds = configuredCapabilityModelIds(model.provider_id, 'text_generation');
@@ -5053,7 +5085,7 @@ function renderTextGenerationParams(node=activeSettingsSubject()){
     const request = textGenerationRequestForNode(node);
     const inputCounts = textGenerationCandidateInputCounts(request);
     const models = verifiedTextGenerationModels(node);
-    const parameterIntent = capabilityParameterIntent(settings.textProvider, settings.textModel, 'text_generation');
+    const parameterIntent = {};
     const providerIds = [...new Set(models.map(model => model.provider_id))];
     if(!settings.textProvider) {
         settings.textProvider = providerIds[0] || '';
@@ -5075,7 +5107,7 @@ function renderTextGenerationParams(node=activeSettingsSubject()){
         <label class="text-generation-toggle"><input type="checkbox" data-text-system-toggle ${settings.textSystemEnabled ? 'checked' : ''}><span>${escapeHtml(tr('smart.enableSystemPrompt'))}</span></label>
         ${settings.textSystemEnabled ? `<div class="text-generation-system-row">
             <textarea data-text-system-prompt placeholder="${escapeAttr(tr('smart.systemPromptPlaceholder'))}">${escapeHtml(settings.textSystemPrompt || '')}</textarea>
-            <button class="text-generation-template-btn" type="button" data-text-system-template title="${escapeAttr(tr('smart.systemTemplateSkill'))}" aria-label="${escapeAttr(tr('smart.systemTemplateSkill'))}"><i data-lucide="library"></i></button>
+            <button class="text-generation-template-btn" type="button" data-text-system-template title="${escapeAttr(tr('smart.systemTemplate'))}" aria-label="${escapeAttr(tr('smart.systemTemplate'))}"><i data-lucide="library"></i></button>
         </div>` : ''}
         ${parameterBundle?.markup ? `<div class="capability-fields text-capability-fields capability-layout-${escapeAttr(parameterBundle.layout.mode)}" data-capability-layout data-layout-key="${escapeAttr(parameterBundle.layout.key)}" data-layout-mode="${escapeAttr(parameterBundle.layout.mode)}">${parameterBundle.markup}</div>` : ''}
     </div>`, selection.profile, 'text-execution-config', parameterBundle?.settingsControl || '');
@@ -5083,7 +5115,7 @@ function renderTextGenerationParams(node=activeSettingsSubject()){
 function renderApiParams(){
     const inputCounts = capabilityInputCounts('image');
     const inputRoles = capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true);
-    const parameterIntent = capabilityParameterIntent(settings.provider_id, settings.model, 'image_generation');
+    const parameterIntent = {};
     const providers = capabilityProvidersFor('image_generation', inputCounts, imageProviders(), inputRoles, parameterIntent);
     if(!settings.provider_id) {
         settings.provider_id = providers[0]?.id || '';
@@ -5124,7 +5156,7 @@ function renderApiVideoParams(){
     const inputCounts = capabilityInputCounts('video');
     const refs = visibleReferenceImagesFor(activeSettingsSubject());
     const inputRoles = videoCapabilityInputRoles(refs, settings, true);
-    const parameterIntent = capabilityParameterIntent(settings.videoProvider, settings.videoModel, 'video_generation');
+    const parameterIntent = {};
     const currentProfile = capabilityProfileFor(settings.videoProvider, settings.videoModel, 'video_generation');
     parameterIntent.__execution_mode = videoExecutionModeFor(currentProfile, refs, settings, Boolean(manualSmartVideoLink(settings)));
     const providers = capabilityProvidersFor('video_generation', inputCounts, videoApiProviders(), inputRoles, parameterIntent);
@@ -5152,7 +5184,7 @@ function renderApiVideoParams(){
 function renderApiAudioParams(){
     const inputCounts = capabilityInputCounts('audio');
     const inputRoles = capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true);
-    const parameterIntent = capabilityParameterIntent(settings.audioProvider, settings.audioModel, 'audio_generation');
+    const parameterIntent = {};
     const providers = capabilityProvidersFor('audio_generation', inputCounts, audioApiProviders(), inputRoles, parameterIntent);
     if(!settings.audioProvider) {
         settings.audioProvider = providers[0]?.id || '';
@@ -5180,7 +5212,7 @@ function renderApiAudioParams(){
 function renderApiMusicParams(){
     const inputCounts = capabilityInputCounts('music');
     const inputRoles = capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true);
-    const parameterIntent = capabilityParameterIntent(settings.musicProvider, settings.musicModel, 'music_generation');
+    const parameterIntent = {};
     const providers = capabilityProvidersFor('music_generation', inputCounts, audioApiProviders(), inputRoles, parameterIntent);
     if(!settings.musicProvider) {
         settings.musicProvider = providers[0]?.id || '';
@@ -5990,42 +6022,35 @@ function renderCustomSizeControls(prefix=''){
     return `<input type="number" data-param="${wKey}" value="${escapeHtml(settings[wKey] || '')}" placeholder="宽度">
             <input type="number" data-param="${hKey}" value="${escapeHtml(settings[hKey] || '')}" placeholder="高度">`;
 }
+function externalParameterSpec(field, engine){
+    const kind=engine==='rh' ? rhFieldRole(field) : field.type;
+    const options=engine==='rh' ? rhExtractFieldOptions(field) : field.options;
+    const rawType=String(field.fieldType || '').toUpperCase();
+    const type=options?.length ? 'enum' : kind==='boolean' ? 'boolean' : ['number','slider'].includes(kind) ? (['INT','INTEGER'].includes(rawType)?'integer':'number') : 'text';
+    return {type, options:options?.length?options:undefined, option_labels:field.optionLabels,
+        default:field.default ?? field.fieldValue, min:field.min, max:field.max, step:field.step,
+        label:field.label || field.name || field.fieldName || field.id, level:'required',
+        description:field.description || '', ui_multiline:kind==='textarea' || kind==='prompt'};
+}
+function externalParameterProfile(engine){
+    const fields=engine==='rh'?rhActiveFields():currentComfyFields();
+    return {_externalEngine:engine,model_id:engine==='rh'?settings.rhAppId:settings.comfyWorkflow,
+        parameters:Object.fromEntries(fields.map(field=>[engine==='rh'?rhParamKey(field.nodeId,field.fieldName):field.id,externalParameterSpec(field,engine)]))};
+}
+function renderExternalParameterControl(field,engine){
+    const key=engine==='rh'?rhParamKey(field.nodeId,field.fieldName):field.id;
+    const spec=externalParameterSpec(field,engine);
+    const value=engine==='rh'?rhParamValue(field,null):comfyParamValue(field);
+    const profile={model_id:engine==='rh'?settings.rhAppId:settings.comfyWorkflow,parameters:{[key]:spec}};
+    const entry=renderCapabilityParameterEditor(key,spec,profile,{[key]:value});
+    const random=engine==='rh'?rhRandomEnabled(field):comfyRandomEnabledField(field);
+    const active=engine==='rh'?smartRhRandomActive(key):smartComfyRandomActive(key);
+    const dice=random?`<button type="button" class="dice-btn ${active?'active':''}" data-${engine}-random="${escapeAttr(key)}" title="${escapeAttr(active?tr('smart.diceOn'):tr('smart.diceOff'))}"><i data-lucide="dice-5"></i></button>`:'';
+    return renderCapabilityParameterControl(key,entry.label,spec,profile,value,false,entry.body+dice,entry.extraClass)
+        .replace('data-control-key=',`data-external-engine="${engine}" data-control-key=`);
+}
 function renderComfySettingField(field){
-    const value = comfyParamValue(field);
-    const label = field.name || field.input || field.id;
-    if(field.type === 'boolean') return `<button type="button" class="setting-check ${value ? 'active' : ''}" data-comfy-bool="${escapeHtml(field.id)}"><span class="check-box"></span><span>${escapeHtml(label)}</span></button>`;
-    if(field.type === 'dropdown'){
-        const opts = field.options || [];
-        const curLabel = String(value || opts[0] || label);
-        return `<div class="smart-control comfy-dropdown-control" title="${escapeHtml(label)}">
-            <button class="smart-pill" type="button"><span class="sub">${escapeHtml(curLabel)}</span></button>
-            <div class="smart-popover compact-popover">
-                <div class="smart-popover-title">${escapeHtml(label)}</div>
-                <div class="model-list">
-                    ${opts.map(o => `<button type="button" class="direct-option ${String(o) === String(value) ? 'active' : ''}" data-comfy-pick="${escapeHtml(field.id)}" data-comfy-value="${escapeHtml(o)}"><span>${escapeHtml(o)}</span></button>`).join('') || `<div class="muted-note">${escapeHtml(tr('smart.noOption'))}</div>`}
-                </div>
-            </div>
-        </div>`;
-    }
-    if(field.type === 'textarea') return `<textarea class="wide" data-comfy-param="${escapeHtml(field.id)}" placeholder="${escapeHtml(label)}" style="width:160px">${escapeHtml(value)}</textarea>`;
-    const type = (field.type === 'number' || field.type === 'slider') ? 'number' : 'text';
-    const min = field.min !== undefined ? ` min="${escapeHtml(field.min)}"` : '';
-    const max = field.max !== undefined ? ` max="${escapeHtml(field.max)}"` : '';
-    const step = field.step !== undefined ? ` step="${escapeHtml(field.step)}"` : '';
-    const isNumeric = type === 'number';
-    const inputHtml = `<input type="${type}" data-comfy-param="${escapeHtml(field.id)}" value="${escapeHtml(value)}"${min}${max}${step}>`;
-    if(isNumeric && comfyRandomEnabledField(field)){
-        const active = smartComfyRandomActive(field.id);
-        return `<div class="num-with-dice" title="${escapeHtml(label)}">
-            <span class="num-label">${escapeHtml(label)}</span>
-            ${inputHtml}
-            <button type="button" class="dice-btn ${active ? 'active' : ''}" data-comfy-random="${escapeHtml(field.id)}" title="${escapeHtml(active ? tr('smart.diceOn') : tr('smart.diceOff'))}"><i data-lucide="dice-5"></i></button>
-        </div>`;
-    }
-    if(isNumeric){
-        return `<div class="num-compact" title="${escapeHtml(label)}"><span class="num-label">${escapeHtml(label)}</span>${inputHtml}</div>`;
-    }
-    return `<div class="num-compact" title="${escapeHtml(label)}"><span class="num-label">${escapeHtml(label)}</span>${inputHtml}</div>`;
+    return renderExternalParameterControl(field,'comfy');
 }
 const RH_KNOWN_FIELD_OPTIONS = {
     aspectRatio:['1:1','16:9','9:16','4:3','3:4','4:5','5:4','3:2','2:3','21:9','9:21'],
@@ -6631,57 +6656,7 @@ function renderRhUnconnectedInputControl(field, kind){
     return `<div class="rh-ai-app-unconnected-card"><i data-lucide="${icon}"></i><span>${escapeHtml(capabilityUiText(`等待连接${labelZh}`, `Waiting for ${labelEn}`))}</span><small>${escapeHtml(capabilityUiText('请从画布素材节点拖出连线', 'Drag a connection from a canvas material node'))}</small></div>`;
 }
 function renderRhSettingField(field){
-    const key = rhParamKey(field.nodeId, field.fieldName);
-    const kind = rhFieldRole(field);
-    const label = field.label || field.fieldName || 'Field';
-    const value = rhParamValue(field, null);
-    const options = rhExtractFieldOptions(field);
-    if(kind === 'boolean'){
-        const active = String(value).toLowerCase() === 'true';
-        return `<div class="rh-ai-app-param-row" title="${escapeAttr(label)}">
-            <span class="rh-ai-app-param-label">${escapeHtml(label)}</span>
-            <button type="button" class="setting-check rh-ai-app-bool ${active ? 'active' : ''}" data-rh-bool="${escapeHtml(key)}"><span class="check-box"></span><span>${escapeHtml(active ? '是' : '否')}</span></button>
-        </div>`;
-    }
-    if(kind === 'slider'){
-        const min = Number.isFinite(Number(field.min)) ? Number(field.min) : 0;
-        const max = Number.isFinite(Number(field.max)) && Number(field.max) > min ? Number(field.max) : 1;
-        const step = Number.isFinite(Number(field.step)) && Number(field.step) > 0 ? Number(field.step) : 0.01;
-        const numericValue = Number.isFinite(Number(value)) ? Number(value) : min;
-        return `<div class="rh-ai-app-param-row" title="${escapeAttr(label)}">
-            <span class="rh-ai-app-param-label">${escapeHtml(label)}</span>
-            <div class="smart-control rh-ai-app-slider">
-                <input type="range" class="smart-range rh-slider-input" data-rh-param="${escapeHtml(key)}" data-rh-type="slider" min="${escapeHtml(min)}" max="${escapeHtml(max)}" step="${escapeHtml(step)}" value="${escapeHtml(numericValue)}">
-                <span class="rh-slider-value">${escapeHtml(numericValue)}</span>
-            </div>
-        </div>`;
-    }
-    if(options?.length){
-        const optionLabel = option => String(field?.optionLabels?.[String(option)] ?? option);
-        const currentValue = String(value ?? options[0] ?? '');
-        return `<div class="rh-ai-app-param-row" title="${escapeAttr(label)}">
-            <label class="rh-ai-app-param-label" for="rh-param-${escapeAttr(key)}">${escapeHtml(label)}</label>
-            <select id="rh-param-${escapeAttr(key)}" class="rh-ai-app-param-select" data-rh-param="${escapeAttr(key)}">
-                ${options.map(option => `<option value="${escapeAttr(option)}" ${String(option) === currentValue ? 'selected' : ''}>${escapeHtml(optionLabel(option))}</option>`).join('')}
-            </select>
-        </div>`;
-    }
-    const type = kind === 'number' ? 'number' : 'text';
-    const inputHtml = `<input class="rh-ai-app-param-input" type="${type}" data-rh-param="${escapeHtml(key)}" value="${escapeHtml(value)}">`;
-    if(kind === 'number' && rhRandomEnabled(field)){
-        const active = smartRhRandomActive(key);
-        return `<div class="rh-ai-app-param-row" title="${escapeAttr(label)}">
-            <span class="rh-ai-app-param-label">${escapeHtml(label)}</span>
-            <div class="rh-ai-app-param-input-wrap">
-                ${inputHtml}
-                <button type="button" class="dice-btn ${active ? 'active' : ''}" data-rh-random="${escapeHtml(key)}" title="${escapeHtml(active ? tr('smart.diceOn') : tr('smart.diceOff'))}"><i data-lucide="dice-5"></i></button>
-            </div>
-        </div>`;
-    }
-    return `<div class="rh-ai-app-param-row" title="${escapeAttr(label)}">
-        <span class="rh-ai-app-param-label">${escapeHtml(label)}</span>
-        ${inputHtml}
-    </div>`;
+    return renderExternalParameterControl(field,'rh');
 }
 function comfyRandomEnabledField(field){ return field?.type === 'number' && field.random_enabled === true; }
 function smartComfyRandomActive(fieldId){
@@ -6798,13 +6773,13 @@ function positionPinnedSmartPopover(control){
     const viewportBottom = viewportTop + viewportHeight;
     const margin = 10;
     const gap = 8;
-    const scale = safeScale(viewport?.scale);
+    const scale = control.closest('.composer.screen-ui') ? 1 : safeScale(viewport?.scale);
     const controlRect = control.getBoundingClientRect();
     const popoverRect = popover.getBoundingClientRect();
     const availableAbove = Math.max(0, controlRect.top - viewportTop - margin - gap);
     const availableBelow = Math.max(0, viewportBottom - controlRect.bottom - margin - gap);
     const desiredHeight = Math.max(0, popoverRect.height);
-    const forceBelow = Boolean(control.closest?.('.ai-app-composer'));
+    const forceBelow = Boolean(control.closest?.('.ai-app-composer')) && !control.classList.contains('capability-param-control');
     const openBelow = forceBelow || (desiredHeight > availableAbove && (desiredHeight <= availableBelow || availableBelow > availableAbove));
     const available = openBelow ? availableBelow : availableAbove;
     control.classList.toggle('popover-below', openBelow);
@@ -6816,7 +6791,7 @@ function positionPinnedSmartPopover(control){
     control.style.setProperty('--smart-popover-shift-x', `${shiftX / scale}px`);
 }
 function capabilityOptionButtons(container){
-    return [...(container?.children || [])].filter(item => item.matches?.('.capability-option'));
+    return [...(container?.children || [])].filter(item => item.matches?.('.capability-option:not([data-capability-unset])'));
 }
 function capabilityOptionId(button){
     if(button?.hasAttribute?.('data-capability-unset')) return '__platform_default__';
@@ -7369,7 +7344,9 @@ function bindDynamicParams(){
             if(input.dataset.param === 'videoDuration' && event?.type === 'change') renderDynamicParams();
         };
     });
-    const currentCapabilityProfile = () => {
+    const currentCapabilityProfile = control => {
+        const engine=control?.closest('[data-external-engine]')?.dataset.externalEngine;
+        if(engine) return externalParameterProfile(engine);
         if(settings.apiKind === 'text'){
             const request = textGenerationRequestForNode();
             return resolveCapabilityFamilySelection(settings.textProvider, 'text_generation', textGenerationCandidateInputCounts(request), settings.textFamilyId, settings.textModel, '', request.inputRoles).profile;
@@ -7386,7 +7363,7 @@ function bindDynamicParams(){
             const type = btn.dataset.capabilityType || 'enum';
             const raw = btn.dataset.capabilityValue;
             const value = type === 'boolean' ? raw === 'true' : type === 'integer' ? Math.round(Number(raw)) : type === 'number' ? Number(raw) : raw;
-            setCapabilityParameter(currentCapabilityProfile(), btn.dataset.capabilityParam, value);
+            setCapabilityParameter(currentCapabilityProfile(btn), btn.dataset.capabilityParam, value);
             closeAllSmartPopovers();
             renderDynamicParams();
         };
@@ -7395,7 +7372,7 @@ function bindDynamicParams(){
         btn.onclick = event => {
             event.preventDefault();
             event.stopPropagation();
-            const profile = currentCapabilityProfile();
+            const profile = currentCapabilityProfile(btn);
             setCapabilityParameter(profile, btn.dataset.capabilityParam, CAPABILITY_PARAMETER_UNSET);
             closeAllSmartPopovers();
             renderDynamicParams();
@@ -7405,7 +7382,7 @@ function bindDynamicParams(){
         btn.onclick = event => {
             event.preventDefault();
             event.stopPropagation();
-            const profile = currentCapabilityProfile();
+            const profile = currentCapabilityProfile(btn);
             const spec = profile?.parameters?.[btn.dataset.capabilityParam] || {};
             const type = String(spec.type || 'text').toLowerCase();
             const raw = btn.dataset.capabilityValue;
@@ -7418,7 +7395,7 @@ function bindDynamicParams(){
         btn.onclick = event => {
             event.preventDefault();
             event.stopPropagation();
-            const profile = currentCapabilityProfile();
+            const profile = currentCapabilityProfile(btn);
             const key = btn.dataset.capabilityParam;
             const current = Number(capabilityParameterValues(profile)[key] ?? 0);
             const delta = Number(btn.dataset.capabilityDelta || 1) * Number(btn.dataset.capabilityStep || 1);
@@ -7433,15 +7410,17 @@ function bindDynamicParams(){
     dynamicParams.querySelectorAll('input[data-capability-param],select[data-capability-param],textarea[data-capability-param]').forEach(input => {
         const update = event => {
             event?.stopPropagation?.();
-            const profile = currentCapabilityProfile();
+            const profile = currentCapabilityProfile(input);
             const type = input.dataset.capabilityType || 'text';
-            const value = input.value === CAPABILITY_PARAMETER_UNSET ? CAPABILITY_PARAMETER_UNSET
-                : type === 'boolean' ? Boolean(input.checked)
-                    : (type === 'integer' ? Math.round(Number(input.value)) : type === 'number' ? Number(input.value) : input.value);
+            const value = input.value === CAPABILITY_PARAMETER_UNSET ? CAPABILITY_PARAMETER_UNSET : type === 'boolean' ? Boolean(input.checked) : capabilityInputValue(input);
+            if(value === undefined) return;
+            syncCapabilityNumericControls(input,value);
             setCapabilityParameter(profile, input.dataset.capabilityParam, value);
             const output = input.closest('.capability-range-field')?.querySelector('output');
             if(output) output.textContent = String(value);
-            refreshCapabilityModelHelp(profile);
+            const label=input.closest('.capability-param-control')?.querySelector('.capability-param-label');
+            if(label) label.textContent=capabilityParameterPreview(input.dataset.capabilityParam,profile?.parameters?.[input.dataset.capabilityParam],value,false);
+            if(!profile?._externalEngine) refreshCapabilityModelHelp(profile);
         };
         input.onclick = event => event.stopPropagation();
         input.oninput = input.onchange = update;
@@ -7531,13 +7510,18 @@ function bindDynamicParams(){
         input.oninput = input.onchange = event => {
             event?.stopPropagation?.();
             const key = input.dataset.rhParam;
+            if(input.type==='number' && input.dataset.rhType==='slider'){
+                if(input.value==='' || !Number.isFinite(Number(input.value))) return;
+                input.value=String(Math.max(Number(input.min),Math.min(Number(input.max),Number(input.value))));
+            }
             settings.rhParams = settings.rhParams || {};
             const cur = settings.rhParams[key] || {};
             settings.rhParams[key] = {...cur, value:input.value};
             const control = input.closest('.smart-control');
             const valueText = control?.querySelector('.rh-slider-value');
             const pillValue = control?.querySelector('.rh-slider-pill-value');
-            if(valueText) valueText.textContent = input.value;
+            if(valueText && valueText !== input) valueText.value = input.value;
+            control?.querySelectorAll('[data-rh-param]').forEach(peer=>{if(peer!==input)peer.value=input.value;});
             if(pillValue) pillValue.textContent = input.value;
             persistActiveSmartSettings();
             scheduleSave();
@@ -7609,6 +7593,7 @@ async function loadConfig(){
             ? cfg.api_providers.map(provider => SMART_NODE_CONTRACT.hydrateRunningHubProviderApps(provider))
             : [];
         modelCapabilityCatalog = Array.isArray(catalog?.providers) ? catalog : {schema_version:0, providers:[]};
+        window.dispatchEvent(new Event('canvas-capabilities-ready'));
         modelPricingCatalog = pricing && typeof pricing === 'object' ? pricing : {schema_version:0, default_status:'pending', entries:{}, unit_definitions:{}};
         if(smartPriceComparisonPanel?.classList.contains('open')){
             populatePriceComparisonFilters();
@@ -8201,13 +8186,6 @@ function applyPromptTemplateToNode(mode='positive'){
             libraryKind:activeLibrary.kind || activeLibrary.type || 'prompt',
             appliedAt:Date.now()
         };
-        if((activeLibrary.kind || activeLibrary.type) === 'skill'){
-            node.runSettings.textSystemSkillId = template.sourceId || template.id || '';
-            node.runSettings.textSystemSkillSnapshot = cloneSmartSettings(node.runSettings.textSystemTemplateSnapshot);
-        } else {
-            delete node.runSettings.textSystemSkillId;
-            delete node.runSettings.textSystemSkillSnapshot;
-        }
         if(activeComposerNode()?.id === node.id) settings = cloneSmartSettings(node.runSettings);
         closePromptTemplatePanel();
         renderDynamicParams();
@@ -8478,55 +8456,6 @@ function assetCategories(type='image'){
     const library = activeAssetLibrary();
     return (library?.categories || assetLibrary.categories || []).filter(cat => (cat.type || 'image') === type);
 }
-function assetSmartClassKey(entry){
-    if(!entry?.dimension || !entry?.tag) return '';
-    return `${String(entry.dimension)}::${String(entry.tag)}`;
-}
-function assetSmartClassOptionId(entry){
-    const key = assetSmartClassKey(entry);
-    return key ? `${ASSET_SMART_CATEGORY_PREFIX}${key}` : '';
-}
-function parseAssetSmartClassId(id=''){
-    const value = String(id || '');
-    if(!value.startsWith(ASSET_SMART_CATEGORY_PREFIX)) return null;
-    const raw = value.slice(ASSET_SMART_CATEGORY_PREFIX.length);
-    const index = raw.indexOf('::');
-    if(index < 0) return null;
-    return {dimension:raw.slice(0, index), tag:raw.slice(index + 2)};
-}
-function assetSmartClassEntries(){
-    const groups = new Map();
-    assetCategories('image').forEach(cat => {
-        (cat.items || []).forEach(item => {
-            const flat = Array.isArray(item?.classification?.flat) ? item.classification.flat : [];
-            flat.forEach(entry => {
-                const key = assetSmartClassKey(entry);
-                if(!key) return;
-                const prev = groups.get(key) || {
-                    id:assetSmartClassOptionId(entry),
-                    dimension:String(entry.dimension || ''),
-                    label:String(entry.label || entry.dimension || '分类'),
-                    tag:String(entry.tag || ''),
-                    count:0
-                };
-                prev.count += 1;
-                groups.set(key, prev);
-            });
-        });
-    });
-    return [...groups.values()].sort((a, b) => {
-        if(a.label !== b.label) return a.label.localeCompare(b.label, 'zh-CN');
-        return b.count - a.count || a.tag.localeCompare(b.tag, 'zh-CN');
-    });
-}
-function itemsForAssetSmartClass(optionId=''){
-    const parsed = parseAssetSmartClassId(optionId);
-    if(!parsed) return [];
-    return assetCategories('image').flatMap(cat => cat.items || []).filter(item => {
-        const flat = Array.isArray(item?.classification?.flat) ? item.classification.flat : [];
-        return flat.some(entry => String(entry.dimension || '') === parsed.dimension && String(entry.tag || '') === parsed.tag);
-    });
-}
 function workflowAssetCategories(){
     const library = assetLibraries().find(item => item.id === activeWorkflowAssetLibraryId) || null;
     return (library?.categories || []).filter(cat => (cat.type || 'image') === 'workflow');
@@ -8567,7 +8496,6 @@ function activeWorkflowAssetLibrary(){
 }
 function activeAssetCategory(){
     const cats = assetCategories('image');
-    if(parseAssetSmartClassId(activeAssetCategoryId)) return null;
     if(!cats.length) return null;
     return cats.find(cat => cat.id === activeAssetCategoryId) || cats[0];
 }
@@ -8658,7 +8586,7 @@ function smartNodeHasCompletedResult(node){
 }
 function liveSmartNode(node){
     if(!node?.id) return node;
-    return nodes.find(n => n.id === node.id) || node;
+    return nodes.find(n => n.id === node.id) || CanvasCreation.tasks(nodes).find(n => n.id === node.id) || node;
 }
 function clearSmartNodeBusyState(node){
     if(!node) return node;
@@ -8812,6 +8740,7 @@ function mergeSmartGenerationVersions(localVersions=[], remoteVersions=[]){
     return merged;
 }
 function mergeSmartNode(local, remote){
+    if(local.creationId && remote.creationId) return CanvasCreation.merge(local,remote);
     const images = mergeSmartImageLists(local.images, remote.images);
     const resultVersions = mergeSmartGenerationVersions(local.resultVersions, remote.resultVersions);
     const preferredVersionSource = (Array.isArray(local?.resultVersions) ? local.resultVersions.length : 0)
@@ -9060,7 +8989,7 @@ function assetThumbHtml(item){
         return `<div class="asset-thumb-wrap">${smartVideoPreviewHtml(item, 256, 'class="asset-thumb" loading="lazy" decoding="async" alt=""')}<span class="asset-video-badge"><i data-lucide="film"></i>VIDEO</span></div>`;
     }
     if(kind === 'audio'){
-        return `<div class="asset-thumb-wrap media-thumb audio-thumb asset-thumb"><i data-lucide="file-audio"></i><span>${escapeHtml(item.name || 'Audio')}</span></div>`;
+        return `<div class="asset-thumb-wrap media-thumb audio-thumb asset-thumb"><i data-lucide="${StudioMedia.category(item)==='music'?'music-2':'audio-lines'}"></i><span>${escapeHtml(item.name || 'Audio')}</span></div>`;
     }
     if(kind === 'workflow'){
         return `<div class="asset-thumb-wrap media-thumb workflow-thumb asset-thumb"><i data-lucide="workflow"></i><span>${escapeHtml(item.name || 'Workflow')}</span></div>`;
@@ -9107,24 +9036,14 @@ function renderAssetLibrary(){
         return;
     }
     if(!imageMode && !workflowMode){ refreshIcons(); return; }
-    const baseCats = workflowMode ? workflowAssetCategories() : assetCategories('image');
-    const smartClassCats = imageMode && !localMode ? assetSmartClassEntries().map(entry => ({
-        ...entry,
-        id:entry.id,
-        name:`${entry.label} / ${entry.tag} (${entry.count})`,
-        type:'image',
-        smartClass:true,
-        items:[]
-    })) : [];
-    const cats = workflowMode ? baseCats : [...baseCats, ...smartClassCats];
+    const cats = workflowMode ? workflowAssetCategories() : assetCategories('image');
     if(workflowMode && !cats.some(cat => cat.id === activeWorkflowAssetCategoryId)) activeWorkflowAssetCategoryId = cats[0]?.id || '';
     if(imageMode && !cats.some(cat => cat.id === activeAssetCategoryId)) activeAssetCategoryId = cats[0]?.id || '';
     assetCategorySelect.innerHTML = cats.map(cat => `<option value="${escapeHtml(cat.id)}" ${cat.id === (workflowMode ? activeWorkflowAssetCategoryId : activeAssetCategoryId) ? 'selected' : ''}>${escapeHtml(cat.name || (workflowMode ? '工作流' : tr('smart.assetFolder')))}</option>`).join('');
     const cat = workflowMode ? activeWorkflowAssetCategory() : activeAssetCategory();
-    const smartClass = imageMode ? parseAssetSmartClassId(activeAssetCategoryId) : null;
-    const items = smartClass ? itemsForAssetSmartClass(activeAssetCategoryId) : (cat?.items || []);
-    if(assetAddCategoryBtn) assetAddCategoryBtn.disabled = Boolean(smartClass) || localMode;
-    if(assetRenameCategoryBtn) assetRenameCategoryBtn.disabled = !cat || Boolean(smartClass) || (localMode && (cat.id === '__root__' || !cat.id));
+    const items = cat?.items || [];
+    if(assetAddCategoryBtn) assetAddCategoryBtn.disabled = localMode;
+    if(assetRenameCategoryBtn) assetRenameCategoryBtn.disabled = !cat || (localMode && (cat.id === '__root__' || !cat.id));
     assetGrid.innerHTML = items.length ? items.map(item => `
         <div class="asset-item ${workflowMode ? 'workflow-asset-item' : ''}" draggable="${workflowMode ? 'false' : 'true'}" data-asset-id="${escapeHtml(item.id)}" data-url="${escapeHtml(item.url)}" data-name="${escapeHtml(item.name || 'asset')}" data-kind="${escapeHtml(assetMediaKind(item))}">
             ${assetThumbHtml(item)}
@@ -9139,7 +9058,7 @@ function renderAssetLibrary(){
                        <button class="asset-mini-btn" type="button" data-delete-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>`}
             </div>
         </div>
-    `).join('') : `<div class="asset-empty">${escapeHtml(localMode ? '暂无临时素材，可拖入图片、视频或音频' : (smartClass ? '这个智能分类下暂无素材' : (workflowMode ? '暂无工作流资产' : tr('smart.assetEmpty'))))}</div>`;
+    `).join('') : `<div class="asset-empty">${escapeHtml(localMode ? '暂无临时素材，可拖入图片、视频或音频' : (workflowMode ? '暂无工作流资产' : tr('smart.assetEmpty')))}</div>`;
     if(workflowMode) bindWorkflowAssetItemEvents();
     else bindAssetItemEvents();
     bindSmartPreviewImageFallbacks(assetGrid);
@@ -9574,7 +9493,7 @@ async function restoreCanvasRuns(){
         target.runPromptRefs = cloneSmartSettings(refs);
         restoredGenerationMetadata = true;
     };
-    nodes.forEach(node => {
+    [...nodes, ...CanvasCreation.tasks(nodes)].forEach(node => {
         const run = runById.get(canvasRunId(node));
         if(!run) return;
         restoreGenerationReferences(node);
@@ -9662,7 +9581,8 @@ async function loadCanvas(){
         canvasUsesConnections = Object.prototype.hasOwnProperty.call(canvas || {}, 'connections');
         document.title = canvas.title || tr('canvas.smartCanvas');
         document.getElementById('smartTitle').textContent = canvas.title || tr('canvas.smartCanvas');
-    const migration = SMART_NODE_CONTRACT.migrateLegacyCanvas(canvas.nodes, canvas.connections);
+    const legacyMigration = SMART_NODE_CONTRACT.migrateLegacyCanvas(canvas.nodes, canvas.connections);
+    const migration = CanvasCreation.migrate(legacyMigration.nodes, legacyMigration.connections);
     nodes = migration.nodes.map(normalizeLegacySmartNode).filter(Boolean);
     const hydratedTextResults = await hydrateTextResultMediaContent(nodes);
     const migratedMusicNodes = migrateLegacyMusicGeneratorNodes();
@@ -9703,12 +9623,17 @@ async function loadCanvas(){
         if(settings.comfy_params && !settings.comfyParams) settings.comfyParams = settings.comfy_params;
         updateProviderModels();
         await restoreCanvasRuns();
+        nodes.forEach(node => {
+            const snapshot = manualExecutionSettingsSnapshot(node, node.runSettings || {});
+            if(snapshot) manualNodeSettingsFingerprints.set(node.id, JSON.stringify(snapshot));
+        });
         applyViewport();
         render();
     if(smartNodeMigrationPending || migratedMusicNodes || initializedExecutionDefaults || cleanedDetachedInputs || cleanedCompletedState || recoveredLoopOutputs || hiddenCompletedTimers || hydratedTextResults) scheduleSave();
         resumeSmartPendingTasks();
         resumeJimengPendingNodes();
         startCanvasMetaPoll();
+        window.dispatchEvent(new Event('canvas-ready'));
     } catch(e) { toast(tr('smart.toastCanvasFail')); }
 }
 function migrateLegacyMusicGeneratorNodes(){
@@ -9732,6 +9657,7 @@ function migrateLegacyMusicGeneratorNodes(){
     return changed;
 }
 function scheduleSave(){
+    CanvasCreation.reconcile(nodes, undefined, canvas?.connections || []);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveCanvas, 450);
 }
@@ -9835,6 +9761,48 @@ function inheritNodeMetaFromImage(node){
     if(!node) return;
     node.images = (node.images || []).map(img => stripImageGenerationMeta(img));
 }
+const creationHydrations = new Map();
+async function restoreCreationFromMaterial(node){
+    if(creationHydrations.has(node.id)) return creationHydrations.get(node.id);
+    if(node.type !== SMART_NODE_TYPES.material || node.images?.length !== 1) return node;
+    const media = node.images[0];
+    const resultId = media.resultId || media.result_id || String(media.url || '').match(/^\/api\/results\/([^/?]+)/)?.[1];
+    if(!resultId) return node;
+    const originalSignature = node.creationSignature;
+    const work=(async()=>{
+        const candidates=nodes.filter(n=>n.id!==node.id && isSmartExecutionNode(n) && n.images?.some(item=>item.url===media.url) && (!media.creationId || n.creationId===media.creationId));
+        const same=new Set(candidates.map(n=>n.creationId)).size===1 ? candidates[0] : null;
+        let record=same ? {...CanvasCreation.snapshot(same),creationId:same.creationId,creationOwnerNodeId:same.creationOwnerNodeId,creationDetails:same.creationDetails} : null;
+        let ambiguous=false;
+        if(!record){
+            const response=await fetch(`/api/results/${encodeURIComponent(resultId)}/creation`);
+            if(response.ok){
+                const recipes=(await response.json()).recipes||[];
+                record=recipes.find(r=>r.recordId===media.creationRecordId) || recipes.slice(-1)[0];
+                ambiguous=!media.creationRecordId && new Set(recipes.map(r=>r.creationId)).size>1;
+            }
+        }
+        if(!record || !CanvasCreation.isCreation(record) || !nodes.includes(node) || node.creationSignature!==originalSignature) return node;
+        const keep={id:node.id,x:node.x,y:node.y,images:node.images,w:node.w,h:node.h};
+        Object.assign(node,cloneSmartSettings(record),keep);
+        node.sourceKind='result'; node.creationRevision=1;
+        node.creationId=ambiguous ? uid('creation') : record.creationId || uid('creation');
+        node.creationOwnerNodeId=!ambiguous && nodes.some(n=>n.id===record.creationOwnerNodeId) ? record.creationOwnerNodeId : node.id;
+        if(same){
+            node.manualInputRefs=cloneSmartSettings(same.manualInputRefs||[]);
+            node.creationInputBinding=cloneSmartSettings(same.creationInputBinding||[]);
+            canvas.connections.push(...(canvas.connections||[]).filter(c=>c.to===same.id).map(c=>({...c,id:uid('edge'),to:node.id})));
+            node.resultVersions=cloneSmartSettings(same.resultVersions||[]);
+            node.activeResultVersion=same.activeResultVersion||0;
+        } else {
+            node.manualInputRefs=cloneSmartSettings(record.runInputRefs?.length?record.runInputRefs:record.manualInputRefs||[]);
+            node.resultVersions=[CanvasCreation.snapshot(node,record.recordId||uid('version'))]; node.activeResultVersion=0;
+        }
+        node.creationSignature=undefined; CanvasCreation.ensure(node);
+        render(); scheduleSave(); return node;
+    })().catch(error=>{console.warn('素材配方读取失败',String(error?.message||error)); return node;}).finally(()=>creationHydrations.delete(node.id));
+    creationHydrations.set(node.id,work); return work;
+}
 function createNode(x, y, images=[], options={}){
     if(!options.skipUndo) pushUndo();
     const nodeImages = (images || []).map(img => ({...img}));
@@ -9847,13 +9815,16 @@ function createNode(x, y, images=[], options={}){
         node.mediaSizeMode = 'auto';
     }
     inheritNodeMetaFromImage(node);
+    CanvasCreation.ensure(node);
     nodes.push(node);
     if(options.select !== false) selectedId = node.id;
     render();
     scheduleSave();
+    void restoreCreationFromMaterial(node);
     return node;
 }
 function createExecutionNode(x, y, type, options={}){
+    const inherited = options.inheritManual ? manualExecutionSettingsForType(type) : {};
     if(!options.skipUndo) pushUndo();
     const node = SMART_NODE_CONTRACT.normalizeExecutionNode({
         id:uid('run'),
@@ -9896,8 +9867,12 @@ function createExecutionNode(x, y, type, options={}){
         node.runSettings.apiKind = 'image';
         node.runSettings.comfyMode = 'custom';
     }
-    sanitizeSmartApiSelection(node.runSettings);
-    ensureExecutionSelectionDefaults(node.runSettings, node, {resetSelection:true});
+    const hasInherited = Object.keys(inherited).length > 0;
+    if(hasInherited) node.runSettings = SMART_NODE_CONTRACT.normalizeExecutionSettings(node, {...node.runSettings, ...inherited});
+    if(!hasInherited) sanitizeSmartApiSelection(node.runSettings);
+    ensureExecutionSelectionDefaults(node.runSettings, node, {resetSelection:!hasInherited});
+    node.runSettings=SMART_NODE_CONTRACT.normalizeExecutionSettings(node,node.runSettings);
+    CanvasCreation.ensure(node);
     nodes.push(node);
     if(options.select !== false) selectedId = node.id;
     render();
@@ -9932,6 +9907,7 @@ function createResultGroupNode(x, y, entries=[], options={}){
         scale:MEDIA_GROUP_DEFAULT_SCALE,
         created_at:Date.now()
     };
+    CanvasCreation.ensure(node);
     nodes.push(node);
     items.forEach(entry => addConnection(entry.nodeId, node.id, 'result'));
     if(options.select !== false) selectedId = node.id;
@@ -9961,6 +9937,7 @@ function createPromptNode(x, y, options={}){
         llmInstruction:'',
         created_at:Date.now()
     };
+    CanvasCreation.ensure(node);
     nodes.push(node);
     if(options.select !== false) selectedId = node.id;
     render();
@@ -9970,6 +9947,7 @@ function createPromptNode(x, y, options={}){
 function createLoopNode(x, y, options={}){
     if(!options.skipUndo) pushUndo();
     const node = {id:uid('loop'), type:'smart-loop', x, y, w:340, h:168, title:'Loop', count:1, mode:'serial', showPrompt:false, imageInput:false, loopStart:1, imageBatchSize:1, variablePrompt:'', created_at:Date.now()};
+    CanvasCreation.ensure(node);
     nodes.push(node);
     if(options.select !== false) selectedId = node.id;
     render();
@@ -10014,6 +9992,7 @@ function createDirectorNode(kind, x, y, options={}){
         created_at:Date.now()
     }));
     smartMinimaxEnsureSegment(node);
+    CanvasCreation.ensure(node);
     nodes.push(node);
     if(options.select !== false) selectedId = node.id;
     render();
@@ -10026,6 +10005,7 @@ function createMinimaxNode(x, y, options={}){
 function createSmartGroupNode(x, y, options={}){
     if(!options.skipUndo) pushUndo();
     const node = {id:uid('group'), type:'smart-group', x, y, w:SMART_GROUP_DEFAULT_WIDTH, h:SMART_GROUP_DEFAULT_HEIGHT, title:'智能分组', items:[], created_at:Date.now()};
+    CanvasCreation.ensure(node);
     nodes.push(node);
     if(options.select !== false) selectedId = node.id;
     render();
@@ -10056,6 +10036,8 @@ function cloneSmartNode(node, dx=0, dy=0){
     copy.x = (Number(node.x) || 0) + dx;
     copy.y = (Number(node.y) || 0) + dy;
     clearSmartNodeTransientRunState(copy, {clearRunHistory:true});
+    delete copy.creationTasks;
+    if(['script','segment'].includes(copy.production?.role)) copy.production={role:'none'};
     if(copy.type === 'smart-group') copy.title = copy.title || '智能分组';
     return copy;
 }
@@ -10065,7 +10047,7 @@ function copySelectedNodes(){
     const copiedNodes = ids.map(id => nodes.find(n => n.id === id)).filter(Boolean);
     if(!copiedNodes.length) return;
     const idSet = new Set(copiedNodes.map(n => n.id));
-    const copiedConnections = (canvas.connections || []).filter(c => idSet.has(c.from) && idSet.has(c.to));
+    const copiedConnections = (canvas.connections || []).filter(c => idSet.has(c.to));
     nodeClipboard = {
         nodes:JSON.parse(JSON.stringify(copiedNodes)),
         connections:JSON.parse(JSON.stringify(copiedConnections))
@@ -10075,83 +10057,14 @@ function copySelectedNodes(){
 function selectedClipboardMedia(){
     return selectedNodeIds()
         .map(id => nodes.find(node => node.id === id))
-        .filter(node => isSmartMaterialNode(node))
+        .filter(node => isSmartImageNode(node))
         .flatMap(node => (node.images || []).filter(item => item?.url || isTextMediaItem(item)).map(item => ({node, item})));
-}
-function clipboardMediaManifest(entries){
-    return (entries || []).map(({node, item}, index) => ({
-        index,
-        nodeId:String(node?.id || ''),
-        kind:mediaKindForItem(item || {}),
-        name:String(item?.name || node?.title || `素材${index + 1}`),
-        url:String(item?.url || ''),
-        text:String(SMART_NODE_CONTRACT.textContentForMediaItem(item) || '')
-    }));
-}
-function clipboardMediaPlainText(manifest){
-    return (manifest || []).map(item => {
-        const value = item.kind === 'text' ? item.text : item.url;
-        return value ? `${item.name}:\n${value}` : item.name;
-    }).join('\n\n');
-}
-function clipboardMediaHtml(manifest){
-    return (manifest || []).map(item => {
-        const name = escapeHtml(item.name);
-        if(item.kind === 'text') return `<section><strong>${name}</strong><pre>${escapeHtml(item.text)}</pre></section>`;
-        if(!item.url) return `<p><strong>${name}</strong></p>`;
-        const url = escapeAttr(new URL(item.url, window.location.origin).href);
-        if(item.kind === 'image') return `<figure><img src="${url}" alt="${name}"><figcaption>${name}</figcaption></figure>`;
-        return `<p><strong>${name}</strong><br><a href="${url}">${url}</a></p>`;
-    }).join('');
-}
-async function clipboardBlobForMedia(item){
-    const response = await fetch(displayMediaUrl(item));
-    if(!response.ok) throw new Error('素材读取失败');
-    const blob = await response.blob();
-    if(mediaKindForItem(item || {}) !== 'image' || blob.type === 'image/png') return blob;
-    const bitmap = await createImageBitmap(blob);
-    const canvasEl = document.createElement('canvas');
-    canvasEl.width = bitmap.width;
-    canvasEl.height = bitmap.height;
-    canvasEl.getContext('2d').drawImage(bitmap, 0, 0);
-    bitmap.close?.();
-    return await new Promise(resolve => canvasEl.toBlob(resolve, 'image/png'));
 }
 async function copySelectedMediaToSystemClipboard(){
     const entries = selectedClipboardMedia();
     if(!entries.length){ toast(tr('smart.clipboardNoMaterial')); return false; }
-    const manifest = clipboardMediaManifest(entries);
-    const item = entries.length === 1 ? entries[0].item : null;
-    const kind = item ? mediaKindForItem(item || {}) : '';
     try {
-        if(entries.length > 1){
-            const plain = clipboardMediaPlainText(manifest);
-            const html = clipboardMediaHtml(manifest);
-            const payload = {
-                'text/plain':new Blob([plain], {type:'text/plain'}),
-                'text/html':new Blob([html], {type:'text/html'})
-            };
-            if(window.ClipboardItem && navigator.clipboard?.write){
-                try {
-                    await navigator.clipboard.write([new ClipboardItem(payload)]);
-                } catch(_) {
-                    if(!await copyTextToClipboard(plain)) throw new Error(tr('smart.clipboardWriteDenied'));
-                }
-            } else if(!await copyTextToClipboard(plain)) {
-                throw new Error(tr('smart.clipboardWriteDenied'));
-            }
-        } else if(kind === 'text'){
-            const text = SMART_NODE_CONTRACT.textContentForMediaItem(item) || (item.url
-                ? await fetch(displayMediaUrl(item)).then(response => response.ok ? response.text() : Promise.reject(new Error('文本读取失败')))
-                : '');
-            if(!await copyTextToClipboard(text)) throw new Error(tr('smart.clipboardWriteDenied'));
-        } else if(kind === 'image' && navigator.clipboard?.write && window.ClipboardItem){
-            const blob = await clipboardBlobForMedia(item);
-            await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
-        } else {
-            const absoluteUrl = new URL(displayMediaUrl(item), window.location.origin).href;
-            if(!await copyTextToClipboard(absoluteUrl)) throw new Error(tr('smart.clipboardWriteDenied'));
-        }
+        await StudioMedia.copy(entries.map(entry=>({...entry.item,kind:mediaKindForItem(entry.item),text:SMART_NODE_CONTRACT.textContentForMediaItem(entry.item)||undefined})));
         toast(entries.length > 1 ? trf('smart.clipboardCopiedMany', {n:entries.length}) : tr('smart.clipboardCopiedOne'));
         return true;
     } catch(error){
@@ -10179,13 +10092,14 @@ function pasteNodes(){
     });
     copies.forEach(copy => {
         if(Array.isArray(copy.inputNodeIds)){
-            copy.inputNodeIds = copy.inputNodeIds.map(id => idMap.get(id)).filter(Boolean);
+            copy.inputNodeIds = copy.inputNodeIds.map(id => idMap.get(id) || id).filter(id=>nodes.some(n=>n.id===id) || [...idMap.values()].includes(id));
         }
         if(copy.sourceNodeId) copy.sourceNodeId = idMap.get(copy.sourceNodeId) || '';
     });
     const newConnections = (nodeClipboard.connections || []).map(conn => ({
         ...conn,
-        from:idMap.get(conn.from),
+        id:uid('edge'),
+        from:idMap.get(conn.from) || (nodes.some(n=>n.id===conn.from) ? conn.from : null),
         to:idMap.get(conn.to)
     })).filter(conn => conn.from && conn.to && conn.from !== conn.to);
     canvas.connections = [...(canvas.connections || []), ...newConnections];
@@ -10235,7 +10149,8 @@ function pasteAssetsFromInbox(){
     toast(`已粘贴 ${created.length} 个素材到画布`);
     return true;
 }
-function duplicateForAltDrag(node, preserveConnections=false){
+function duplicateForAltDrag(node, preserveConnections=true){
+    if(isSmartExecutionNode(node)) preserveConnections=true;
     const ids = (isNodeSelected(node.id) ? selectedNodeIds() : [node.id]);
     const sourceNodes = ids.map(id => nodes.find(n => n.id === id)).filter(Boolean);
     if(!sourceNodes.length) return node;
@@ -10257,7 +10172,7 @@ function duplicateForAltDrag(node, preserveConnections=false){
         const idSet = new Set(sourceNodes.map(n => n.id));
         const newConnections = (canvas.connections || [])
             .filter(conn => idSet.has(conn.to))
-            .map(conn => ({...conn, from:idMap.get(conn.from) || conn.from, to:idMap.get(conn.to) || conn.to}))
+            .map(conn => ({...conn, id:uid('edge'), from:idMap.get(conn.from) || conn.from, to:idMap.get(conn.to) || conn.to}))
             .filter(conn => conn.from && conn.to && conn.from !== conn.to);
         const nextConnections = [...(canvas.connections || [])];
         newConnections.forEach(conn => {
@@ -10318,6 +10233,7 @@ function renderConnections(){
         if(!fromNode || !toNode) return '';
         const fr = nodeRect(fromNode), tr = nodeRect(toNode);
         const kind = item.kind;
+        const isStory = kind === 'story';
         const isHistory = kind === 'history';
         const isResult = kind === 'result';
         const dataIndex = item.indices.join(',');
@@ -10328,7 +10244,7 @@ function renderConnections(){
         if(states.includes('active')) cascadeState = 'active';
         else if(states.some(s => s !== 'done')) cascadeState = states.find(s => s !== 'done');
         else if(states.length) cascadeState = 'done';
-        const isCascade = !isHistory && !isResult && (edgeKeys.some(k => cascadeKeys.has(k)) || Boolean(cascadeState) || isInsertPreview);
+        const isCascade = !isStory && !isHistory && !isResult && (edgeKeys.some(k => cascadeKeys.has(k)) || Boolean(cascadeState) || isInsertPreview);
         const isPendingLine = !isCascade && item.targets.some(t => nodes.find(n => n.id === t)?.pending);
         const isSelectedLine = selectedConnIds.size > 0 && (selectedConnIds.has(item.from) || selectedConnIds.has(item.toId) || item.targets.some(t => selectedConnIds.has(t)));
         const sourceConnection = item.connections?.length === 1 ? item.connections[0] : null;
@@ -10349,6 +10265,7 @@ function renderConnections(){
             isCascade && cascadeState === 'done' ? 'conn-cascade-done' : '',
             isCascade && Boolean(cascadeState) && cascadeState !== 'done' ? 'conn-cascade-wait' : '',
             isCascade && cascadeState === 'active' ? 'conn-cascade-active' : '',
+            isStory ? 'conn-story' : '',
             isHistory ? 'conn-history' : '',
             isResult ? 'conn-result' : '',
             isSelectedLine ? 'conn-selected' : ''
@@ -10482,6 +10399,7 @@ function updateNodeElementDuringResize(node){
     }
     const active = selectedNode();
     if(active?.id === node.id) positionComposerForNode(active);
+    CanvasNodeView.layoutOverlays(world,viewport.scale,shell.clientWidth);
     scheduleInteractionLayerRefresh();
 }
 function syncSmartGroupMemberElements(group){
@@ -11252,7 +11170,7 @@ function openSmartLogLightbox(url, kind='image'){
         box = document.createElement('div');
         box.id = 'smartLogLightbox';
         box.className = 'smart-log-lightbox';
-        box.innerHTML = `<img alt="preview" draggable="false"><button class="smart-log-lightbox-close" type="button" aria-label="${escapeAttr(tr('common.close') || '关闭')}"><i data-lucide="x"></i></button>`;
+        box.innerHTML = `<div class="media-preview-exit-hints"><span>${escapeHtml(tr('smart.previewExitEsc'))}</span><span>${escapeHtml(tr('smart.previewExitBackdrop'))}</span></div><img alt="preview" draggable="false">`;
         document.body.appendChild(box);
         box.addEventListener('click', e => {
             if(e.target === box || e.target.closest('.smart-log-lightbox-close')) closeSmartLogLightbox();
@@ -13121,7 +13039,7 @@ function nodeBodyHtml(node, layout){
     }
     if(node.type === 'smart-prompt') return promptNodeBodyHtml(node);
     if(node.type === 'smart-loop') return smartLoopBodyHtml(node);
-    if(isSmartExecutionNode(node)) return smartExecutionNodeBodyHtml(node);
+    if(isSmartExecutionNode(node)) return fusedCreationBodyHtml(node, layout);
     const imgs = (node.images || []).map(imageForDisplay);
     if(node.jimengPending && node.jimengPending.submitId && imgs.length === 0){
         return jimengPendingBodyHtml(node, layout);
@@ -13146,9 +13064,9 @@ function nodeBodyHtml(node, layout){
     if(imgs.length > 1){
         const visibleRows = Math.max(1, Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, Number(layout.visibleRows || layout.rows || 1)));
         const maxHeight = visibleRows * Number(layout.thumb || 96) + Math.max(0, visibleRows - 1) * 8;
-        return `<div class="thumb-grid" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item has-outside-image-name ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${imageNameBadgeHtml(img, {outside:true})}${imageResolutionBadgeHtml(img)}<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`).join('')}</div>`;
+        return `<div class="thumb-grid" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item has-outside-image-name ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${imageNameBadgeHtml(img, {outside:true})}${imageResolutionBadgeHtml(img)}</div>`).join('')}</div>`;
     }
-    if(imgs[0]) return `<div class="image-wrap has-outside-image-name ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${imageNameBadgeHtml(imgs[0], {outside:true})}${imageResolutionBadgeHtml(imgs[0])}<button class="mini-x image-delete" type="button" data-image-index="0" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`;
+    if(imgs[0]) return `<div class="image-wrap has-outside-image-name ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${imageNameBadgeHtml(imgs[0], {outside:true})}${imageResolutionBadgeHtml(imgs[0])}</div>`;
     return `<div class="node-drop" data-upload-action="files">
         <span class="upload-node-main"><i data-lucide="upload-cloud"></i></span>
         <span class="upload-node-title">${escapeHtml(tr('smart.createImportNode'))}</span>
@@ -13186,7 +13104,7 @@ function smartExecutionNodeMeta(node){
         ? Object.values(textGenerationRequestForNode(node).inputCounts || {}).reduce((sum, count) => sum + Number(count || 0), 0)
         : inputImagesFor(node).filter(item => item?.url).length;
     return {
-        title:SMART_NODE_CONTRACT.titleForType(node.type),
+        title:node.title || SMART_NODE_CONTRACT.titleForType(node.type),
         icon:node.type === SMART_NODE_TYPES.textGenerator
             ? 'text-cursor-input'
             : node.type === SMART_NODE_TYPES.videoGenerator
@@ -13206,6 +13124,22 @@ function smartExecutionNodeMeta(node){
         inputCount:mediaInputCount || inputNodesFor(node).length,
         unavailable:false
     };
+}
+function fusedCreationBodyHtml(node, layout){
+    const shared = nodes.filter(n => n.creationId && n.creationId === node.creationId).length;
+    const tasks = CanvasCreation.tasks(nodes).filter(task => task.creationId === node.creationId && !['succeeded','partially_succeeded','cancelled'].includes(task.runStatus));
+    const activeTask = tasks.find(task=>task.runStatus!=='failed');
+    const generating = Boolean(activeTask);
+    const preview = node.images?.length
+        ? nodeBodyHtml({...node, type:SMART_NODE_TYPES.material}, layout)
+        : smartExecutionNodeBodyHtml(node);
+    const status = tasks.map(task => {
+        const recoverable=smartRecoverableImageTask(task);
+        const query=task.jimengPending ? `<button type="button" data-jimeng-query="${escapeAttr(task.id)}">${escapeHtml(capabilityUiText('查询结果','Check result'))}</button>`
+            : recoverable && !recoverable.recoveryBlocked ? `<button type="button" data-image-task-query="${escapeAttr(task.id)}" data-task-id="${escapeAttr(recoverable.taskId)}">${escapeHtml(capabilityUiText('查询结果','Check result'))}</button>` : '';
+        return `<div class="creation-task ${task.runStatus === 'failed' ? 'is-failed' : ''}"><span>${escapeHtml(task.runStatus === 'failed' ? task.runError || capabilityUiText('运行失败','Run failed') : recoverable?.recoveryBlocked ? capabilityUiText('缺少上游任务编号，未自动重提','Missing upstream task ID; not resubmitted') : capabilityUiText('生成中','Generating'))}</span>${runTimePillHtml(task)}${query}${task.runStatus === 'failed' ? '' : cancelRunButtonHtml(task)}</div>`;
+    }).join('');
+    return `<div class="creation-preview ${generating ? 'is-generating' : ''}"><div class="creation-preview-media">${preview}</div>${generating ? `<div class="creation-running-glass ${node.images?.length ? 'has-media' : ''}" data-running-effect="${escapeAttr(activeTask.id)}" data-running-started="${Number(activeTask.runStartedAt)||0}" aria-hidden="true"></div>` : ''}${shared > 1 ? `<span class="creation-shared">${escapeHtml(capabilityUiText(`${shared} 处共用` ,`Shared in ${shared} places`))}</span>` : ''}${status ? `<div class="creation-tasks" role="status">${status}</div>` : ''}</div>`;
 }
 function smartExecutionNodeBodyHtml(node){
     const meta = smartExecutionNodeMeta(node);
@@ -13401,7 +13335,7 @@ function applySmartGenerationVersion(node, index){
         return copy;
     });
     node.outputKind = version.outputKind || mediaKindForUrls(node.images, 'image');
-    node.title = version.title || cascadeOutputTitle(node.outputKind, node.images.length);
+    node.title = node.title || version.title || cascadeOutputTitle(node.outputKind, node.images.length);
     const fields = ['runPrompt','runModelPrompt','promptDraftHtml','promptDraftText','runInputRefs','runPromptRefs','runSettings','runSnapshot','runRef'];
     fields.forEach(key => {
         if(version[key] === undefined || version[key] === null) delete node[key];
@@ -13443,7 +13377,7 @@ function smartGenerationProfile(snapshot){
     return {nodeType, providerId:providerId || '', modelId:modelId || '', profile:capabilityProfileFor(providerId, modelId, nodeType)};
 }
 function smartGenerationValueText(key, value){
-    if(value === undefined || value === null || value === '' || value === CAPABILITY_PARAMETER_UNSET) return capabilityUiText('使用默认','Use default');
+    if(value === undefined || value === null || value === '' || value === CAPABILITY_PARAMETER_UNSET) return capabilityUiText('未设置，不发送','Not set; omitted');
     if(typeof value === 'boolean') return capabilityUiText(value ? '是' : '否', value ? 'Yes' : 'No');
     if(Array.isArray(value)) return value.map(item => capabilityOptionLabel(key, item)).join('、');
     if(typeof value === 'object'){
@@ -13672,7 +13606,7 @@ function smartGenerationInfoBodyHtml(node){
     const profile = descriptor.profile;
     const provider = (apiProviders || []).find(item => item.id === descriptor.providerId);
     const runSettings = snapshot.runSettings || {};
-    const mode = capabilityVariantLabel(profile) || profile?.variant_id || profile?.operation || capabilityUiText('默认','Default');
+    const mode = capabilityVariantLabel(profile) || profile?.variant_id || profile?.operation || capabilityUiText('未设置','Not set');
     const parameterValues = !profile ? {} : descriptor.nodeType === 'video_generation'
         ? capabilityVideoParameterValues(profile, runSettings)
         : descriptor.nodeType === 'audio_generation'
@@ -13752,7 +13686,9 @@ function ensureSmartGenerationInfoModal(){
         const control = event.target.closest?.('[data-capability-param]');
         if(!control) return;
         const type = control.dataset.capabilityType || 'text';
-        const value = type === 'integer' ? Math.round(Number(control.value)) : type === 'number' ? Number(control.value) : control.value;
+        const value = capabilityInputValue(control);
+        if(value === undefined) return;
+        syncCapabilityNumericControls(control,value);
         setSmartGenerationInfoParameter(draft, profile, control.dataset.capabilityParam, value);
         const output = control.closest('.capability-range-field')?.querySelector('output');
         if(output) output.textContent = String(value);
@@ -14018,8 +13954,17 @@ async function rerunSmartGeneratedMaterial(nodeId, draft=null){
         render();
     }
 }
+function smartNodeHeaderHtml(node, fallback){
+    const modern=isSmartExecutionNode(node)||isSmartMaterialNode(node);
+    if(!modern)return `<div class="node-head"><div class="node-title">${fallback}</div><div class="node-actions"><button class="mini-x node-delete" type="button" title="${escapeAttr(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div></div>`;
+    const item=node.images?.[smartNodeToolbarImageIndex(node)]||node.images?.[0];
+    const hasMedia=!!(item&&(item.url||isTextMediaItem(item)));
+    const action=(key,icon,label)=>`<button type="button" class="node-header-action" data-smart-node-action="${key}" data-node-id="${escapeAttr(node.id)}" title="${escapeAttr(label)}"><i data-lucide="${icon}"></i><span>${escapeHtml(label)}</span></button>`;
+    const tools=hasMedia?smartNodeToolbarHtml(node).replace('class="smart-node-floating-menu"','class="node-inline-tools"'):'';
+    return `<div class="node-head">${canvasTitleEditor.markup(node,node.images?.[0]?.name||capabilityUiText('素材','Material'))}<div class="node-actions" role="toolbar" aria-label="${escapeAttr(capabilityUiText('素材操作','Material actions'))}">${hasMedia?action('preview','scan',capabilityUiText('预览 / 编辑','Preview / edit')):''}${tools}${item?.url?action('download','download',capabilityUiText('下载','Download')):''}<button class="node-header-action node-delete" type="button" title="${escapeAttr(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i><span>${escapeHtml(tr('smart.deleteNode'))}</span></button></div></div>`;
+}
 function smartNodeToolbarHtml(node){
-    const isImageNode = isSmartImageNode(node);
+    const isImageNode = isSmartImageNode(node) || isSmartExecutionNode(node);
     const images = node?.images || [];
     if(!isImageNode || !images.some(img => img?.url || isTextMediaItem(img))) return '';
     const item = imageForDisplay(images[smartNodeToolbarImageIndex(node)] || images.find(img => img?.url));
@@ -14028,13 +13973,13 @@ function smartNodeToolbarHtml(node){
     const isTextMaterial = kind === 'text';
     if(isTextMaterial){
         const actions = [
-            {key:'preview', icon:'eye', label:'编辑文本', enabled:true},
-            {key:'generation-info', icon:'info', label:capabilityUiText('显示生成信息','Show generation details'), enabled:smartNodeHasGenerationInfo(node)},
-            {key:'replace', icon:'upload', label:'上传素材', enabled:true},
-            {key:'template', icon:'library', label:'模板库', enabled:true},
-            {key:'download', icon:'download', label:'下载', enabled:Boolean(item.url)}
+            ...(images.length>1 ? [{key:'remove-item',icon:'minus-circle',label:capabilityUiText('移除当前素材','Remove current item'),enabled:true}] : []),
+
+            {key:'replace', icon:'upload', label:capabilityUiText('上传素材','Upload material'), enabled:true},
+            {key:'template', icon:'library', label:capabilityUiText('模板库','Templates'), enabled:true},
+
         ];
-        return `<div class="smart-node-floating-menu" data-smart-node-menu="1">${actions.map(action => `
+        return `<div class="smart-node-floating-menu" data-smart-node-menu="1">${actions.filter(action=>action.enabled).map(action => `
             <button type="button" data-smart-node-action="${escapeAttr(action.key)}" data-node-id="${escapeAttr(node.id)}" ${action.enabled ? '' : 'disabled'} title="${escapeAttr(action.label)}">
                 <i data-lucide="${escapeAttr(action.icon)}"></i><span>${escapeHtml(action.label)}</span>
             </button>`).join('')}</div>`;
@@ -14044,18 +13989,20 @@ function smartNodeToolbarHtml(node){
     const materialId = window.MaterialPromote?.materialIdFromUrl?.(item.url || '');
     const resultId = item.resultId || window.MaterialPromote?.resultIdFromUrl?.(item.url || '');
     const actions = [
-        {key:'preview', icon:'eye', label:'预览', enabled:true},
-        {key:'generation-info', icon:'info', label:capabilityUiText('显示生成信息','Show generation details'), enabled:smartNodeHasGenerationInfo(node)},
-        {key:'promote', icon:'bookmark-plus', label:'收藏到资产素材', enabled:Boolean(materialId || resultId)},
-        {key:'crop', icon:'crop', label:'裁剪', enabled:canTrimMedia},
-        {key:'outpaint', icon:'expand', label:'扩图', enabled:canEditImage},
-        {key:'mask', icon:'brush', label:'遮罩', enabled:canEditImage},
-        {key:'brush', icon:'paintbrush', label:'画笔', enabled:canEditImage},
-        {key:'grid', icon:'grid-3x3', label:'图片宫格切分', enabled:canEditImage},
+
+        ...(images.length>1 ? [{key:'remove-item',icon:'minus-circle',label:capabilityUiText('移除当前素材','Remove current item'),enabled:true}] : []),
+        {key:'promote', icon:'bookmark-plus', label:capabilityUiText('收藏到资产素材','Save to assets'), enabled:Boolean(materialId || resultId)},
+        {key:'crop', icon:'crop', label:capabilityUiText(kind==='video'?'裁剪视频':'裁剪','Trim'), enabled:canTrimMedia},
+        {key:'last_frame',icon:'image',label:capabilityUiText('提取尾帧','Extract last frame'),enabled:kind==='video'},
+        {key:'extract_audio',icon:'audio-lines',label:capabilityUiText('提取音频','Extract audio'),enabled:kind==='video'},
+        {key:'outpaint', icon:'expand', label:capabilityUiText('扩图','Expand'), enabled:canEditImage},
+        {key:'mask', icon:'brush', label:capabilityUiText('遮罩','Mask'), enabled:canEditImage},
+        {key:'brush', icon:'paintbrush', label:capabilityUiText('画笔','Paint'), enabled:canEditImage},
+        {key:'grid', icon:'grid-3x3', label:capabilityUiText('图片宫格切分','Split grid'), enabled:canEditImage},
         ...(jimengImageProviderId() ? [{key:'upscale', icon:'maximize-2', label:tr('smart.jimengUpscaleAction'), enabled:canEditImage}] : []),
-        {key:'download', icon:'download', label:'下载', enabled:true}
+
     ];
-    return `<div class="smart-node-floating-menu" data-smart-node-menu="1">${actions.map(action => `
+    return `<div class="smart-node-floating-menu" data-smart-node-menu="1">${actions.filter(action=>action.enabled).map(action => `
         <button type="button" data-smart-node-action="${escapeAttr(action.key)}" data-node-id="${escapeAttr(node.id)}" ${action.enabled ? '' : 'disabled'} title="${escapeAttr(action.label)}">
             <i data-lucide="${escapeAttr(action.icon)}"></i><span>${escapeHtml(action.label)}</span>
         </button>`).join('')}</div>`;
@@ -14112,6 +14059,7 @@ async function runSmartNodeToolbarAction(nodeId, action){
     }
     selectedIds = [];
     selectedImage = {nodeId, index};
+    if(action === 'remove-item' && node.images.length>1){deleteImage(nodeId,index);return;}
     if(action === 'download'){
         downloadPreviewFile(node.images?.[index] || item);
         return;
@@ -14126,6 +14074,11 @@ async function runSmartNodeToolbarAction(nodeId, action){
     }
     if(action === 'preview'){
         openSmartMaterialPreview(nodeId, index);
+        return;
+    }
+    if(['last_frame','extract_audio'].includes(action) && kind==='video'){
+        openImageEditor(nodeId,index);
+        await runSmartMediaTransform(action,'video');
         return;
     }
     if(action === 'crop' && kind === 'audio'){
@@ -14336,9 +14289,9 @@ function hideRunTimerForNode(node){
     return true;
 }
 function refreshRunTimerPills(){
-    const active = nodes.some(n => (n.type !== 'smart-prompt' && !n.runTimerHidden && (n.pending || n.running || n.jimengPending)) || n.generationRerunPending);
+    const active = [...nodes,...CanvasCreation.tasks(nodes)].some(n => (n.type !== 'smart-prompt' && !n.runTimerHidden && (n.pending || n.running || n.jimengPending)) || n.generationRerunPending);
     document.querySelectorAll('[data-run-timer]').forEach(el => {
-        const node = nodes.find(n => n.id === el.dataset.runTimer);
+        const node = liveSmartNode({id:el.dataset.runTimer});
         if(!node || node.runTimerHidden || node.type === 'smart-prompt' || !(node.pending || node.running || node.jimengPending)) {
             el.remove();
             return;
@@ -14367,6 +14320,9 @@ function rememberInlineVideoActivations(){
     });
 }
 function render(){
+    if(canvas){canvas.connections=canvas.connections||[];if(CanvasProduction.migrateRelations(nodes,canvas.connections))scheduleSave();}
+    CanvasCreation.reconcile(nodes, undefined, canvas?.connections || []);
+    canvasProductionView?.refresh();
     const editableState = captureCanvasEditableState(document.activeElement);
     if(smartWorkflowTransferModal?.classList.contains('open')) updateSmartWorkflowTransferMeta();
     rememberInlineVideoActivations();
@@ -14389,7 +14345,7 @@ function render(){
         .sort((a, b) => (isSmartGroupNode(a) ? 0 : 1) - (isSmartGroupNode(b) ? 0 : 1))
         .map(node => {
         const imgs = node.images || [];
-        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : isSmartResultGroupNode(node) ? (node.title || '结果组') : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : isSmartDirectorNode(node) ? (node.title || (isMiniMaxDirectorNode(node) ? 'MiniMax H3 导演台' : '通用导演台')) : node.type === SMART_NODE_TYPES.angleControl ? (tr('smart.createAngleControl') || '角度控制') : node.type === SMART_NODE_TYPES.imageCompare ? (tr('smart.createImageCompare') || '图像对比') : isSmartExecutionNode(node) ? SMART_NODE_CONTRACT.titleForType(node.type) : (imgs.length > 1 ? '素材组' : imgs[0]?.name || escapeHtml(tr('smart.createMaterial') || '素材'));
+        const title = escapeHtml(node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : isSmartResultGroupNode(node) ? (node.title || '结果组') : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : isSmartDirectorNode(node) ? (node.title || (isMiniMaxDirectorNode(node) ? 'MiniMax H3 导演台' : '通用导演台')) : node.type === SMART_NODE_TYPES.angleControl ? (tr('smart.createAngleControl') || '角度控制') : node.type === SMART_NODE_TYPES.imageCompare ? (tr('smart.createImageCompare') || '图像对比') : isSmartExecutionNode(node) ? (node.title || SMART_NODE_CONTRACT.titleForType(node.type)) : (node.title ? node.title : imgs.length > 1 ? '素材组' : imgs[0]?.name || (tr('smart.createMaterial') || '素材')));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
@@ -14402,7 +14358,7 @@ function render(){
         const isExecution = isSmartExecutionNode(node);
         const failedRunPlaceholder = !isExecution && node.isRunPlaceholder === true && String(node.runStatus || '') === 'failed';
         const executionFailureBadge = '';
-        const canResize = !isExecution && !isAngleControl;
+        const canResize = !isAngleControl;
         const isCompactMember = isSmartGroupCompactMember(node);
         const isImageNode = isSmartImageNode(node);
         const isJimengPending = Boolean(node.jimengPending && node.jimengPending.submitId && imgs.length === 0);
@@ -14411,23 +14367,23 @@ function render(){
         const isHistory = isHistoryGroupNode(node);
         const isGroup = isImageNode && imgs.length > 1;
         const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
-        const body = nodeBodyHtml(node, layout);
+        const body = nodeBodyHtml(node, node.creationId ? {...layout,height:layout.height} : layout);
         const deleteBtn = (isGroup || isMinimax) ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
         const hint = isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isMinimax ? 'Timeline editing' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
         const hasResultVersions = smartGenerationVersions(node).length > 1;
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup || isResultGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${isAngleControl ? 'angle-control-node' : ''} ${isImageCompare ? 'image-compare-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartGroup && openSmartGroupArrangeMenuId === node.id ? 'arrange-menu-open' : ''} ${isResultGroup ? 'smart-result-group-node' : ''} ${isExecution ? 'smart-execution-node' : ''} ${failedRunPlaceholder ? 'node-run-failed' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${hasResultVersions ? 'has-result-versions' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
+        const html = `<div class="image-node ${node.creationId ? 'creation-node' : ''} ${isEmpty ? 'empty-node' : ''} ${isGroup || isResultGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${isAngleControl ? 'angle-control-node' : ''} ${isImageCompare ? 'image-compare-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartGroup && openSmartGroupArrangeMenuId === node.id ? 'arrange-menu-open' : ''} ${isResultGroup ? 'smart-result-group-node' : ''} ${isExecution ? 'smart-execution-node' : ''} ${failedRunPlaceholder ? 'node-run-failed' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${hasResultVersions ? 'has-result-versions' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
 
             ${executionFailureBadge}
-            <div class="node-head"><div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div></div>
-            ${!isEmpty && !isGroup && !isMinimax ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
-            ${smartNodeToolbarHtml(node)}${smartGroupToolbarHtml(node)}${runningHubTargetBadgesHtml(node)}
+            ${smartNodeHeaderHtml(node,title)}
+
+            ${!node.creationId ? smartNodeToolbarHtml(node) : ''}${smartGroupToolbarHtml(node)}${runningHubTargetBadgesHtml(node)}
             ${smartResultVersionSwitcherHtml(node)}
             ${runTimePillHtml(node)}
             <div class="node-body">${body}</div>
             ${generationRerunOverlayHtml(node)}
             ${isCompactMember && (isPrompt || isLoop) ? '<div class="smart-group-member-grab" title="拖动移出分组"></div>' : ''}
             <div class="node-hint">${isResultGroup ? escapeHtml(tr('smart.resultGroupHint')) : isAngleControl ? escapeHtml(tr('smart.angleHint')) : isImageCompare ? escapeHtml(tr('smart.compareConnectImages')) : hint}</div>
-            ${isSmartGroup ? '<div class="node-resize-handle" data-resize="1" data-resize-corner="nw"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="ne"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="sw"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="se"></div>' : canResize && (imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isMinimax || isImageCompare) ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
+            ${isSmartGroup ? '<div class="node-resize-handle" data-resize="1" data-resize-corner="nw"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="ne"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="sw"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="se"></div>' : canResize && (isExecution || isSmartMaterialNode(node) || imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isMinimax || isImageCompare) ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
             <div class="node-port port-in" data-port="in" title="input"></div>
             ${isImageCompare ? '' : `<div class="node-port port-out" data-port="out" title="${isResultGroup ? escapeAttr(tr('smart.resultGroupConnectAll')) : 'output'}"></div>`}
         </div>`;
@@ -14461,11 +14417,14 @@ function render(){
         }
     });
     restoreMediaPlaybackStates(mediaStates);
+    CanvasNodeView.syncRunningEffects(world);
+    CanvasNodeView.layoutOverlays(world,viewport.scale,shell.clientWidth);
     bindNodeEvents();
     bindConnectionEvents();
     updateComposer();
     renderMinimap();
     if(window.lucide) lucide.createIcons();
+    CanvasNodeView.layoutOverlays(world,viewport.scale,shell.clientWidth);
     bindSmartPreviewImageFallbacks(world);
     syncSmartSelectedImageResolution(world);
     measureSmartNodeImages();
@@ -14488,12 +14447,12 @@ function render(){
         const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isQueued;
         const isGroup = isImageNode && imgs.length > 1;
         const isPending = (node.pending || isQueued) && imgs.length === 0;
-        const body = nodeBodyHtml(node, layout);
+        const body = nodeBodyHtml(node, node.creationId ? {...layout,height:layout.height} : layout);
         const deleteBtn = (isGroup || isMinimax) ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
-        return `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
-            <div class="node-head"><div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div></div>
-            ${!isEmpty && !isGroup && !isMinimax ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
-            ${smartNodeToolbarHtml(node)}
+        return `<div class="image-node ${node.creationId ? 'creation-node' : ''} ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
+            ${smartNodeHeaderHtml(node,title)}
+
+            ${!node.creationId ? smartNodeToolbarHtml(node) : ''}
             ${runTimePillHtml(node)}
             <div class="node-body">${body}</div>
             <div class="node-hint">${isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')))}</div>
@@ -15252,9 +15211,11 @@ function bindMinimaxNodeControls(el, node){
             event?.stopPropagation?.();
             const {profile} = currentDirectorCapabilityContext();
             const key = input.dataset.capabilityParam;
+            if(capabilityInputValue(input) === undefined) return;
             const value = input.value === CAPABILITY_PARAMETER_UNSET
                 ? CAPABILITY_PARAMETER_UNSET
                 : smartDirectorCoerceCapabilityValue(profile, key, input.value, input.dataset.capabilityType);
+            syncCapabilityNumericControls(input,value);
             updateDirectorCapability(key, value, event?.type === 'change');
             const output = input.closest('.capability-range-field')?.querySelector('output');
             if(output) output.textContent = String(value);
@@ -16201,6 +16162,13 @@ function handlePortDrop(drag, e){
         }
         return {targetId:id, targetPort:port, targetSourceResultId:sourceResultId, hit:hitEl};
     })();
+    if(drag.kind==='story'){
+        if(targetId){
+            (drag.fromIds||[drag.fromId]).filter(id=>id!==targetId).forEach(id=>addConnection(id,targetId,'story'));
+            commitPendingUndo();render();scheduleSave();
+        }else{discardPendingUndo();render();}
+        return;
+    }
     if(targetId){
         const compatible = (drag.fromPort === 'out' && targetPort === 'in') || (drag.fromPort === 'in' && targetPort === 'out');
         if(!compatible){ discardPendingUndo(); render(); return; }
@@ -16425,6 +16393,15 @@ function bindNodeEvents(){
                 extractResultGroupItemToCanvas(group, Number(btn.dataset.resultGroupExtract));
             });
         });
+        canvasTitleEditor.bind(el);
+        el.querySelectorAll('.node-tools-menu').forEach(menu=>{
+            let leaveTimer;
+            menu.addEventListener('click',event=>event.stopPropagation());
+            menu.addEventListener('toggle',()=>{if(menu.open)world.querySelectorAll('.node-tools-menu[open]').forEach(other=>{if(other!==menu)other.open=false;});});
+            menu.addEventListener('pointerenter',()=>clearTimeout(leaveTimer));
+            menu.addEventListener('pointerleave',()=>{leaveTimer=setTimeout(()=>{menu.open=false;},220);});
+            menu.querySelectorAll('button').forEach(button=>button.addEventListener('click',()=>{menu.open=false;}));
+        });
         el.querySelectorAll('[data-jimeng-query]').forEach(btn => {
             btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
             btn.addEventListener('click', e => {
@@ -16626,14 +16603,13 @@ function bindNodeEvents(){
             e.preventDefault(); e.stopPropagation();
             const node = nodes.find(n => n.id === id);
             if(!node) return;
-            if(isSmartExecutionNode(node)) return;
             const rect = nodeRect(node);
             resizeState = {id, startX:e.clientX, startY:e.clientY, startW:rect.width, startH:rect.height, startNodeX:rect.x, startNodeY:rect.y, corner:handle.dataset.resizeCorner || 'se'};
             document.body.classList.add('smart-node-resize');
             capturePendingUndo();
         }));
         const beginNodeDrag = e => {
-            if(e.button !== 0 || e.target.closest('.mini-x, .smart-node-floating-menu, .node-resize-handle, .thumb-item, .node-port, .prompt-node-control, select, input, textarea, button')) return;
+            if(e.button !== 0 || e.target.closest('.node-tools-menu, [data-creation-title], .mini-x, .smart-node-floating-menu, .node-resize-handle, .thumb-item, .node-port, .prompt-node-control, select, input, textarea, button')) return;
             if(e.target.closest('.prompt-node-pill, textarea:not(.prompt-node-text)')) return;
             e.preventDefault(); e.stopPropagation();
             window.getSelection?.()?.removeAllRanges?.();
@@ -16764,6 +16740,7 @@ function setDropHighlight(targetId){
     if(el) el.classList.add('drop-target');
 }
 function deleteNode(id){
+    if((nodes.find(n=>n.id===id)?.creationTasks || []).some(t=>!['succeeded','partially_succeeded','failed','cancelled'].includes(t.runStatus))){ toast(capabilityUiText('请先停止该节点的运行任务','Stop this node’s active tasks first')); return; }
     pushUndo();
     const deleteIds = new Set([id]);
     nodes.forEach(node => {
@@ -16827,11 +16804,11 @@ function disconnectConnections(spec){
     canvas.connections = canvas.connections.filter((_, i) => !set.has(i));
     removed.forEach(conn => {
         const toNode = nodes.find(n => n.id === conn.to);
-        if(toNode && Array.isArray(toNode.inputNodeIds)){
+        if(toNode && ['input','flow'].includes(conn.kind||'flow') && Array.isArray(toNode.inputNodeIds)){
             toNode.inputNodeIds = toNode.inputNodeIds.filter(id => id !== conn.from);
         }
         const stillConnected = (canvas.connections || []).some(item => item.from === conn.from && item.to === conn.to && ['input','flow'].includes(item.kind || 'flow'));
-        if(isSmartDirectorNode(toNode) && !stillConnected) smartMinimaxDetachSourceRefs(toNode, conn.from);
+        if(['input','flow'].includes(conn.kind||'flow') && isSmartDirectorNode(toNode) && !stillConnected) smartMinimaxDetachSourceRefs(toNode, conn.from);
         if(toNode && ['input','flow'].includes(conn.kind || 'flow')) clearDetachedRunInputRefs(toNode);
         if(toNode && ['input','flow'].includes(conn.kind || 'flow') && isGeneratedMaterialNode(toNode)) refreshOpenSmartGenerationInfo(toNode);
         if((conn.kind || 'flow') === 'history'){
@@ -16875,11 +16852,11 @@ function finishConnectionErase(){
     canvas.connections = canvas.connections.filter((_, i) => !set.has(i));
     removed.forEach(conn => {
         const toNode = nodes.find(n => n.id === conn.to);
-        if(toNode && Array.isArray(toNode.inputNodeIds)){
+        if(toNode && ['input','flow'].includes(conn.kind||'flow') && Array.isArray(toNode.inputNodeIds)){
             toNode.inputNodeIds = toNode.inputNodeIds.filter(id => id !== conn.from);
         }
         const stillConnected = (canvas.connections || []).some(item => item.from === conn.from && item.to === conn.to && ['input','flow'].includes(item.kind || 'flow'));
-        if(isSmartDirectorNode(toNode) && !stillConnected) smartMinimaxDetachSourceRefs(toNode, conn.from);
+        if(['input','flow'].includes(conn.kind||'flow') && isSmartDirectorNode(toNode) && !stillConnected) smartMinimaxDetachSourceRefs(toNode, conn.from);
         if(toNode && ['input','flow'].includes(conn.kind || 'flow')) clearDetachedRunInputRefs(toNode);
         if(toNode && ['input','flow'].includes(conn.kind || 'flow') && isGeneratedMaterialNode(toNode)) refreshOpenSmartGenerationInfo(toNode);
         if((conn.kind || 'flow') === 'history'){
@@ -18098,54 +18075,7 @@ async function seekVideoForFrame(video, time){
     await waitForVideoEvent(video, 'seeked', 2200);
 }
 async function exportVideoFrame(which='current'){
-    const video = currentPreviewVideo();
-    if(!video){ toast('没有可导出的视频帧'); return; }
-    if(video.readyState < 2) await waitForVideoEvent(video, 'loadeddata', 2200);
-    if(!video.videoWidth || !video.videoHeight){ toast('视频还没有加载完成'); return; }
-    const originalTime = Number(video.currentTime || 0);
-    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
-    const step = videoFrameStep();
-    const target = which === 'first'
-        ? 0
-        : which === 'last'
-            ? Math.max(0, duration - step / 2)
-            : originalTime;
-    const suffix = which === 'first' ? 'first-frame' : which === 'last' ? 'last-frame' : 'current-frame';
-    try {
-        video.pause?.();
-        await seekVideoForFrame(video, target);
-        const canvasEl = document.createElement('canvas');
-        canvasEl.width = video.videoWidth;
-        canvasEl.height = video.videoHeight;
-        const ctx = canvasEl.getContext('2d');
-        ctx.drawImage(video, 0, 0, canvasEl.width, canvasEl.height);
-        const blob = await new Promise(resolve => canvasEl.toBlob(resolve, 'image/png'));
-        if(!blob) throw new Error('导出帧失败');
-        const editing = currentEditImage();
-        const rawName = editing.image?.name || fileNameFromUrl(editing.image?.url || '') || 'video';
-        const base = String(rawName).replace(/\.[a-z0-9]{2,8}$/i, '') || 'video';
-        const filename = safeExportFileName(`${base}-${suffix}.png`, `${suffix}.png`);
-        const uploaded = await uploadFiles([new File([blob], filename, {type:'image/png'})]);
-        const frame = uploaded[0];
-        if(!frame?.url) throw new Error('导出到画布失败');
-        frame.kind = 'image';
-        frame.natural_w = video.videoWidth;
-        frame.natural_h = video.videoHeight;
-        const rect = editing.node ? nodeRect(editing.node) : null;
-        const point = rect
-            ? {x:rect.x + rect.width + 240, y:rect.y + rect.height / 2}
-            : viewportCenter();
-        pushUndo();
-        const newNode = createImageNodeAt(point, [frame], {select:true, skipUndo:true});
-        selectedIds = [];
-        selectedImage = {nodeId:newNode.id, index:0};
-        render();
-        scheduleSave();
-        toast('已导出到画布');
-        if(which !== 'current') await seekVideoForFrame(video, originalTime);
-    } catch(e) {
-        toast((e.message || '导出帧失败').slice(0, 120));
-    }
+    return runSmartMediaTransform(which==='first'?'first_frame':which==='last'?'last_frame':'current_frame','video');
 }
 function editDrawSnapshot(){
     const canvasEl = editDrawCanvas();
@@ -19248,9 +19178,10 @@ function ensureSmartAudioPreviewModal(){
     modal = document.createElement('div');
     modal.id = 'smartAudioPreviewModal';
     modal.className = 'smart-audio-preview-modal';
-    modal.innerHTML = `<div class="smart-audio-preview-panel">
+    modal.innerHTML = `<div class="media-preview-exit-hints"><span>${tr("smart.previewExitEsc")}</span><span>${tr("smart.previewExitBackdrop")}</span></div><div class="smart-audio-preview-panel">
         <div class="smart-audio-preview-head"><div><strong data-audio-preview-name>音频</strong><span>音频预览</span></div><button type="button" data-audio-preview-close title="关闭"><i data-lucide="x"></i></button></div>
-        <div class="smart-audio-preview-wave" aria-hidden="true">${Array.from({length:64}).map((_, index) => `<i style="--wave:${18 + ((index * 37) % 72)}%"></i>`).join('')}</div>
+        <div data-audio-timeline></div>
+        <div class="media-editor-toolbar" data-audio-toolbar>
         <div class="audio-preview-controls" data-audio-preview-controls>
             <button class="audio-preview-control" type="button" data-audio-preview-mute aria-pressed="false"><i data-lucide="volume-2"></i><span data-audio-preview-mute-label>${escapeHtml(tr('smart.audioPreviewMute') || '静音')}</span></button>
             <label class="audio-preview-volume"><span>${escapeHtml(tr('smart.audioPreviewVolume') || '音量')}</span><input data-audio-preview-volume type="range" min="0" max="1" step="0.01" value="1"></label>
@@ -19258,14 +19189,10 @@ function ensureSmartAudioPreviewModal(){
             <button class="audio-preview-control" type="button" data-audio-preview-loop aria-pressed="false"><i data-lucide="repeat-2"></i><span>${escapeHtml(tr('smart.audioPreviewLoop') || '循环播放')}</span></button>
             <div class="audio-preview-meta" data-audio-preview-meta><span>${escapeHtml(tr('smart.audioPreviewDuration') || '时长')} <b data-audio-preview-duration>--:--</b></span><span>${escapeHtml(tr('smart.audioPreviewFormat') || '格式')} <b data-audio-preview-format>MP3</b></span></div>
         </div>
-        <audio controls preload="metadata"></audio>
+        <audio preload="metadata"></audio>
         <div class="media-transform-tools image-edit-tools active" data-audio-transform-tools>
-            <span class="image-edit-sub">时间范围</span>
-            <label><span>开始</span><input data-audio-transform-start type="range" min="0" max="1" step="0.01" value="0"><output data-audio-transform-start-value>0.00s</output></label>
-            <label><span>结束</span><input data-audio-transform-end type="range" min="0.1" max="1" step="0.01" value="1"><output data-audio-transform-end-value>1.00s</output></label>
-            <span data-audio-transform-duration class="image-edit-sub"></span>
-            <span data-audio-transform-capability class="media-transform-capability"></span>
             <button class="image-edit-btn secondary" type="button" data-audio-transform="trim" data-media-transform-action><i data-lucide="scissors" class="w-4 h-4"></i><span>${escapeHtml(tr('smart.mediaToolTrim') || '生成裁剪结果')}</span></button>
+        </div>
         </div>
     </div>`;
     document.body.appendChild(modal);
@@ -19288,6 +19215,7 @@ function ensureSmartAudioPreviewModal(){
         loopButton.classList.toggle('active', looping);
         loopButton.setAttribute('aria-pressed', looping ? 'true' : 'false');
         volumeInput.value = String(Number.isFinite(audio.volume) ? audio.volume : 1);
+        window.StudioMedia?.syncNumericSlider(volumeInput);
         speedSelect.value = String(Number.isFinite(audio.playbackRate) ? audio.playbackRate : 1);
     };
     const syncAudioPreviewMetadata = () => {
@@ -19305,48 +19233,18 @@ function ensureSmartAudioPreviewModal(){
     audio.addEventListener('loadedmetadata', syncAudioPreviewMetadata);
     audio.addEventListener('volumechange', syncAudioPreviewControls);
     audio.addEventListener('ratechange', syncAudioPreviewControls);
-    modal.querySelector('[data-audio-transform-start]').addEventListener('input', event => updateSmartAudioTransformRange('start', event.target.value));
-    modal.querySelector('[data-audio-transform-end]').addEventListener('input', event => updateSmartAudioTransformRange('end', event.target.value));
     modal.querySelector('[data-audio-transform="trim"]').addEventListener('click', () => runSmartMediaTransform('trim', 'audio'));
     refreshIcons();
+    window.StudioMedia?.bindNumericSliders(modal.querySelectorAll('input[type=range]'));
     applySmartMediaToolCapabilities(modal);
     loadSmartMediaToolCapabilities().then(() => applySmartMediaToolCapabilities(modal));
     return modal;
 }
-function mediaTransformValues(kind='video'){
-    const state = smartMediaTransformState || {};
-    const duration = Math.max(0.1, Number(state.duration) || 0.1);
-    if(kind === 'audio'){
-        const modal = document.getElementById('smartAudioPreviewModal');
-        return {duration, start:Number(modal?.querySelector('[data-audio-transform-start]')?.value || 0), end:Number(modal?.querySelector('[data-audio-transform-end]')?.value || duration)};
-    }
-    return {duration, start:Number(document.getElementById('mediaTransformStart')?.value || 0), end:Number(document.getElementById('mediaTransformEnd')?.value || duration)};
+function mediaTransformValues(){
+    return smartMediaTransformState?.timeline?.values() || {start:0,end:0,duration:0};
 }
 function setMediaTransformInputValues(kind, start, end, duration){
-    const root = kind === 'audio' ? document.getElementById('smartAudioPreviewModal') : document;
-    const selector = suffix => kind === 'audio' ? `[data-audio-transform-${suffix}]` : `#mediaTransform${suffix[0].toUpperCase()}${suffix.slice(1)}`;
-    const startInput = root?.querySelector(selector('start'));
-    const endInput = root?.querySelector(selector('end'));
-    const startValue = root?.querySelector(kind === 'audio' ? '[data-audio-transform-start-value]' : '#mediaTransformStartValue');
-    const endValue = root?.querySelector(kind === 'audio' ? '[data-audio-transform-end-value]' : '#mediaTransformEndValue');
-    const durationLabel = root?.querySelector(kind === 'audio' ? '[data-audio-transform-duration]' : '#mediaTransformDuration');
-    if(!startInput || !endInput) return;
-    const safeDuration = Math.max(0.1, Number(duration) || 0.1);
-    const safeStart = Math.max(0, Math.min(safeDuration - 0.1, Number(start) || 0));
-    const safeEnd = Math.max(safeStart + 0.1, Math.min(safeDuration, Number(end) || safeDuration));
-    startInput.max = String(safeDuration); endInput.max = String(safeDuration);
-    startInput.value = String(safeStart); endInput.value = String(safeEnd);
-    if(startValue) startValue.textContent = `${safeStart.toFixed(2)}s`;
-    if(endValue) endValue.textContent = `${safeEnd.toFixed(2)}s`;
-    if(durationLabel) durationLabel.textContent = `${safeDuration.toFixed(2)}s`;
-}
-function updateSmartAudioTransformRange(which, value){
-    const values = mediaTransformValues('audio');
-    setMediaTransformInputValues('audio', which === 'start' ? Number(value) : values.start, which === 'end' ? Number(value) : values.end, values.duration);
-}
-function updateSmartVideoTransformRange(which, value){
-    const values = mediaTransformValues('video');
-    setMediaTransformInputValues('video', which === 'start' ? Number(value) : values.start, which === 'end' ? Number(value) : values.end, values.duration);
+    if(smartMediaTransformState?.kind===kind)smartMediaTransformState.timeline?.setDuration(duration);
 }
 async function runSmartMediaTransform(operation='trim', kind='video'){
     const state = smartMediaTransformState;
@@ -19358,21 +19256,21 @@ async function runSmartMediaTransform(operation='trim', kind='video'){
         return;
     }
     const values = mediaTransformValues(kind);
-    if(values.end - values.start < 0.1){ toast('时间范围至少需要 0.1 秒'); return; }
+    if(operation==='trim' && values.end - values.start < 0.1){ toast(capabilityUiText('请等待媒体加载，并选择至少 0.1 秒','Wait for media and select at least 0.1 seconds')); return; }
     const sourceNode = nodes.find(node => node.id === state.nodeId);
     const sourceItem = sourceNode?.images?.[state.imageIndex];
     if(!sourceNode || !sourceItem) return;
-    const button = kind === 'audio' ? document.querySelector('[data-audio-transform="trim"]') : document.getElementById(operation === 'extract_audio' ? 'mediaExtractAudioBtn' : 'mediaTrimBtn');
+    const button = kind === 'audio' ? document.querySelector('[data-audio-transform="trim"]') : document.getElementById(operation === 'extract_audio' ? 'mediaExtractAudioBtn' : operation === 'last_frame' ? 'mediaLastFrameBtn' : operation === 'first_frame' ? 'mediaFirstFrameBtn' : operation === 'current_frame' ? 'mediaCurrentFrameBtn' : 'mediaTrimBtn');
     if(button) button.disabled = true;
     try {
-        const response = await fetch('/api/canvas-media-transform', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:state.url, operation, start:values.start, end:values.end, name:sourceItem.name || '媒体', canvas_id:canvas?.id || '', canvas_title:canvas?.title || ''})});
+        const response = await fetch('/api/canvas-media-transform', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:state.url, operation, start:operation==='trim'?values.start:operation==='current_frame'?(currentPreviewVideo()?.currentTime||0):0, end:operation==='trim'?values.end:0, name:sourceItem.name || '媒体', canvas_id:canvas?.id || '', canvas_title:canvas?.title || ''})});
         const data = await response.json().catch(() => ({}));
         if(!response.ok) throw new Error(apiErrorMessage(data, '媒体处理失败'));
-        const outputNode = createEditedResultNode(sourceNode, data, {kind:data.kind || (operation === 'extract_audio' ? 'audio' : kind), derivation:data.derivation || {}, mediaInfo:data.media_info || {}});
+        const outputNode = createEditedResultNode(sourceNode, data, {kind:data.kind || (operation === 'extract_audio' ? 'audio' : kind), derivation:data.derivation || {}, mediaInfo:data.media_info || {}, connectionKind:'story'});
         if(!outputNode) throw new Error('媒体结果创建失败');
-    if(kind === 'audio') closeSmartAudioPreview(); else closeImageEditor();
+        if(kind === 'audio') closeSmartAudioPreview(); else closeImageEditor();
         render(); scheduleSave();
-        toast(operation === 'extract_audio' ? '已抽出音频并生成新素材' : '已生成裁剪素材');
+        toast(capabilityUiText('已生成新素材','New material created'));
     } catch(error) {
         toast((error.message || '媒体处理失败').slice(0, 160));
     } finally {
@@ -19384,9 +19282,16 @@ function openAudioMaterialPreview(nodeId, imageIndex=0){
     const item = node?.images?.[imageIndex];
     if(mediaKindForItem(item || {}) !== 'audio' || !item?.url) return;
     const modal = ensureSmartAudioPreviewModal();
+    smartMediaTransformState?.timeline?.destroy();
     smartMediaTransformState = {nodeId, imageIndex, url:item.url, kind:'audio', duration:0};
+    smartMediaTransformState.timeline=StudioMedia.createTimeline(modal.querySelector('[data-audio-timeline]'),modal.querySelector('audio'),{url:displayMediaUrl(item)});
+    const audioToolbar=modal.querySelector('[data-audio-toolbar]');
+    audioToolbar.querySelector('.studio-timeline-transport')?.remove();
+    audioToolbar.prepend(modal.querySelector('[data-audio-timeline] .studio-timeline-transport'));
+    modal.querySelector('.smart-audio-preview-head > div').appendChild(modal.querySelector('.audio-preview-meta'));
     modal.querySelector('[data-audio-preview-name]').textContent = item.name || '音频';
     modal.querySelector('[data-audio-preview-format]').textContent = audioPreviewFormatLabel(item);
+    window.StudioMedia?.bindNumericSliders(modal.querySelectorAll('input[type=range]'));
     applySmartMediaToolCapabilities(modal);
     loadSmartMediaToolCapabilities().then(() => applySmartMediaToolCapabilities(modal));
     const audio = modal.querySelector('audio');
@@ -19413,6 +19318,7 @@ function closeSmartAudioPreview(){
         audio.onloadedmetadata = null;
     }
     modal?.classList.remove('open');
+    smartMediaTransformState?.timeline?.destroy();
     smartMediaTransformState = null;
 }
 function openSmartMaterialPreview(nodeId, imageIndex=0, target=null){
@@ -19452,22 +19358,23 @@ function smartNodeFocusBounds(nodeId){
         bounds = {x:left, y:top, width:right - left, height:bottom - top};
     };
     includeElement(nodeEl);
-    nodeEl?.querySelectorAll('.smart-popover,.model-popover,.capability-param-popover,[role="dialog"]').forEach(includeElement);
+    nodeEl?.querySelectorAll('.node-head,.result-version-switcher,.smart-node-floating-menu,.smart-popover,.model-popover,.capability-param-popover,[role="dialog"]').forEach(includeElement);
     document.querySelectorAll(`[data-smart-node-id="${CSS.escape(nodeId)}"]`).forEach(includeElement);
     return bounds;
 }
-function focusSmartNodeInViewport(nodeId){
+function focusSmartNodeInViewport(nodeId, options={}){
     const bounds = smartNodeFocusBounds(nodeId);
     if(!bounds) return false;
     const horizontalReserve = Math.min(180, Math.max(96, shell.clientWidth * 0.14));
     const verticalReserve = Math.min(170, Math.max(110, shell.clientHeight * 0.16));
     const availableW = Math.max(320, shell.clientWidth - horizontalReserve);
-    const availableH = Math.max(240, shell.clientHeight - verticalReserve);
+    const visibleHeight = Math.max(200, shell.clientHeight - Number(options.bottomInset || 0));
+    const availableH = Math.max(180, visibleHeight - verticalReserve);
     const fitScale = Math.min(1.4, availableW / Math.max(1, bounds.width), availableH / Math.max(1, bounds.height));
     const targetScale = Math.max(0.35, safeScale(fitScale));
     viewport.scale = targetScale;
     viewport.x = shell.clientWidth / 2 - (bounds.x + bounds.width / 2) * targetScale;
-    viewport.y = shell.clientHeight / 2 - (bounds.y + bounds.height / 2) * targetScale;
+    viewport.y = visibleHeight / 2 - (bounds.y + bounds.height / 2) * targetScale;
     clearTimeout(smartFocusTransitionTimer);
     shell.classList.remove('smart-focus-transition');
     void world.offsetWidth;
@@ -19498,12 +19405,12 @@ function ensureSmartTextEditorModal(){
     let modal = document.getElementById('smartTextEditorModal');
     if(modal) return modal;
     modal = document.createElement('div');
-    modal.id = 'smartTextEditorModal';
-    modal.className = 'smart-text-editor-modal';
+    modal.id = 'smartTextEditorModal'; modal.className = 'smart-text-editor-modal';
     modal.innerHTML = `<div class="smart-text-editor-panel">
-        <div class="smart-text-editor-head"><div><strong>文本结果</strong><span>Markdown</span></div><button type="button" data-text-editor-close title="关闭"><i data-lucide="x"></i></button></div>
-        <textarea data-text-editor-input spellcheck="false"></textarea>
-        <div class="smart-text-editor-actions"><span>保存后生成新的文本结果，原文保留</span><button type="button" data-text-editor-cancel>取消</button><button type="button" data-text-editor-save>保存为新结果</button></div>
+        <div class="smart-text-editor-head"><strong data-text-editor-title></strong><button type="button" data-text-editor-close aria-label="${escapeAttr(capabilityUiText('关闭','Close'))}">×</button></div>
+        <div class="creation-text-columns"><label class="creation-text-main"><span>${escapeHtml(capabilityUiText('正文','Content'))}</span><textarea data-text-editor-input spellcheck="false"></textarea></label>
+        <aside class="creation-text-details"><div class="creation-notes-heading"><strong>${escapeHtml(capabilityUiText('创作说明','Creation notes'))}</strong><button type="button" data-creation-notes-toggle>${escapeHtml(capabilityUiText('预览','Preview'))}</button></div><p class="creation-notes-hint">${escapeHtml(capabilityUiText('记录这一段已确定的结论，方便继续创作。支持 Markdown，格式自由。','Keep this part’s creative decisions for later work. Free-form Markdown.'))}</p><textarea data-creation-notes aria-label="${escapeAttr(capabilityUiText('创作说明 Markdown','Creation notes Markdown'))}" spellcheck="false" placeholder="${escapeAttr(capabilityUiText('可以记录创作结论、资产状态、衔接或参考来源；不必逐项填写。','Optionally note creative decisions, asset states, transitions or references.'))}"></textarea><div data-creation-notes-preview class="media-text-preview" hidden></div></aside></div>
+        <div class="smart-text-editor-actions"><span>${escapeHtml(capabilityUiText('保存到当前节点，历史正文保留为版本','Save in this node; previous content remains in history'))}</span><button type="button" data-text-editor-cancel>${escapeHtml(capabilityUiText('取消','Cancel'))}</button><button type="button" data-text-editor-save>${escapeHtml(capabilityUiText('保存','Save'))}</button></div>
     </div>`;
     document.body.appendChild(modal);
     modal.addEventListener('mousedown', event => event.stopPropagation());
@@ -19512,7 +19419,15 @@ function ensureSmartTextEditorModal(){
         if(event.target === modal || event.target.closest('[data-text-editor-close],[data-text-editor-cancel]')) closeTextMaterialEditor();
     });
     modal.querySelector('[data-text-editor-save]').addEventListener('click', saveTextMaterialEditor);
-    refreshIcons();
+    modal.querySelector('[data-creation-notes-toggle]').addEventListener('click',()=>{
+        const input=modal.querySelector('[data-creation-notes]'), preview=modal.querySelector('[data-creation-notes-preview]');
+        const show=preview.hidden;
+        preview.innerHTML=safeMarkdownPreviewHtml(input.value);
+        preview.hidden=!show; input.hidden=show;
+        modal.querySelector('[data-creation-notes-toggle]').textContent=show?capabilityUiText('编辑','Edit'):capabilityUiText('预览','Preview');
+        if(!show) input.focus({preventScroll:true});
+    });
+    modal.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeTextMaterialEditor();}});
     return modal;
 }
 let smartTextEditorState = null;
@@ -19520,36 +19435,11 @@ let smartInlineTextEditState = null;
 function beginSmartInlineTextEdit(nodeId, imageIndex=0){
     const node = nodes.find(item => item.id === nodeId);
     const item = node?.images?.[imageIndex];
-    if(!node || node.type !== SMART_NODE_TYPES.material || !isTextMediaItem(item || {})) return false;
-    if(smartInlineTextEditState?.nodeId === nodeId && smartInlineTextEditState?.imageIndex === imageIndex) return true;
-    if(smartInlineTextEditState) finishSmartInlineTextEdit();
-    const nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(nodeId)}"]`);
-    const preview = nodeEl?.querySelector(`[data-image-index="${imageIndex}"] [data-text-preview="1"], [data-text-preview="1"]`);
-    if(!preview) return false;
-    const text = SMART_NODE_CONTRACT.textContentForMediaItem(item);
-    const editor = document.createElement('textarea');
-    editor.className = 'media-text-inline-editor';
-    editor.value = text;
-    editor.setAttribute('aria-label', '编辑文本素材');
-    editor.addEventListener('mousedown', event => event.stopPropagation());
-    editor.addEventListener('click', event => event.stopPropagation());
-    editor.addEventListener('contextmenu', event => event.stopPropagation());
-    editor.addEventListener('dblclick', event => event.stopPropagation());
-    editor.addEventListener('wheel', event => {
-        event.stopPropagation();
-    }, {passive:true});
-    editor.addEventListener('keydown', event => {
-        if(event.key !== 'Escape') return;
-        event.preventDefault();
-        finishSmartInlineTextEdit();
-    });
-    preview.replaceChildren(editor);
-    preview.classList.add('is-inline-editing');
-    smartInlineTextEditState = {nodeId, imageIndex, item, originalText:text, editor};
-    editor.focus({preventScroll:true});
-    editor.setSelectionRange(editor.value.length, editor.value.length);
+    if(!node || !isSmartImageNode(node) || !isTextMediaItem(item || {})) return false;
+    openTextMaterialEditor(nodeId, imageIndex);
     return true;
 }
+
 async function persistSmartInlineTextEdit(nodeId, imageIndex, text){
     const sourceNode = nodes.find(node => node.id === nodeId);
     const sourceItem = sourceNode?.images?.[imageIndex];
@@ -19632,19 +19522,37 @@ async function openTextMaterialEditor(nodeId, imageIndex=0){
     if(!node || !isTextMediaItem(item || {})) return;
     const modal = ensureSmartTextEditorModal();
     const input = modal.querySelector('[data-text-editor-input]');
-    smartTextEditorState = {nodeId, imageIndex};
+    CanvasCreation.ensure(node);
+    const editorState = {nodeId, imageIndex, revision:node.creationRevision};
+    smartTextEditorState = editorState;
+    modal.querySelector('[data-text-editor-title]').textContent = node.title || item.name || capabilityUiText('文本','Text');
+    const notes=modal.querySelector('[data-creation-notes]');
+    notes.value=CanvasCreation.detailsMarkdown(node.creationDetails); notes.hidden=false;
+    modal.querySelector('.creation-notes-hint').textContent=node.production?.role==='script'
+        ? capabilityUiText('记录故事背景、梗概、人物与创作意图。Markdown 格式自由。','Record story background, synopsis, characters and creative intent in free-form Markdown.')
+        : node.production?.role==='segment'
+        ? capabilityUiText('记录原文定位、讲戏、必要资产和衔接，按本段需要取舍。Markdown 格式自由。','Optionally note source context, performance, assets and continuity in free-form Markdown.')
+        : capabilityUiText('记录已确认的创作结论，方便继续创作。支持 Markdown，格式自由。','Keep creative decisions for later work. Free-form Markdown.');
+    modal.querySelector('[data-creation-notes-preview]').hidden=true;
+    modal.querySelector('[data-creation-notes-toggle]').textContent=capabilityUiText('预览','Preview');
     input.value = SMART_NODE_CONTRACT.textContentForMediaItem(item);
+    editorState.originalText=input.value; input.readOnly=false; input.placeholder='';
     modal.classList.add('open');
     if(!input.value && item.url){
-        input.placeholder = '正在读取文本...';
+        input.readOnly=true;
+        input.placeholder = capabilityUiText('正在读取文本...','Loading text…');
         try {
             const response = await fetch(item.url);
             if(!response.ok) throw new Error('读取文本失败');
-            input.value = await response.text();
+            const loaded=await response.text();
+            if(smartTextEditorState !== editorState) return;
+            input.value=loaded; editorState.originalText=loaded;
         } catch(error) {
-            input.placeholder = error.message || '读取文本失败';
-        }
+            if(smartTextEditorState !== editorState) return;
+            input.placeholder = error.message || capabilityUiText('读取文本失败','Failed to load text');
+        } finally { if(smartTextEditorState === editorState) input.readOnly=false; }
     }
+    if(smartTextEditorState !== editorState) return;
     input.focus({preventScroll:true});
     input.setSelectionRange(0, 0);
 }
@@ -19655,61 +19563,32 @@ function closeTextMaterialEditor(){
 async function saveTextMaterialEditor(){
     const state = smartTextEditorState;
     const modal = document.getElementById('smartTextEditorModal');
-    const input = modal?.querySelector('[data-text-editor-input]');
-    const sourceNode = nodes.find(node => node.id === state?.nodeId);
-    const sourceItem = sourceNode?.images?.[state?.imageIndex];
-    const text = String(input?.value || '').trim();
-    if(!sourceNode || !sourceItem || !text){ toast('文本不能为空'); return; }
-    const saveButton = modal.querySelector('[data-text-editor-save]');
-    saveButton.disabled = true;
+    const source = nodes.find(n=>n.id===state?.nodeId);
+    const content = String(modal?.querySelector('[data-text-editor-input]')?.value || '');
+    if(!source || !content.trim()){ toast(capabilityUiText('正文不能为空','Content cannot be empty')); return; }
+    const button=modal.querySelector('[data-text-editor-save]'); button.disabled=true;
     try {
-        const isBlankTextInputMaterial = sourceNode.sourceKind === 'input'
-            && isTextMediaItem(sourceItem)
-            && !String(sourceItem.text || sourceItem.content || '').trim();
-        if(isBlankTextInputMaterial){
-            sourceItem.text = text;
-            sourceItem.content = text;
-            sourceItem.name = sourceItem.name || '未命名文本.md';
-            sourceNode.title = sourceItem.name;
-            closeTextMaterialEditor();
-            render();
-            scheduleSave();
-            return;
-        }
-        const base = String(sourceItem.name || '文本结果').replace(/\.(md|markdown|txt)$/i, '') || '文本结果';
-        const stored = await fetch('/api/canvas-text-results', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({text, name:`${base}-编辑.md`, canvas_id:canvas?.id || '', canvas_title:canvas?.title || ''})
-        }).then(async response => {
-            const data = await response.json().catch(() => ({}));
-            if(!response.ok) throw new Error(apiErrorMessage(data, '文本结果保存失败'));
-            return data;
-        });
-        pushUndo();
-        const pos = nextOutputPositionForSource(sourceNode, {w:316, h:220});
-        const created = SMART_NODE_CONTRACT.createTextResultMaterial(sourceNode, text, {
-            id:uid('material'),
-            x:pos.x,
-            y:pos.y,
-            url:stored.url,
-            resultId:stored.id,
-            name:stored.display_name || `${base}-编辑.md`
-        });
-        if(created){
-            created.node.scale = MEDIA_NODE_DEFAULT_SCALE;
-            nodes.push(created.node);
-            addConnection(created.connection.from, created.connection.to, 'result');
-            selectedId = created.node.id;
-        }
-        closeTextMaterialEditor();
-        render();
-        scheduleSave();
-    } catch(error) {
-        toast((error.message || '文本结果保存失败').slice(0, 160));
-    } finally {
-        saveButton.disabled = false;
-    }
+        const details=modal.querySelector('[data-creation-notes]').value;
+        const draft=cloneSmartSettings(source);
+        CanvasCreation.updateDetails(draft,details,state.revision);
+        const original=state.originalText;
+        if(content!==original){
+            const response=await fetch('/api/canvas-text-results',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:content,name:`${String(source.title||'文本').replace(/\.(md|txt)$/i,'')}.md`,canvas_id:canvasId,canvas_title:canvas?.title||''})});
+            const stored=await response.json();
+            if(!response.ok) throw new Error(apiErrorMessage(stored,'文本保存失败'));
+            if(source.creationRevision!==state.revision) throw new Error(capabilityUiText('正文已被更新，请重新打开后编辑','Content changed; reopen the editor'));
+            pushUndo();
+            source.resultVersions ||= [CanvasCreation.snapshot(source,uid('version'))];
+            source.creationParentId=source.creationId; source.creationId=uid('creation'); source.creationOwnerNodeId=source.id;
+            source.images=[{kind:'text',text:content,content,url:stored.url,resultId:stored.id,name:stored.display_name||source.title}];
+            source.creationDetails=draft.creationDetails;
+            source.resultVersions.push(CanvasCreation.snapshot(source,uid('version')));
+            source.activeResultVersion=source.resultVersions.length-1;
+        } else pushUndo();
+        source.creationDetails=draft.creationDetails; source.creationRevision=draft.creationRevision;
+        closeTextMaterialEditor(); render(); scheduleSave();
+    } catch(error){ toast(String(error.message||error)); }
+    finally { button.disabled=false; }
 }
 // 打开整组图片预览：以被双击图片为起点，左右切换遍历分组内所有图片。
 function openGroupImagePreview(group, startNodeId, startIndex=0){
@@ -19761,7 +19640,16 @@ function openImageEditor(nodeId, imageIndex=0){
     disposePanoramaPreview();
     resetPreviewTransform();
     if(kind === 'video'){
+        smartMediaTransformState?.timeline?.destroy();
         smartMediaTransformState = {nodeId, imageIndex, url:image.url, kind:'video', duration:0};
+        document.getElementById('imageEditStage').insertAdjacentElement('afterend',document.getElementById('mediaTransformTools'));
+        const video=document.getElementById('previewCurrentVideo');
+        smartMediaTransformState.timeline=StudioMedia.createTimeline(document.getElementById('videoMediaTimeline'),video,{url:displayMediaUrl(image)});
+        video.controls=false;
+        const videoToolbar=document.getElementById('videoMediaToolbar');
+        videoToolbar.querySelector('.studio-timeline-transport')?.remove();
+        videoToolbar.prepend(document.querySelector('#videoMediaTimeline .studio-timeline-transport'));
+        videoToolbar.appendChild(document.getElementById('videoFrameTools'));
         applySmartMediaToolCapabilities(document);
         loadSmartMediaToolCapabilities().then(() => applySmartMediaToolCapabilities(document));
         img.onload = null;
@@ -19829,6 +19717,7 @@ function openImageEditor(nodeId, imageIndex=0){
 function closeImageEditor(){
     cleanupSmartLogPreviewNode();
     imageEditModal.classList.remove('open');
+    smartMediaTransformState?.timeline?.destroy();
     smartMediaTransformState = null;
     document.querySelector('.image-edit-panel')?.classList.remove('video-preview-mode');
     const img = document.getElementById('cropImage');
@@ -20005,9 +19894,10 @@ function createEditedResultNode(sourceNode, file, extra={}){
         natural_h:Number(file.natural_h || file.height || extra.natural_h || 0),
         ...extra
     };
+    delete item.connectionKind;
     const outputNode = createImageNodeAt({x:rect.x + rect.width + 220, y:rect.y + rect.height / 2}, [item], {select:true, skipUndo:true, sourceKind:'result'});
     outputNode.title = file.name || '编辑结果';
-    addConnection(sourceNode.id, outputNode.id, 'result');
+    addConnection(sourceNode.id, outputNode.id, extra.connectionKind || 'result');
     return outputNode;
 }
 function applyOutpaintSizeToSmartParams(width, height){
@@ -20311,6 +20201,17 @@ function loadPromptDraft(subject){
 function positionComposerForNode(node){
     if(!node || !composer || !shell) return;
     const rect = nodeRect(node);
+    if(isSmartExecutionNode(node)||isSmartMaterialNode(node)){
+        composer.classList.add("screen-ui");
+        const scale=safeScale(viewport.scale),width=Math.min(620,Math.max(280,shell.clientWidth-28));
+        composer.style.width=width+'px';composer.style.transform=`scale(${1/scale})`;composer.style.transformOrigin='0 0';
+        composer.style.height='';composer.style.maxHeight=Math.max(240,shell.clientHeight-100)+'px';
+        const leftScreen=Math.max(14,Math.min(viewport.x+(rect.x+rect.width/2)*scale-width/2,shell.clientWidth-width-14));
+        composer.style.left=(leftScreen-viewport.x)/scale+'px';composer.style.top=(rect.y+rect.height+14/scale)+'px';
+        composer.style.setProperty('--ai-app-param-list-max-height',Math.max(80,shell.clientHeight-350)+'px');
+        composer.classList.remove('composer-side','composer-above');return;
+    }
+    composer.classList.remove('screen-ui');composer.style.transform='';composer.style.maxHeight='';
     const gap = 14;
     const safeScreen = 14;
     const scale = safeScale(viewport.scale);
@@ -20319,14 +20220,14 @@ function positionComposerForNode(node){
     const visibleRight = (shell.clientWidth - safeScreen - viewport.x) / scale;
     const visibleTop = (safeScreen - viewport.y) / scale;
     const visibleBottom = (shell.clientHeight - safeScreen - viewport.y) / scale;
-    const forceBelow = node.type === SMART_NODE_TYPES.aiApp;
-    const cardW = Math.min(forceBelow ? 440 : 540, maxWorldWidth);
+    const forceBelow = isSmartExecutionNode(node) || isSmartMaterialNode(node);
+    const cardW = Math.min(forceBelow ? Math.max(420, Math.min(760, rect.width)) : 540, maxWorldWidth);
     composer.style.width = `${cardW}px`;
     const availableBelow = Math.max(1, visibleBottom - (rect.y + rect.height + gap));
     composer.style.height = '';
     composer.style.setProperty('--ai-app-param-list-max-height', `${Math.max(60, availableBelow - 180)}px`);
     let cardH = Math.max(1, composer.offsetHeight || composer.getBoundingClientRect().height / scale || 1);
-    if(forceBelow && availableBelow >= 180 && cardH > availableBelow){
+    if(node.type === SMART_NODE_TYPES.aiApp && availableBelow >= 180 && cardH > availableBelow){
         composer.style.height = `${availableBelow}px`;
         cardH = availableBelow;
     }
@@ -20420,6 +20321,11 @@ function updateComposer(){
     const hasPromptInput = promptInputNodesFor(node).length > 0;
     if(switchedNode){
         settings = smartSettingsForNode(subject);
+        // 查看节点不算编辑，也不能让 Agent 新建节点覆盖手动创建记忆。
+        if(!manualNodeSettingsFingerprints.has(subject.id)){
+            const snapshot = manualExecutionSettingsSnapshot(subject, settings);
+            if(snapshot) manualNodeSettingsFingerprints.set(subject.id, JSON.stringify(snapshot));
+        }
         loadPromptDraft(subject);
     }
     setPromptInputLocked(false);
@@ -20466,7 +20372,7 @@ function renderInputThumbsRow(node){
     }
     const manualRefKeys = new Set(manualReferenceImagesFor(node).map(img => inputRefKey(img)));
     const connectedRefKeys = new Set(dedup.filter(img => isConnectedInputReference(node, img)).map(img => inputRefKey(img)));
-    const canSwapConnectedRefs = connectedRefKeys.size > 1;
+    const canSwapRefs = dedup.filter(hasMentionReferenceContent).length > 1;
     const addActive = mentionInsertMode === 'manual-ref';
     // 仅当参考图集合/状态真正变化时才重建缩略图 DOM。否则每敲一个字都重建并重新解码所有图片，
     // 参考图多时会让输入框打字明显卡顿。
@@ -20509,7 +20415,7 @@ function renderInputThumbsRow(node){
         const sourceUrl = img.originalLocalUrl || img.url || '';
         const key = inputRefKey(img);
         const removable = manualRefKeys.has(key) || connectedRefKeys.has(key);
-        const swappable = canSwapConnectedRefs && connectedRefKeys.has(key);
+        const swappable = canSwapRefs && hasMentionReferenceContent(img);
         const removeLabel = capabilityUiText('删除引用','Remove reference');
         const removeBtn = removable ? `<button class="input-thumb-remove" type="button" data-input-remove-index="${i}" title="${escapeAttr(removeLabel)}" aria-label="${escapeAttr(removeLabel)}">×</button>` : '';
         return `<div class="input-thumb ${isSelf ? 'input-self' : ''} ${removable ? 'input-manual-ref' : ''}" draggable="false" data-input-ref-swappable="${swappable ? '1' : '0'}" data-thumb-index="${i}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${img.imageIndex ?? ''}" data-url="${escapeHtml(img.url || '')}" data-source-url="${escapeHtml(sourceUrl)}" title="${escapeHtml(`${img.name || tr('smart.inputNum').replace('{n}', String(i + 1))} · ${title}`)}"><div class="input-thumb-media">${inner}</div><span class="input-thumb-label">${escapeHtml(label)}</span>${removeBtn}</div>`;
@@ -20549,13 +20455,24 @@ function bindInputThumbsDrag(node, items, manualRefKeys=new Set()){
     inputThumbsRow.querySelectorAll('.input-thumb').forEach(el => {
         const index = Number(el.dataset.thumbIndex || -1);
         const item = items[index];
-        const swappable = el.dataset.inputRefSwappable === '1' && isConnectedInputReference(node, item);
+        const swappable = el.dataset.inputRefSwappable === '1' && hasMentionReferenceContent(item);
         el.draggable = swappable;
         el.addEventListener('click', e => {
             e.preventDefault();
             e.stopPropagation();
         });
         if(!el.draggable) return;
+        // Shift 拖动采用指针手势，避免浏览器把原生拖拽解释成扩展选择。
+        el.addEventListener('pointerdown',event=>{
+            if(event.button!==0||!event.shiftKey)return;
+            event.preventDefault();event.stopPropagation();
+            const start={x:event.clientX,y:event.clientY};let moved=false,target=-1;
+            const cleanup=()=>{window.removeEventListener('pointermove',move,true);window.removeEventListener('pointerup',finish,true);window.removeEventListener('pointercancel',cancel,true);window.removeEventListener('blur',cancel);window.removeEventListener('keydown',key,true);clearInputThumbDropMarkers();};
+            const move=e=>{e.preventDefault();e.stopPropagation();moved ||= Math.hypot(e.clientX-start.x,e.clientY-start.y)>4;if(!moved)return;const hit=document.elementFromPoint(e.clientX,e.clientY)?.closest('.input-thumb');target=hit&&inputThumbsRow.contains(hit)?Number(hit.dataset.thumbIndex):-1;clearInputThumbDropMarkers();if(target>=0&&target!==index&&mediaKindForItem(items[target])===mediaKindForItem(item))hit.classList.add('drop-before');};
+            const finish=e=>{move(e);cleanup();if(moved&&target>=0&&target!==index)reorderInputThumb(node,items,index,target,{globalSwap:true});};
+            const cancel=()=>cleanup();const key=e=>{if(e.key==='Escape'){e.preventDefault();cleanup();}};
+            window.addEventListener('pointermove',move,{capture:true,passive:false});window.addEventListener('pointerup',finish,true);window.addEventListener('pointercancel',cancel,true);window.addEventListener('blur',cancel);window.addEventListener('keydown',key,true);
+        });
         el.addEventListener('dragstart', e => {
             e.stopPropagation();
             thumbDragIndex = index;
@@ -20575,7 +20492,7 @@ function bindInputThumbsDrag(node, items, manualRefKeys=new Set()){
         el.addEventListener('dragover', e => {
             const rawFrom = e.dataTransfer.getData('application/x-smart-input-thumb');
             const from = rawFrom === '' ? thumbDragIndex : Number(rawFrom);
-            if(!swappable || !Number.isFinite(from) || from < 0 || from === index || !isConnectedInputReference(node, items[from])) return;
+            if(!swappable || !Number.isFinite(from) || from < 0 || from === index || !hasMentionReferenceContent(items[from])) return;
             if(mediaKindForItem(items[from]) !== mediaKindForItem(item)) return;
             e.preventDefault();
             e.stopPropagation();
@@ -20592,7 +20509,7 @@ function bindInputThumbsDrag(node, items, manualRefKeys=new Set()){
         el.addEventListener('drop', e => {
             const rawFrom = e.dataTransfer.getData('application/x-smart-input-thumb');
             const from = rawFrom === '' ? thumbDragIndex : Number(rawFrom);
-            if(!swappable || !Number.isFinite(from) || from < 0 || from === index || !isConnectedInputReference(node, items[from])) return;
+            if(!swappable || !Number.isFinite(from) || from < 0 || from === index || !hasMentionReferenceContent(items[from])) return;
             if(mediaKindForItem(items[from]) !== mediaKindForItem(item)) return;
             e.preventDefault();
             e.stopPropagation();
@@ -20810,19 +20727,21 @@ function refreshSourceBackedManualReferences(replacements){
     });
 }
 function swapGlobalInputReferences(firstRef, secondRef){
-    const firstSlot = sourceMediaSlotForReference(firstRef);
-    const secondSlot = sourceMediaSlotForReference(secondRef);
-    if(!firstSlot || !secondSlot || (firstSlot.node.id === secondSlot.node.id && firstSlot.imageIndex === secondSlot.imageIndex)) return false;
-    const firstItem = {...firstSlot.item};
-    const secondItem = {...secondSlot.item};
-    firstSlot.node.images[firstSlot.imageIndex] = mediaContentForStableSlot(secondItem, firstItem);
-    secondSlot.node.images[secondSlot.imageIndex] = mediaContentForStableSlot(firstItem, secondItem);
-    const replacements = new Map([
-        [inputRefKey(firstRef), referenceForSourceSlot(firstSlot)],
-        [inputRefKey(secondRef), referenceForSourceSlot(secondSlot)]
-    ].filter(([, ref]) => ref));
+    const firstSlot=sourceMediaSlotForReference(firstRef),secondSlot=sourceMediaSlotForReference(secondRef);
+    if(firstSlot&&secondSlot&&firstSlot.node.id===secondSlot.node.id&&firstSlot.imageIndex===secondSlot.imageIndex)return false;
+    const content=ref=>{const item={...ref};['nodeId','sourceNodeId','inputSourceNodeId','groupNodeId','resultGroupId','imageIndex','alias','manualAdded'].forEach(key=>delete item[key]);return item;};
+    const firstItem=firstSlot?{...firstSlot.item}:content(firstRef),secondItem=secondSlot?{...secondSlot.item}:content(secondRef);
+    if(firstSlot)firstSlot.node.images[firstSlot.imageIndex]=mediaContentForStableSlot(secondItem,firstItem);
+    if(secondSlot)secondSlot.node.images[secondSlot.imageIndex]=mediaContentForStableSlot(firstItem,secondItem);
+    const replacements=new Map([
+        [inputRefKey(firstRef),firstSlot?referenceForSourceSlot(firstSlot):secondItem],
+        [inputRefKey(secondRef),secondSlot?referenceForSourceSlot(secondSlot):firstItem]
+    ]);
     refreshSourceBackedManualReferences(replacements);
-    nodes.filter(isSmartRunnableNode).forEach(node => syncNodeMentionReferences(node, replacements));
+    nodes.forEach(node=>{
+        if(Array.isArray(node.inputRefOrder))node.inputRefOrder=node.inputRefOrder.map(key=>replacements.has(key)?inputRefKey(replacements.get(key)):key);
+        if(isSmartRunnableNode(node))syncNodeMentionReferences(node,replacements);
+    });
     return true;
 }
 function reorderInputThumb(currentNode, items, from, to, options={}){
@@ -20830,7 +20749,7 @@ function reorderInputThumb(currentNode, items, from, to, options={}){
     const fromImg = items[from];
     const toImg = items[to];
     if(mediaKindForItem(fromImg) !== mediaKindForItem(toImg)) return false;
-    if(!isConnectedInputReference(currentNode, fromImg) || !isConnectedInputReference(currentNode, toImg)) return false;
+    if(!hasMentionReferenceContent(fromImg) || !hasMentionReferenceContent(toImg)) return false;
     const fromKey = inputRefKey(fromImg);
     const toKey = inputRefKey(toImg);
     if(!fromKey || !toKey || fromKey === toKey) return false;
@@ -21636,6 +21555,7 @@ function outputImagesForConnection(connection, consume=false, ctx=smartLoopConte
     if(isSmartResultGroupNode(source)){
         return annotate(SMART_NODE_CONTRACT.resultGroupMediaForConnection(source, connection, id => nodes.find(item => item.id === id)).filter(hasMentionReferenceContent));
     }
+    if(connection.sourceVersionId) return annotate(CanvasCreation.references(source, connection));
     return annotate(outputImagesForNode(source, consume, ctx));
 }
 function selfReferenceImagesForNode(node, consume=false, ctx=smartLoopContext){
@@ -21646,11 +21566,11 @@ function textForNode(node, ctx=smartLoopContext){
     if(node.type === 'smart-prompt') return promptNodePromptItems(node).join('\n\n');
     if(node.type === 'smart-loop') return smartLoopPrompt(node, ctx);
     if(node.type === 'smart-group') return smartGroupMembers(node).map(member => textForNode(member, ctx)).filter(Boolean).join('\n\n');
-    if(isSmartMaterialNode(node)) return SMART_NODE_CONTRACT.textContentForNode(node);
+    if(isSmartMaterialNode(node) || isSmartExecutionNode(node)) return SMART_NODE_CONTRACT.textContentForNode(node);
     return '';
 }
 function promptInputNodesFor(node){
-    return inputNodesFor(node).filter(input => input?.type === 'smart-prompt' || input?.type === 'smart-loop' || input?.type === 'smart-group' || (isSmartMaterialNode(input) && SMART_NODE_CONTRACT.textContentForNode(input)));
+    return inputNodesFor(node).filter(input => input?.type === 'smart-prompt' || input?.type === 'smart-loop' || input?.type === 'smart-group' || ((isSmartMaterialNode(input) || isSmartExecutionNode(input)) && SMART_NODE_CONTRACT.textContentForNode(input)));
 }
 function inputPromptTextFor(node, ctx=smartLoopContext, excludedSourceNodeIds=new Set()){
     const excluded = excludedSourceNodeIds instanceof Set ? excludedSourceNodeIds : new Set(excludedSourceNodeIds || []);
@@ -21755,7 +21675,7 @@ function toggleInputRefBlocked(node, img){
 }
 function defaultReferenceImagesFor(node, consume=false, ctx=smartLoopContext){
     if(!node) return [];
-    if(isGeneratedMaterialNode(node)){
+    if(isGeneratedMaterialNode(node) || isSmartExecutionNode(node)){
         return orderedInputReferencesForNode(node, [...inputImagesFor(node, consume, ctx), ...manualReferenceImagesFor(node)]);
     }
     const self = selfReferenceImagesForNode(node, consume, ctx).filter(hasMentionReferenceContent);
@@ -21852,7 +21772,7 @@ function uniqueReferenceImages(images){
 }
 function visibleReferenceImagesFor(node){
     const base = defaultReferenceImagesFor(node);
-    return groupReferenceItemsByMediaKind(uniqueReferenceImages([...base, ...collectMentionedImagesFromPrompt()]));
+    return orderedInputReferencesForNode(node, uniqueReferenceImages([...base, ...collectMentionedImagesFromPrompt()]));
 }
 function inputMentionCandidateImages(node){
     const current = node ? orderedInputReferencesForNode(node, [...lineImagesFor(node), ...manualReferenceImagesFor(node)]) : [];
@@ -22298,7 +22218,8 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
     const hasOverrideImages = Array.isArray(overrideDefaultImages);
     const filteredDefaultImages = (hasOverrideImages ? overrideDefaultImages : defaultReferenceImagesFor(node, consumeDefault, ctx))
         .filter(img => !blockedRefs.has(inputRefKey(img)));
-    const defaultRefs = uniqueReferenceImages(filteredDefaultImages).filter(img => img?.url && mediaKindForItem(img) !== 'text');
+    const mentionedMedia=parts.filter(part=>part.type==='image'&&part.url&&part.kind!=='text'&&!blockedRefs.has(inputRefKey(part)));
+    const defaultRefs = orderedInputReferencesForNode(node,uniqueReferenceImages([...filteredDefaultImages,...mentionedMedia])).filter(img => img?.url && mediaKindForItem(img) !== 'text');
     const refs = defaultRefs.map((img, index) => ({...img, role:`image_${index + 1}`}));
     let hasMentionToken = false;
     const refMap = new Map();
@@ -22387,6 +22308,20 @@ function nextOutputPositionForSource(sourceNode, pendingBox, options={}){
     return {x, y};
 }
 function createPendingOutputFromSource(sourceNode, expectedCount, meta, options={}){
+    if(isSmartExecutionNode(sourceNode)){
+        const task = CanvasCreation.begin(nodes, sourceNode);
+        task.pending = Math.max(1, Number(expectedCount) || 1);
+        attachRunMeta(task, meta);
+        task.creationType=sourceNode.type;
+        task.title=sourceNode.title;
+        task.promptDraftText=sourceNode.promptDraftText||'';
+        task.promptDraftHtml=sourceNode.promptDraftHtml||'';
+        task.runInputRefs=cloneSmartSettings(options.refs||[]);
+        task.runPromptRefs=cloneSmartSettings(options.refs||[]);
+        task._selectAfterRunId = sourceNode.id;
+        selectedId = sourceNode.id;
+        return task;
+    }
     const pendingBox = sourceNode?.type === SMART_NODE_TYPES.textGenerator
         ? {w:316, h:220}
         : pendingBoxSize(expectedCount, {sourceNode, refs:options.refs || meta?.promptRefs || []});
@@ -22420,6 +22355,7 @@ function createPendingOutputFromSource(sourceNode, expectedCount, meta, options=
     return output;
 }
 function removeEmptyRunPlaceholder(node){
+    if(node?.creationTask){ node.runStatus = 'cancelled'; node.pending = 0; node.pendingTasks = []; scheduleSave(); return true; }
     if(!node?.id || node.isRunPlaceholder !== true) return false;
     const hasResult = (node.images || []).some(item => item?.url || item?.resultId || item?.result_id);
     if(hasResult || node.jimengPending || smartPendingTasks(node).length || smartRecoverableImageTask(node)) return false;
@@ -22457,7 +22393,7 @@ async function cancelCanvasTaskIds(taskIds=[]){
     })));
 }
 async function cancelExecutionResultRun(resultNodeId){
-    const resultNode = nodes.find(node => node.id === resultNodeId);
+    const resultNode = CanvasCreation.tasks(nodes).find(node => node.id === resultNodeId) || nodes.find(node => node.id === resultNodeId);
     if(!resultNode || resultNode.cancelInProgress) return;
     const executionNode = executionNodeForRunSubject(resultNode);
     const taskIds = [...new Set([
@@ -22661,14 +22597,14 @@ function finalizePendingNode(pendingNode, urls, meta, kind='image'){
         const url = typeof item === 'string' ? item : item?.url || '';
         const itemKind = (typeof item === 'object' && item.kind) || kind;
         const source = item && typeof item === 'object' ? item : {};
-        return normalizeSmartMediaReference(copyMediaSizeFields(item, {...source, url, name:source.name || `output-${i + 1}.${ext}`, kind:itemKind, generatedResult:true}), i);
+        return normalizeSmartMediaReference(copyMediaSizeFields(item, {...source, url, name:pendingNode.creationTask ? `${pendingNode.title || '生成结果'}${urls.length>1 ? `_${i+1}` : ''}.${ext}` : source.name || `output-${i + 1}.${ext}`, kind:itemKind, generatedResult:true}), i);
     }).filter(img => img.url));
     pendingNode.images = imgs;
     markSmartNodeComplete(pendingNode, meta);
     bindExecutionResultMetadata(pendingNode);
     pendingNode.outputKind = kind;
-    if(imgs.length > 1) pendingNode.title = kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : kind === 'file' ? 'Files' : 'Group';
-    else pendingNode.title = kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : kind === 'text' ? 'Text' : kind === 'file' ? 'File' : 'Image';
+    if(!pendingNode.creationTask && imgs.length > 1) pendingNode.title = kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : kind === 'file' ? 'Files' : 'Group';
+    else if(!pendingNode.creationTask) pendingNode.title = kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : kind === 'text' ? 'Text' : kind === 'file' ? 'File' : 'Image';
     pendingNode.scale = mediaNodeDefaultScale(pendingNode);
     delete pendingNode.w;
     delete pendingNode.h;
@@ -22678,6 +22614,7 @@ function finalizePendingNode(pendingNode, urls, meta, kind='image'){
     clearSourceBusyStateIfDownstreamDone(nodes.find(n => n.id === meta?.sourceNodeId));
     // 生成完成不抢占选择:仅当用户仍停留在该生成节点上(或当前无选择)时才切换选择;
     // 否则保留用户当前选择 —— 支持并发生成时去调整/编辑别的卡片,A 节点的参数栏不被打断。
+    if(pendingNode.creationTask) CanvasCreation.publish(nodes, pendingNode);
     const afterRunSelection = pendingNode._selectAfterRunId || pendingNode.id;
     if(!selectedId || selectedId === pendingNode.id) selectedId = afterRunSelection;
     delete pendingNode._runMetaTargetId;
@@ -23984,7 +23921,7 @@ async function runGeneration(){
     const apiConcurrentRun = isApiLikeEngine(settings.engine) || settings.engine === 'runninghub' || settings.engine === 'modelscope' || settings.engine === 'comfy';
     const nodeHasImages = isSmartGroupNode(node) ? imagesForNode(node).some(img => img?.url) : (node.images || []).some(img => img?.url);
     const workflowModeRun = smartImageUsesWorkflowInput(node, smartLoopContext);
-    const sourceVisualState = isSmartImageNode(node) && nodeHasImages && !workflowModeRun ? {
+    const sourceVisualState = !isSmartExecutionNode(node) && isSmartImageNode(node) && nodeHasImages && !workflowModeRun ? {
         images:(node.images || []).map(img => ({...img})),
         title:node.title,
         w:node.w,
@@ -24325,11 +24262,10 @@ async function runPromptLLMNode(nodeId){
                         audios:[...audios],
                         systemPrompt:(runSettings.textSystemEnabled ? systemPrompt : ''),
                         systemTemplate:cloneSmartSettings(runSettings.textSystemTemplateSnapshot || null),
-                        skill:cloneSmartSettings(runSettings.textSystemSkillSnapshot || null),
                         createdAt:Date.now()
                 };
                 node.runSettings = settingsForStorage(runSettings);
-                selectedId = pendingNode.id;
+                selectedId = pendingNode.creationTask ? node.id : pendingNode.id;
             } else {
                 const pos = nextOutputPositionForSource(node, {w:316, h:220});
                 const created = SMART_NODE_CONTRACT.createTextResultMaterial(node, generatedText, {
@@ -24448,6 +24384,7 @@ async function finishCanvasRun(node, mediaItems=[], status='succeeded'){
     SMART_NODE_CONTRACT.markExecutionRunSucceeded(node, status);
     bindExecutionResultMetadata(node, executionNode);
     await appendCanvasRunResults(node, mediaItems);
+    if(node.creationTask && node.images?.length) CanvasCreation.publish(nodes, node);
     const result = await updateCanvasRunStatus(node, status);
     scheduleSave();
     return result;
@@ -24522,6 +24459,7 @@ async function preflightCanvasNodeRun(options={}){
         ...options,
         canvasId,
         nodeId:runNode?.id || '',
+        graphNode:runNode?.creationTask ? nodes.find(n=>n.id===runNode.sourceExecutionNodeId) : runNode,
         clientOperationId,
         graphNodes:nodes,
         graphConnections:canvas?.connections || [],
@@ -24585,10 +24523,7 @@ async function runApiGeneration(prompt, refs, runSettings=settings, runNode=null
     });
     const activeRunNode = runNode || activeSettingsSubject();
     await queueCanvasRun(activeRunNode);
-    const settled = await Promise.allSettled(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, signal:executionResultAbortSignal(activeRunNode), body:JSON.stringify(payload)}).then(async r => {
-        if(!r.ok) throw new Error(await r.text());
-        return r.json();
-    })));
+    const settled = await canvasModelClient.submitMany('/api/canvas-image-tasks',payload,count,{signal:executionResultAbortSignal(activeRunNode)});
     const tasks = settled.filter(item => item.status === 'fulfilled').map(item => item.value);
     const submissionFailures = settled.filter(item => item.status === 'rejected').map(item => item.reason?.message || String(item.reason || tr('smart.errRunFailed')));
     const taskIds = tasks.map(task => task.task_id).filter(Boolean);
@@ -24787,12 +24722,7 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, runNode
         });
         const activeRunNode = runNode || activeSettingsSubject();
         await queueCanvasRun(activeRunNode);
-        const result = await fetch('/api/canvas-video', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            signal:executionResultAbortSignal(activeRunNode),
-            body:JSON.stringify(payload)
-        }).then(async r => { if(!r.ok) throw new Error(await smartResponseErrorMessage(r, tr('smart.errRunFailed'))); return r.json(); });
+        const result = await canvasModelClient.post('/api/canvas-video',payload,{signal:executionResultAbortSignal(activeRunNode)});
         if(result && result.jimeng_pending){
             await submitCanvasRun(activeRunNode, result.submit_id || '');
             await recoverCanvasRun(activeRunNode, result.message || '任务仍在排队，可继续查询');
@@ -24814,9 +24744,10 @@ async function runApiAudioMediaGeneration(prompt, refs, runSettings=settings, ru
     const modelId = isMusic ? runSettings.musicModel : runSettings.audioModel;
     const nodeType = isMusic ? 'music_generation' : 'audio_generation';
     if(!providerId) throw new Error(isMusic ? tr('smart.errNoMusicModel') : tr('smart.errNoAudioModel'));
-    const referenceAudio = audioRefsOnly(refs).find(ref => ref?.url)?.url || '';
-    const inputCounts = {text:prompt ? 1 : 0, image:0, video:0, audio:referenceAudio ? 1 : 0};
-    const inputRoles = capabilityInputRoles([{url:referenceAudio, kind:'audio', role:'reference_audio'}].filter(item => item.url), Boolean(prompt));
+    const referenceAudios = audioRefsOnly(refs).filter(ref => ref?.url).map(ref => ref.url);
+    const referenceAudio = referenceAudios[0] || '';
+    const inputCounts = {text:prompt ? 1 : 0, image:0, video:0, audio:referenceAudios.length};
+    const inputRoles = capabilityInputRoles(referenceAudios.map(url => ({url, kind:'audio', role:'reference_audio'})), Boolean(prompt));
     const parameterIntent = capabilityParameterIntent(providerId, modelId, nodeType, runSettings);
     const selection = resolveCapabilityForRun(providerId, nodeType, inputCounts, familyId, modelId, '', inputRoles, parameterIntent);
     const profile = selection.profile;
@@ -24840,6 +24771,7 @@ async function runApiAudioMediaGeneration(prompt, refs, runSettings=settings, ru
     }, parameterValues);
     const effectiveParameters = window.SmartModelCapabilities?.effectiveParameters(profile, parameterValues) || {};
     payload.parameters = effectiveParameters;
+    payload.reference_audios = referenceAudios;
     await preflightCanvasNodeRun({
         node:runNode || activeSettingsSubject(),
         clientOperationId,
@@ -24847,22 +24779,14 @@ async function runApiAudioMediaGeneration(prompt, refs, runSettings=settings, ru
         modelId:payload.model,
         familyId:payload.family_id,
         nodeType,
-        inputs:{prompt:payload.prompt, reference_audio:payload.reference_audio || ''},
+        inputs:{prompt:payload.prompt, reference_audio:referenceAudios},
         inputCounts,
         inputRoles,
         parameters:effectiveParameters
     });
     const activeRunNode = runNode || activeSettingsSubject();
     await queueCanvasRun(activeRunNode);
-    const result = await fetch(isMusic ? '/api/canvas-music' : '/api/canvas-audio', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        signal:executionResultAbortSignal(activeRunNode),
-        body:JSON.stringify(payload)
-    }).then(async response => {
-        if(!response.ok) throw new Error(await smartResponseErrorMessage(response, tr('smart.errRunFailed')));
-        return response.json();
-    });
+    const result = await canvasModelClient.post(isMusic ? '/api/canvas-music' : '/api/canvas-audio',payload,{signal:executionResultAbortSignal(activeRunNode)});
     const urls = resultMediaUrls(result);
     const outputKind = resultMediaKind(result, 'audio');
     await submitCanvasRun(activeRunNode, result?.task_id || '');
@@ -25627,7 +25551,10 @@ function finalizeJimengPending(node, urls, kind='image'){
     }).filter(item => item.url);
     if(!additions.length) return false;
     delete node.jimengPending;
-    replaceOutputsToNodeWithHistory(node, additions, kind, null, {skipShift:true});
+    if(node.creationTask){
+        node.images=additions; node.outputKind=kind; node.runStatus='succeeded';
+        CanvasCreation.publish(nodes,node);
+    } else replaceOutputsToNodeWithHistory(node, additions, kind, null, {skipShift:true});
     bindExecutionResultMetadata(node);
     delete node.isRunPlaceholder;
     node.running = false;
@@ -25675,7 +25602,7 @@ async function fetchJimengQuery(submitId, kind){
     }).then(async r => { if(!r.ok) throw new Error(await r.text()); return r.json(); });
 }
 async function queryJimengNow(nodeId){
-    const node = nodes.find(n => n.id === nodeId);
+    const node = nodes.find(n => n.id === nodeId) || CanvasCreation.tasks(nodes).find(n => n.id === nodeId);
     if(!node || !node.jimengPending || !node.jimengPending.submitId) return;
     if(node.jimengPending.querying) return;
     const submitId = node.jimengPending.submitId;
@@ -25706,7 +25633,7 @@ async function fetchImageTaskQuery(providerId, taskId){
     });
 }
 async function querySmartImageTaskNow(nodeId, localTaskId){
-    const node = nodes.find(n => n.id === nodeId);
+    const node = nodes.find(n => n.id === nodeId) || CanvasCreation.tasks(nodes).find(n => n.id === nodeId);
     if(!node) return;
     const task = smartPendingTasks(node).find(item => item.taskId === localTaskId) || smartRecoverableImageTask(node);
     if(!task || task.querying) return;
@@ -25755,7 +25682,7 @@ function startJimengPoll(node){
         try {
             for(let i = 0; i < JIMENG_POLL_MAX; i++){
                 if(i > 0) await new Promise(resolve => setTimeout(resolve, JIMENG_POLL_INTERVAL));
-                const cur = nodes.find(n => n.id === nodeId);
+                const cur = nodes.find(n => n.id === nodeId) || CanvasCreation.tasks(nodes).find(n => n.id === nodeId);
                 if(!cur || !cur.jimengPending || cur.jimengPending.submitId !== submitId) return;
                 if(cur.jimengPending.querying) continue;
                 let data;
@@ -25764,7 +25691,7 @@ function startJimengPoll(node){
                 } catch(err){ continue; }
                 const done = applyJimengQueryResult(cur, data);
                 if(done) return;
-                const after = nodes.find(n => n.id === nodeId);
+                const after = nodes.find(n => n.id === nodeId) || CanvasCreation.tasks(nodes).find(n => n.id === nodeId);
                 if(!after || !after.jimengPending || after.jimengPending.submitId !== submitId) return;
             }
         } finally {
@@ -25773,7 +25700,7 @@ function startJimengPoll(node){
     })();
 }
 function resumeJimengPendingNodes(){
-    nodes.filter(n => n && n.jimengPending && n.jimengPending.submitId).forEach(n => {
+    [...nodes, ...CanvasCreation.tasks(nodes)].filter(n => n && n.jimengPending && n.jimengPending.submitId).forEach(n => {
         n.jimengPending.querying = false;
         startJimengPoll(n);
     });
@@ -25824,7 +25751,7 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
     const additions = cleanHistoryImages((mediaItems || []).map((item, i) => {
         const url = typeof item === 'string' ? item : item?.url || '';
         const itemKind = (typeof item === 'object' && item.kind) || kind;
-        return stripImageGenerationMeta(copyMediaSizeFields(item, {url, name:(typeof item === 'object' && item.name) || `output-${i + 1}.${ext}`, kind:itemKind, generatedResult:true}));
+        return stripImageGenerationMeta(copyMediaSizeFields(item, {url, name:node.creationTask ? `${node.title || '生成结果'}${mediaItems.length>1?`_${i+1}`:''}.${ext}` : (typeof item === 'object' && item.name) || `output-${i + 1}.${ext}`, kind:itemKind, generatedResult:true}));
     }).filter(item => item.url)).filter(item => {
         const key = `${item.kind || ''}|${item.url || ''}`;
         if(seen.has(key)) return false;
@@ -25844,7 +25771,7 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
         node.runElapsedMs = Math.max(0, node.runFinishedAt - Number(node.runStartedAt || node.runFinishedAt));
         node.runTimerHidden = false;
         node.running = false;
-        node.title = node.images.length > 1 ? (kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : 'Group') : (kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : kind === 'text' ? 'Text' : 'Image');
+        if(!node.creationTask) node.title = node.images.length > 1 ? (kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : 'Group') : (kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : kind === 'text' ? 'Text' : 'Image');
         if(node.images.length > 1 && (!Number.isFinite(Number(node.scale)) || Number(node.scale) === MEDIA_NODE_DEFAULT_SCALE || Number(node.scale) === MEDIA_GROUP_PREVIOUS_DEFAULT_SCALE)) node.scale = MEDIA_GROUP_DEFAULT_SCALE;
         else node.scale = mediaNodeDefaultScale(node);
         delete node.w;
@@ -25953,7 +25880,7 @@ async function resumeSmartPendingNode(node, logContext={}){
     }
 }
 function resumeSmartPendingTasks(){
-    nodes.filter(node => smartPendingTasks(node).length).forEach(node => {
+    [...nodes, ...CanvasCreation.tasks(nodes)].filter(node => smartPendingTasks(node).length).forEach(node => {
         resumeSmartPendingNode(node);
     });
 }
@@ -26248,7 +26175,7 @@ function createNodeFromMenu(type){
     const pendingConnection = createMenuConnection;
     createMenuConnection = null;
     closeCreateMenu();
-    const createOptions = pendingConnection ? {skipUndo:true} : {};
+    const createOptions = {inheritManual:true, ...(pendingConnection ? {skipUndo:true} : {})};
     let created = null;
     if(type === 'prompt') created = createExecutionNode(p.x - 158, p.y - 97, SMART_NODE_TYPES.textGenerator, createOptions);
     else if(type === 'angle-control') created = createAngleControlNode(p, createOptions);
@@ -26447,6 +26374,7 @@ shell.onmousedown = e => {
     shell.classList.add('panning');
 };
 shell.oncontextmenu = e => {
+    if(e.shiftKey||portDragState?.kind==='story'){e.preventDefault();e.stopPropagation();return;}
     if((e.ctrlKey || e.metaKey) || isRKeyDown){
         e.preventDefault();
         e.stopPropagation();
@@ -26520,8 +26448,8 @@ function updatePortDragFromPointer(e){
     return true;
 }
 function beginShiftConnectionFromPointer(event){
-    if(event.button !== 0 || !event.shiftKey) return false;
-    if(event.target?.closest?.('.node-port')) return false;
+    if(![0,2].includes(event.button) || !event.shiftKey) return false;
+    if(event.button===0&&event.target?.closest?.('.node-port')) return false;
     if(event.target?.closest?.('.input-thumb[data-input-ref-swappable="1"]')) return false;
     const hit = connectionNodeHitAtPoint(event.clientX, event.clientY, event.target);
     if(!hit.nodeId) return false;
@@ -26533,12 +26461,14 @@ function beginShiftConnectionFromPointer(event){
     shiftNodeClickCandidate = null;
     const started = beginNodeConnectionDrag(event, hit.nodeId);
     if(started && portDragState){
-        portDragState.shiftNodeClick = true;
+        portDragState.kind = event.button===2?'story':'input';
+        portDragState.shiftNodeClick = event.button===0;
         portDragState.shiftNodeDoubleClick = Boolean(isDoubleClick);
     }
     return started;
 }
 shell.addEventListener('mousedown', beginShiftConnectionFromPointer, true);
+shell.addEventListener('contextmenu',event=>{if(event.shiftKey||portDragState?.kind==='story'){event.preventDefault();event.stopImmediatePropagation();}},true);
 function handlePortDragPointerMove(e){
     if(!portDragState) return;
     e.preventDefault();
@@ -27046,6 +26976,13 @@ window.addEventListener('paste', e => {
         e.preventDefault();
         createTextMaterialNodeAt(viewportCenter(), text, {name:'剪贴板文本.md'});
     }
+});
+// 部分桌面浏览器将 Command+C 直接转成原生 copy 事件，仍沿用节点复制。
+window.addEventListener('copy', event => {
+    if(event.defaultPrevented || isEditableTarget(event.target) || window.getSelection()?.toString()) return;
+    if(document.querySelector('dialog[open]') || !selectedNodeIds().length) return;
+    event.preventDefault();
+    copySelectedNodes();
 });
 window.addEventListener('keydown', e => {
     const key = String(e.key || '').toLowerCase();
@@ -28085,3 +28022,35 @@ window.onload = async () => {
     syncApiKindToggleVisibility();
     render();
 };
+
+document.getElementById("imageEditStage").addEventListener('click',event=>{
+    if(imageEditMode==='preview' && (event.target===document.getElementById("imageEditStage") || event.target.classList.contains('media-preview-exit-hints')))closeImageEditor();
+});
+
+document.addEventListener('focusout', event=>{
+    const control=event.target.closest?.('input.capability-number-value[data-capability-param]');
+    if(!control) return;
+    const value=capabilityInputValue(control);
+    if(value!==undefined){control.value=String(value);syncCapabilityNumericControls(control,value);}
+});
+
+// 素材处理复用同一数值控件；已有成对控件不重复插入。
+window.StudioMedia?.bindNumericSliders(document.querySelectorAll('#mediaTransformStart,#mediaTransformEnd,#maskBrushSize,#paintBrushSize,#gridGapSize'));
+
+// 创作表格仅通过显式回调连接画布，不持有画布或执行器的全局状态。
+canvasProductionView = CanvasProduction.mount({
+    container:shell,button:document.getElementById('canvasProductionToggle'),getNodes:()=>nodes,getConnections:()=>canvas?.connections||[],
+    text:capabilityUiText,bindPosters:root=>StudioMedia.bindVideoPosters(root),
+    focus:(id,bottomInset)=>{
+        if(!nodes.some(n=>n.id===id))return;
+        // 导航不进入参数编辑，避免仅查看进度就触发模型自动选择或改写草稿。
+        focusSmartNodeInViewport(id,{bottomInset});
+    },
+    registerSelected:()=>{
+        const selected=selectedNodeIds().map(id=>nodes.find(n=>n.id===id)).filter(n=>n&&CanvasProduction.kind(n)==='text'&&n.production?.role!=='script');
+        if(!selected.length){toast(capabilityUiText('请先选中分段文本节点','Select segment text nodes first'));return;}
+        pushUndo();let order=Math.max(0,...CanvasProduction.rows(nodes,canvas?.connections||[]).map(r=>r.number));
+        selected.filter(n=>n.production?.role!=='segment').forEach(n=>CanvasProduction.update(n,{role:'segment',order:++order},nodes));
+        render();scheduleSave();
+    }
+});

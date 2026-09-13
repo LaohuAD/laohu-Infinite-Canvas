@@ -1,0 +1,275 @@
+"""Mac/Windows 共用的本地安装、就绪检查与启动入口；不结束既有进程。"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import functools
+import signal
+import socket
+import subprocess
+import sys
+import time
+import urllib.request
+import uuid
+import webbrowser
+
+ROOT = Path(__file__).resolve().parent
+LOCAL_URL = 'http://127.0.0.1:3000/'
+REPO_URL = 'https://github.com/LaohuAD/laohu-Infinite-Canvas'
+
+
+@functools.lru_cache(maxsize=48)
+def _media_binary_works(path: str, modified: int, time_bucket: int) -> bool:
+    """检查动态库是否齐全；文件存在或 which 命中不代表能运行。"""
+    try:
+        return subprocess.run([path, '-version'], capture_output=True, timeout=8).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def resolve_media_tool(name: str) -> str | None:
+    if name not in {'ffmpeg', 'ffprobe'}:
+        raise ValueError('不支持的媒体工具')
+    executable = name + ('.exe' if os.name == 'nt' else '')
+    candidates = [os.environ.get('LAOHU_' + name.upper() + '_PATH'), shutil.which(name),
+                  str(ROOT / 'ffmpeg' / 'bin' / executable), str(ROOT / 'bin' / executable)]
+    if sys.platform == 'darwin':
+        for prefix in (Path('/opt/homebrew/opt'), Path('/usr/local/opt')):
+            candidates.extend(str(p / 'bin' / executable) for p in sorted(prefix.glob('ffmpeg*'), reverse=True))
+    for candidate in dict.fromkeys(candidates):
+        if not candidate:
+            continue
+        try:
+            stamp = Path(candidate).stat().st_mtime_ns
+        except OSError:
+            continue
+        if _media_binary_works(candidate, stamp, int(time.monotonic() // 30)):
+            return candidate
+    return None
+
+
+def environment_python(root: Path, platform: str | None = None) -> Path:
+    platform = platform or os.name
+    if (root / 'cache/runtime/active-environment.json').exists():
+        from canvas_update import runtime_python
+        return Path(runtime_python(root))
+    bundled = root / 'python' / 'python.exe'
+    if platform == 'nt' and bundled.is_file():
+        return bundled
+    venv = root / '.venv' / ('Scripts/python.exe' if platform == 'nt' else 'bin/python')
+    return venv if venv.is_file() else Path(sys.executable)
+
+
+def runtime_environment(root: Path) -> dict:
+    env = dict(os.environ)
+    for key, directory in [('TMPDIR', 'tmp'), ('TMP', 'tmp'), ('TEMP', 'tmp'), ('PIP_CACHE_DIR', 'pip')]:
+        path = root / 'cache' / 'runtime' / directory
+        path.mkdir(parents=True, exist_ok=True)
+        env[key] = str(path)
+    env['PYTHONUTF8'] = '1'
+    env['PYTHONIOENCODING'] = 'utf-8'
+    return env
+
+
+def canvas_ready(url: str = LOCAL_URL, expected_version: str = "") -> bool:
+    try:
+        # 本地探测不经过系统 HTTP 代理。
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(url.rstrip('/') + '/api/app-info', timeout=1) as response:
+            info = json.loads(response.read(65536))
+        return isinstance(info, dict) and info.get('repo_url') == REPO_URL and bool(info.get('version')) and (not expected_version or info['version'] == expected_version)
+    except (OSError, ValueError):
+        return False
+
+
+def port_open() -> bool:
+    try:
+        with socket.create_connection(('127.0.0.1', 3000), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
+def stop_owned_process(child) -> None:
+    """只清理本次启动所创建的进程组，绝不按端口查杀其他程序。"""
+    if child.poll() is not None:
+        return
+    try:
+        if os.name == 'nt':
+            child.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+            os.killpg(child.pid, signal.SIGINT)
+        child.wait(timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        if child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
+
+
+def request_restart(root: Path, delay_seconds: int = 3, update_job: str = "") -> bool:
+    """请求启动器重启其自己的子进程；直接启动 main.py 时由用户手动重启。"""
+    value = os.environ.get('INFINITE_CANVAS_RESTART_FILE', '')
+    if not value:
+        return False
+    request = Path(value).resolve()
+    folder = (root / 'cache' / 'runtime' / 'restarts').resolve()
+    if request.parent != folder or request.suffix != '.json' or not folder.is_dir():
+        return False
+    temporary = request.with_suffix('.tmp')
+    temporary.write_text(json.dumps({'restart_at': time.time() + max(1, int(delay_seconds or 3)), 'update_job':update_job}), encoding='utf-8')
+    os.replace(temporary, request)
+    return True
+
+
+def launch(root: Path = ROOT, open_browser: bool = True) -> int:
+    if canvas_ready():
+        print('画布已运行，复用现有服务：' + LOCAL_URL, flush=True)
+        if open_browser:
+            webbrowser.open(LOCAL_URL)
+        return 0
+    if port_open():
+        print('3000 端口已被其他服务占用或画布尚未就绪。请稍后重试或检查该程序；启动器不会结束它。', flush=True)
+        return 1
+    import canvas_update
+    canvas_update.recover(root)
+    env = runtime_environment(root)
+    env['INFINITE_CANVAS_AUTO_RELOAD'] = '0'
+    env['INFINITE_CANVAS_UPDATER_PROTOCOL'] = '1'
+    requests = root / 'cache' / 'runtime' / 'restarts'
+    requests.mkdir(parents=True, exist_ok=True)
+    request = requests / (uuid.uuid4().hex + '.json')
+    env['INFINITE_CANVAS_RESTART_FILE'] = str(request)
+    kwargs = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' else {'start_new_session': True}
+    child = None
+    browser_opened = False
+    upgrading = False
+    try:
+        while True:
+            try:
+                child = subprocess.Popen([str(environment_python(root)), str(root / 'main.py')], cwd=root, env=env, **kwargs)
+            except OSError:
+                if upgrading:
+                    canvas_update.recover(root)
+                    upgrading = False
+                    continue
+                raise
+            deadline = time.monotonic() + 60
+            ready = False
+            while True:
+                code = child.poll()
+                if code is not None:
+                    if not ready and upgrading:
+                        canvas_update.recover(root)
+                        upgrading = False
+                        print('新版启动失败，已恢复旧程序、依赖入口与结构化数据，正在重新启动…', flush=True)
+                        break
+                    if not ready:
+                        print('服务启动失败，请查看上方错误，必要时运行依赖安装脚本。', flush=True)
+                    return code if ready else (code or 1)
+                if not ready and (canvas_ready(expected_version=(root / 'VERSION').read_text(encoding='utf-8').strip()) if upgrading else canvas_ready()):
+                    ready = True
+                    if upgrading:
+                        canvas_update.finish(root)
+                        upgrading = False
+                    print('画布已就绪：' + LOCAL_URL + '（按 Ctrl+C 停止）', flush=True)
+                    if open_browser and not browser_opened:
+                        webbrowser.open(LOCAL_URL)
+                        browser_opened = True
+                if not ready and time.monotonic() >= deadline:
+                    stop_owned_process(child)
+                    if upgrading:
+                        canvas_update.recover(root)
+                        upgrading = False
+                        print('新版就绪超时，已恢复旧版。', flush=True)
+                        break
+                    print('启动超过 60 秒仍未就绪，请查看上方错误。', flush=True)
+                    return 1
+                if request.exists():
+                    try:
+                        restart_data = json.loads(request.read_text(encoding='utf-8'))
+                        restart_at = float(restart_data['restart_at'])
+                    except (OSError, ValueError, KeyError, TypeError):
+                        request.unlink(missing_ok=True)
+                    else:
+                        if time.time() >= restart_at:
+                            request.unlink(missing_ok=True)
+                            print('正在重启本启动器管理的画布服务…', flush=True)
+                            stop_owned_process(child)
+                            if restart_data.get('update_job'):
+                                try:
+                                    canvas_update.apply_job(root, restart_data['update_job'])
+                                    upgrading = True
+                                except Exception as exc:
+                                    print(f'升级未完成，保留或恢复旧版：{exc}', flush=True)
+                            break
+                time.sleep(0.3)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        if child is not None:
+            stop_owned_process(child)
+        request.unlink(missing_ok=True)
+
+
+def install(root: Path = ROOT) -> int:
+    env = runtime_environment(root)
+    bundled = os.name == 'nt' and (root / 'python/python.exe').is_file()
+    venv = root / '.venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+    if not bundled and not venv.is_file():
+        code = subprocess.call([sys.executable, '-m', 'venv', str(root / '.venv')], env=env)
+        if code:
+            return code
+    python = str(environment_python(root))
+    def run(*args):
+        return subprocess.call([python, *args], cwd=root, env=env)
+    if run('-m', 'pip', '--version'):
+        if run('-m', 'ensurepip', '--upgrade'):
+            # Windows 官方嵌入版可能没有 ensurepip，保留安装引导能力。
+            bootstrap = Path(env['TMPDIR']) / 'get-pip.py'
+            try:
+                urllib.request.urlretrieve('https://bootstrap.pypa.io/get-pip.py', bootstrap)
+                code = run(str(bootstrap))
+            finally:
+                bootstrap.unlink(missing_ok=True)
+            if code:
+                return code
+    code = run('-m', 'pip', 'install', '--no-index', '--find-links', str(root / 'packages'), '-r', str(root / 'requirements.txt'))
+    if code:
+        print('离线包不完整或不适合当前 Python，转为在线安装。', flush=True)
+        code = run('-m', 'pip', 'install', '-r', str(root / 'requirements.txt'))
+    if code == 0:
+        print('依赖安装完成。Mac 请运行 mac-启动服务.command；Windows 请运行 run.bat。', flush=True)
+    else:
+        print('依赖安装失败，请处理上方错误后重试。', flush=True)
+    return code
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--install', action='store_true', help='安装到启动时使用的同一 Python 环境')
+    parser.add_argument('--no-browser', action='store_true', help='启动但不打开浏览器')
+    parser.add_argument('--check', action='store_true', help='只检查现有服务，不启动、不停止服务')
+    args = parser.parse_args()
+    if sys.version_info < (3, 10):
+        print('需要 Python 3.10 或更新版本。')
+        return 1
+    if args.check:
+        ready = canvas_ready()
+        print('画布已就绪：' + LOCAL_URL if ready else '画布未就绪。')
+        return 0 if ready else 1
+    return install(ROOT) if args.install else launch(ROOT, not args.no_browser)
+
+
+if __name__ == '__main__':
+    try:
+        raise SystemExit(main())
+    except OSError as exc:
+        print('启动/安装失败：' + str(exc), file=sys.stderr)
+        raise SystemExit(1)

@@ -60,7 +60,6 @@ const newProjectCancel = document.getElementById('newProjectCancel');
 const newCanvasBtn = document.getElementById('newCanvasBtn');
 const boardRefreshBtn = document.getElementById('boardRefresh');
 const boardResetViewBtn = document.getElementById('boardResetView');
-const pasteCanvasBtn = document.getElementById('pasteCanvasBtn');
 const emptyCreateCanvasBtn = document.getElementById('emptyCreateCanvasBtn');
 const statusEl = document.getElementById('boardStatus');
 
@@ -71,7 +70,6 @@ let deletedCanvases = [];
 let currentProjectId = rememberedProjectId();
 let pendingDeleteProjectId = null;
 let statusTimer = null;
-let clipboardCanvasId = null;   // 剪切的画布（切到别的项目后粘贴）
 
 // board viewport (mirrors smart-canvas math)
 const viewport = { x: 0, y: 0, scale: 1 };
@@ -381,15 +379,13 @@ function renderBoard(){
     boardWorld.innerHTML = '';
     items.forEach(c => boardWorld.appendChild(buildCard(c)));
     boardEmptyHint.classList.toggle('hidden', items.length > 0);
-    updatePasteBtn();
     refreshIcons();
 }
 
 function buildCard(c){
     const card = document.createElement('div');
     card.className = 'ws-card'
-        + (String(c.color || '').trim() ? ' cc-marked' : '')
-        + (clipboardCanvasId === c.id ? ' cut' : '');
+        + (String(c.color || '').trim() ? ' cc-marked' : '');
     card.dataset.canvasId = c.id;
     card.style.left = (c.board_x || 0) + 'px';
     card.style.top = (c.board_y || 0) + 'px';
@@ -543,7 +539,6 @@ function openCardMenu(canvasId, anchorBtn){
         <button class="ws-pop-item" data-act="rename"><i data-lucide="pencil" class="w-4 h-4"></i><span>${L('重命名','Rename')}</span></button>
         <button class="ws-pop-item" data-act="export"><i data-lucide="download" class="w-4 h-4"></i><span>${L('导出画布','Export canvas')}</span></button>
         <button class="ws-pop-item" data-act="export-assets"><i data-lucide="archive" class="w-4 h-4"></i><span>${L('导出画布 + 资源','Export with assets')}</span></button>
-        <button class="ws-pop-item" data-act="cut"><i data-lucide="scissors" class="w-4 h-4"></i><span>${L('剪切到其他项目','Cut to project')}</span></button>
         <div class="ws-pop-sep"></div>
         <button class="ws-pop-item danger" data-act="delete"><i data-lucide="trash-2" class="w-4 h-4"></i><span>${L('删除','Delete')}</span></button>`;
     document.body.appendChild(pop);
@@ -557,7 +552,6 @@ function openCardMenu(canvasId, anchorBtn){
     pop.querySelector('[data-act="rename"]').onclick = () => { closeCardMenu(); startCardRename(canvasId); };
     pop.querySelector('[data-act="export"]').onclick = () => { closeCardMenu(); exportCanvas(canvasId); };
     pop.querySelector('[data-act="export-assets"]').onclick = () => { closeCardMenu(); exportCanvasWithResources(canvasId); };
-    pop.querySelector('[data-act="cut"]').onclick = () => { closeCardMenu(); cutCanvas(canvasId); };
     pop.querySelector('[data-act="delete"]').onclick = () => { closeCardMenu(); showCardDeleteConfirm(canvasId); };
     refreshIcons();
 }
@@ -592,201 +586,23 @@ async function exportCanvas(id){
 }
 
 /* ===== Export canvas with referenced resources ===== */
-const ZIP_ENCODER = new TextEncoder();
-let ZIP_CRC_TABLE = null;
-
 function safeExportBase(name, fallback = 'canvas'){
     return String(name || fallback).replace(/[\\/:*?"<>|]+/g, '_').trim().slice(0, 60) || fallback;
 }
 
-function collectCanvasResourceUrls(value, out = [], seen = new Set()){
-    if(value == null) return out;
-    if(typeof value === 'string'){
-        const text = value.trim();
-        if(isCanvasResourceUrl(text) && !seen.has(text)){
-            seen.add(text);
-            out.push(text);
-        }
-        return out;
-    }
-    if(Array.isArray(value)){
-        value.forEach(item => collectCanvasResourceUrls(item, out, seen));
-        return out;
-    }
-    if(typeof value === 'object'){
-        Object.values(value).forEach(item => collectCanvasResourceUrls(item, out, seen));
-    }
-    return out;
-}
-
-function isCanvasResourceUrl(url){
-    return url.startsWith('/assets/') || url.startsWith('/output/') || /^https?:\/\//i.test(url);
-}
-
-function exportResourceName(url, index, used){
-    let name = '';
-    try {
-        const parsed = new URL(url, location.origin);
-        name = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || '');
-    } catch(e) {
-        name = String(url || '').split(/[?#]/)[0].split('/').pop() || '';
-    }
-    name = safeExportBase(name || `resource-${String(index + 1).padStart(3, '0')}`, `resource-${index + 1}`);
-    if(!/\.[a-z0-9]{1,8}$/i.test(name)) name += '.bin';
-    let finalName = `resources/${name}`;
-    const dot = finalName.lastIndexOf('.');
-    const stem = dot > 0 ? finalName.slice(0, dot) : finalName;
-    const ext = dot > 0 ? finalName.slice(dot) : '';
-    let suffix = 2;
-    while(used.has(finalName)){
-        finalName = `${stem}-${suffix}${ext}`;
-        suffix++;
-    }
-    used.add(finalName);
-    return finalName;
-}
-
-async function fetchResourceBytes(url){
-    const res = await fetch(url);
-    if(!res.ok) throw new Error(`HTTP ${res.status}`);
-    return new Uint8Array(await res.arrayBuffer());
-}
-
-function zipCrc32(bytes){
-    if(!ZIP_CRC_TABLE){
-        ZIP_CRC_TABLE = new Uint32Array(256);
-        for(let i = 0; i < 256; i++){
-            let c = i;
-            for(let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
-            ZIP_CRC_TABLE[i] = c >>> 0;
-        }
-    }
-    let crc = 0xffffffff;
-    for(let i = 0; i < bytes.length; i++) crc = ZIP_CRC_TABLE[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
-    return (crc ^ 0xffffffff) >>> 0;
-}
-
-function zipDosTime(date = new Date()){
-    const time = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
-    const year = Math.max(1980, date.getFullYear());
-    const day = ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
-    return { time, day };
-}
-
-function zipHeader(signature, size){
-    const bytes = new Uint8Array(size);
-    const view = new DataView(bytes.buffer);
-    view.setUint32(0, signature, true);
-    return { bytes, view };
-}
-
-function createZipBlob(entries){
-    const now = zipDosTime();
-    const files = [];
-    const central = [];
-    let offset = 0;
-    entries.forEach(entry => {
-        const nameBytes = ZIP_ENCODER.encode(entry.name);
-        const data = entry.bytes instanceof Uint8Array ? entry.bytes : ZIP_ENCODER.encode(String(entry.bytes || ''));
-        const crc = zipCrc32(data);
-        const local = zipHeader(0x04034b50, 30 + nameBytes.length);
-        local.view.setUint16(4, 20, true);
-        local.view.setUint16(6, 0x0800, true);
-        local.view.setUint16(8, 0, true);
-        local.view.setUint16(10, now.time, true);
-        local.view.setUint16(12, now.day, true);
-        local.view.setUint32(14, crc, true);
-        local.view.setUint32(18, data.length, true);
-        local.view.setUint32(22, data.length, true);
-        local.view.setUint16(26, nameBytes.length, true);
-        local.bytes.set(nameBytes, 30);
-        files.push(local.bytes, data);
-
-        const cd = zipHeader(0x02014b50, 46 + nameBytes.length);
-        cd.view.setUint16(4, 20, true);
-        cd.view.setUint16(6, 20, true);
-        cd.view.setUint16(8, 0x0800, true);
-        cd.view.setUint16(10, 0, true);
-        cd.view.setUint16(12, now.time, true);
-        cd.view.setUint16(14, now.day, true);
-        cd.view.setUint32(16, crc, true);
-        cd.view.setUint32(20, data.length, true);
-        cd.view.setUint32(24, data.length, true);
-        cd.view.setUint16(28, nameBytes.length, true);
-        cd.view.setUint32(42, offset, true);
-        cd.bytes.set(nameBytes, 46);
-        central.push(cd.bytes);
-        offset += local.bytes.length + data.length;
-    });
-    const centralSize = central.reduce((sum, bytes) => sum + bytes.length, 0);
-    const end = zipHeader(0x06054b50, 22);
-    end.view.setUint16(8, entries.length, true);
-    end.view.setUint16(10, entries.length, true);
-    end.view.setUint32(12, centralSize, true);
-    end.view.setUint32(16, offset, true);
-    return new Blob([...files, ...central, end.bytes], { type:'application/zip' });
-}
-
 async function exportCanvasWithResources(id){
-    const c = canvases.find(x => x.id === id);
-    setStatus(L('正在收集资源...','Collecting assets...'));
+    setStatus(L('正在打包画布和资源…','Packing canvas and resources…'));
     try {
-        const res = await fetch(`/api/canvases/${encodeURIComponent(id)}`);
-        if(!res.ok) throw new Error('export failed');
-        const data = await res.json();
-        const cv = data.canvas || data;
-        const base = safeExportBase((c?.title) || cv.title || 'canvas');
-        const urls = collectCanvasResourceUrls(cv).slice(0, 1000);
-        const usedNames = new Set(['canvas.json', 'resources-manifest.json']);
-        const entries = [{ name:'canvas.json', bytes:ZIP_ENCODER.encode(JSON.stringify(cv, null, 2)) }];
-        const manifest = [];
-        let skipped = 0;
-        for(let i = 0; i < urls.length; i++){
-            const url = urls[i];
-            try {
-                const bytes = await fetchResourceBytes(url);
-                const name = exportResourceName(url, i, usedNames);
-                entries.push({ name, bytes });
-                manifest.push({ url, file:name, size:bytes.length });
-            } catch(e) {
-                skipped++;
-                manifest.push({ url, skipped:true, reason:String(e?.message || e || 'fetch failed').slice(0, 120) });
-            }
-        }
-        entries.push({ name:'resources-manifest.json', bytes:ZIP_ENCODER.encode(JSON.stringify({ canvas_id:id, resources:manifest }, null, 2)) });
-        const blob = createZipBlob(entries);
-        const href = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = href;
-        a.download = `${base}.zip`;
-        document.body.appendChild(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(href), 1500);
-        const included = Math.max(0, entries.length - 2);
-        setStatus(skipped
-            ? L(`已导出，跳过 ${skipped} 个资源`, `Exported, skipped ${skipped} assets`)
-            : L(`已导出 ${included} 个资源`, `Exported ${included} assets`));
-    } catch(e){ console.error(e); setStatus(L('导出失败','Export failed')); }
-}
-
-/* ===== Cut / paste a canvas across projects ===== */
-function cutCanvas(id){
-    clipboardCanvasId = id;
-    setStatus(L('已剪切，切换到目标项目后点“粘贴到此项目”','Cut — open another project, then Paste'));
-    renderBoard();
-}
-function updatePasteBtn(){
-    if(!pasteCanvasBtn) return;
-    const show = !!clipboardCanvasId && canvases.some(x => x.id === clipboardCanvasId);
-    pasteCanvasBtn.style.display = show ? 'inline-flex' : 'none';
-}
-async function pasteCanvas(){
-    if(!clipboardCanvasId) return;
-    const c = canvases.find(x => x.id === clipboardCanvasId);
-    const targetPid = currentProjectId;
-    clipboardCanvasId = null;
-    if(!c){ updatePasteBtn(); renderBoard(); return; }
-    if((c.project || 'default') === targetPid){ renderBoard(); setStatus(L('已在当前项目','Already in this project')); return; }
-    await moveCanvasToProject(c.id, targetPid);
+        const response = await fetch(`/api/canvases/${encodeURIComponent(id)}`);
+        if(!response.ok) throw new Error(L('读取画布失败','Cannot read canvas'));
+        const data = await response.json(), cv = data.canvas || data;
+        const filename = safeExportBase(cv.title || 'canvas') + '.zip';
+        const packed = await fetch('/api/canvas-workflows/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nodes:cv.nodes,connections:cv.connections,settings:cv.settings || {},name:cv.title,filename,include_resources:true})});
+        if(!packed.ok) throw new Error((await packed.json()).detail || L('导出失败','Export failed'));
+        const href=URL.createObjectURL(await packed.blob()), link=document.createElement('a');
+        link.href=href;link.download=filename;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(href),1500);
+        setStatus(L('已导出 ZIP；在新画布的“工作流”中直接导入即可恢复资源','ZIP exported. Import it using Workflow in a new canvas to restore resources.'));
+    } catch(error){setStatus(error.message);}
 }
 
 function startCardRename(canvasId){
@@ -981,7 +797,6 @@ emptyCreateCanvasBtn?.addEventListener('click', e => {
 });
 boardRefreshBtn.addEventListener('click', loadAll);
 boardResetViewBtn.addEventListener('click', resetView);
-pasteCanvasBtn?.addEventListener('click', pasteCanvas);
 
 newProjectBtn.addEventListener('click', openNewProject);
 newProjectConfirm.addEventListener('click', createProject);

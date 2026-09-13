@@ -5,7 +5,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function(){
     'use strict';
 
-    const SCHEMA_VERSION = 6;
+    const SCHEMA_VERSION = 7;
     const EXECUTION_NODE_SIZE = Object.freeze({width:316, height:194});
     const NODE_TYPES = Object.freeze({
         material:'smart-material',
@@ -140,7 +140,7 @@
         return ['input', 'flow', 'result'].includes(connectionKind(connection));
     }
     function connectionKindForNodes(fromNode, toNode){
-        if(isExecutionNode(fromNode) && isMaterialNode(toNode)) return 'result';
+        if(isExecutionNode(fromNode) && isMaterialNode(toNode) && toNode.isRunPlaceholder) return 'result';
         if(isToolNode(fromNode) && isMaterialNode(toNode) && textContentForNode(toNode)) return 'result';
         return 'input';
     }
@@ -154,7 +154,7 @@
         if(toType === 'smart-group' || toType === 'smart-result-group') return false;
         if(isMaterialNode(fromNode)){
             if(isToolNode(toNode)) return (fromNode.images || []).some(item => mediaKindForReference(item) === 'image' && (item.url || item.path || item.src || item.uri));
-            if(isGeneratedMaterialNode(toNode)) return true;
+            if(isMaterialNode(toNode)) return true;
             return isExecutionNode(toNode) || [
                 'smart-prompt',
                 'smart-loop',
@@ -163,7 +163,7 @@
                 NODE_TYPES.minimaxDirector
             ].includes(toType);
         }
-        if(isExecutionNode(fromNode)) return isMaterialNode(toNode);
+        if(isExecutionNode(fromNode)) return isMaterialNode(toNode) || isExecutionNode(toNode) || isToolNode(toNode) || toType === 'smart-loop';
         if(isToolNode(fromNode)){
             if(fromType === NODE_TYPES.imageCompare) return false;
             return isMaterialNode(toNode) && Boolean(textContentForNode(toNode) || !toNode.images?.length);
@@ -256,9 +256,9 @@
     function normalizeExecutionNode(node){
         const copy = clone(node) || {};
         if(!isExecutionNode(copy)) return copy;
-        copy.w = EXECUTION_NODE_SIZE.width;
-        copy.h = EXECUTION_NODE_SIZE.height;
-        copy.title = titleForType(nodeType(copy));
+        copy.w = Math.max(EXECUTION_NODE_SIZE.width, Number(copy.w) || 0);
+        copy.h = Math.max(EXECUTION_NODE_SIZE.height, Number(copy.h) || 0);
+        copy.title = copy.title || titleForType(nodeType(copy));
         copy.outputKind = outputKindForType(nodeType(copy));
         copy.runSettings = normalizeExecutionSettings(copy, copy.runSettings || {});
         delete copy.scale;
@@ -438,7 +438,7 @@
         return {nodes:orderedNodes, connections:relevant};
     }
     function createCanvasPreflightRequest(options={}){
-        const graph = preflightGraphForNode(options.node, options.graphNodes, options.graphConnections);
+        const graph = preflightGraphForNode(options.graphNode || options.node, options.graphNodes, options.graphConnections);
         const values = value => value && typeof value === 'object' ? clone(value) : {};
         return {
             canvas_id:String(options.canvasId || options.canvas_id || '').trim(),
@@ -1066,8 +1066,8 @@
         copy.type = type;
         copy.title = titleForType(type);
         copy.outputKind = outputKindForType(type);
-        copy.w = EXECUTION_NODE_SIZE.width;
-        copy.h = EXECUTION_NODE_SIZE.height;
+        copy.w = Math.max(EXECUTION_NODE_SIZE.width, Number(copy.w) || 0);
+        copy.h = Math.max(EXECUTION_NODE_SIZE.height, Number(copy.h) || 0);
         copy.runSettings = normalizeExecutionSettings(copy, copy.runSettings || {});
         RESULT_FIELDS.forEach(field => delete copy[field]);
         delete copy.inputImage;

@@ -3,7 +3,7 @@
   "provider_id": "ai-money",
   "provider_name": "laohu",
   "status": "maintained",
-  "updated_at": "2026-08-25",
+  "updated_at": "2026-09-12",
   "sources": [
     {
       "url": "https://api.lao-hu.com/v1/models",
@@ -14,6 +14,11 @@
       "path": "main.py",
       "kind": "runtime_verified",
       "checked_at": "2026-08-25"
+    },
+    {
+      "url": "https://api.lao-hu.com/docs/llms.txt",
+      "kind": "official_documented",
+      "checked_at": "2026-09-12"
     }
   ],
   "models": [
@@ -28,13 +33,53 @@
       "version": 1,
       "evidence_level": "official_documented",
       "inputs": {
-        "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"},
-        "reference": {"media_type": "image", "min": 0, "max": 16, "role": "reference"}
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 16,
+          "role": "reference"
+        }
       },
       "parameters": {
-        "resolution": {"level": "optional", "type": "enum", "options": ["1k", "2k", "4k"]},
-        "aspect_ratio": {"level": "optional", "type": "enum", "options": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "4:5", "5:4", "21:9", "9:21"], "source_field": "size"},
-        "count": {"level": "optional", "type": "integer", "min": 1, "max": 10}
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "2k",
+            "4k"
+          ]
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1:1",
+            "16:9",
+            "9:16",
+            "4:3",
+            "3:4",
+            "3:2",
+            "2:3",
+            "4:5",
+            "5:4",
+            "21:9",
+            "9:21"
+          ],
+          "source_field": "size"
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 10
+        }
       },
       "request_mapping": {
         "prompt": "prompt",
@@ -43,8 +88,15 @@
         "aspect_ratio": "size",
         "count": "n"
       },
-      "output": {"media_type": "image", "min": 1, "max": 10, "async": true},
-      "platform": {"endpoint": "/v1/image/generations"}
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 10,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
     },
     {
       "model_id": "kimi-k3",
@@ -54,14 +106,39 @@
       "enabled_in_api_settings": false,
       "version": 1,
       "evidence_level": "official_documented",
-      "inputs": {"prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}},
-      "parameters": {
-        "stream": {"level": "optional", "type": "boolean", "default": false},
-        "max_output_tokens": {"level": "optional", "type": "integer"}
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        }
       },
-      "request_mapping": {"prompt": "messages", "stream": "stream", "max_output_tokens": "max_tokens"},
-      "output": {"media_type": "text", "min": 1, "max": 1, "async": false},
-      "platform": {"endpoint": "/v1/chat/completions"}
+      "parameters": {
+        "stream": {
+          "level": "optional",
+          "type": "boolean",
+          "default": false
+        },
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer"
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "stream": "stream",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
     },
     {
       "model_id": "qwen/qwen3.8-max",
@@ -79,14 +156,33 @@
       "version": 1,
       "evidence_level": "official_documented",
       "inputs": {
-        "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        }
       },
       "parameters": {
-        "max_output_tokens": {"level": "optional", "type": "integer", "min": 1}
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
       },
-      "request_mapping": {"prompt": "messages", "max_output_tokens": "max_tokens"},
-      "output": {"media_type": "text", "min": 1, "max": 1, "async": false},
-      "platform": {"endpoint": "/v1/chat/completions"}
+      "request_mapping": {
+        "prompt": "messages",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
     },
     {
       "model_id": "laohu/gk-4.6",
@@ -104,7 +200,12 @@
       "version": 1,
       "evidence_level": "official_documented",
       "inputs": {
-        "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"},
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        },
         "reference": {
           "media_type": "image",
           "min": 0,
@@ -114,15 +215,26 @@
         }
       },
       "parameters": {
-        "max_output_tokens": {"level": "optional", "type": "integer", "min": 1}
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
       },
       "request_mapping": {
         "prompt": "messages",
         "reference": "messages.content",
         "max_output_tokens": "max_tokens"
       },
-      "output": {"media_type": "text", "min": 1, "max": 1, "async": false},
-      "platform": {"endpoint": "/v1/chat/completions"}
+      "output": {
+        "media_type": "text",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
     },
     {
       "model_id": "doubao-seed-audio-1.0",
@@ -133,20 +245,88 @@
       "version": 1,
       "evidence_level": "official_documented",
       "inputs": {
-        "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"},
-        "reference_audio": {"media_type": "audio", "min": 0, "max": 1, "role": "reference_audio"}
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "min": 0,
+          "max": 1,
+          "role": "reference_audio"
+        }
       },
       "parameters": {
-        "speaker": {"level": "optional", "type": "text"},
-        "format": {"level": "optional", "type": "enum", "options": ["mp3", "wav", "pcm", "ogg_opus"], "default": "mp3"},
-        "sample_rate": {"level": "optional", "type": "enum", "options": [8000, 16000, 24000, 32000, 44100], "default": 24000},
-        "speech_rate": {"level": "advanced", "type": "integer", "min": -50, "max": 100, "default": 0},
-        "loudness_rate": {"level": "advanced", "type": "integer", "min": -50, "max": 100, "default": 0},
-        "pitch_rate": {"level": "advanced", "type": "integer", "min": -12, "max": 12, "default": 0}
+        "speaker": {
+          "level": "optional",
+          "type": "text"
+        },
+        "format": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "mp3",
+            "wav",
+            "pcm",
+            "ogg_opus"
+          ],
+          "default": "mp3"
+        },
+        "sample_rate": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            8000,
+            16000,
+            24000,
+            32000,
+            44100
+          ],
+          "default": 24000
+        },
+        "speech_rate": {
+          "level": "advanced",
+          "type": "integer",
+          "min": -50,
+          "max": 100,
+          "default": 0
+        },
+        "loudness_rate": {
+          "level": "advanced",
+          "type": "integer",
+          "min": -50,
+          "max": 100,
+          "default": 0
+        },
+        "pitch_rate": {
+          "level": "advanced",
+          "type": "integer",
+          "min": -12,
+          "max": 12,
+          "default": 0
+        }
       },
-      "request_mapping": {"prompt": "input", "speaker": "speaker", "reference_audio": "audio_url", "format": "format", "sample_rate": "sample_rate", "speech_rate": "speech_rate", "loudness_rate": "loudness_rate", "pitch_rate": "pitch_rate"},
-      "output": {"media_type": "audio", "min": 1, "max": 1, "async": true},
-      "platform": {"endpoint": "/v1/audio/generations"}
+      "request_mapping": {
+        "prompt": "input",
+        "speaker": "speaker",
+        "reference_audio": "audio_url",
+        "format": "format",
+        "sample_rate": "sample_rate",
+        "speech_rate": "speech_rate",
+        "loudness_rate": "loudness_rate",
+        "pitch_rate": "pitch_rate"
+      },
+      "output": {
+        "media_type": "audio",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/audio/generations"
+      }
     },
     {
       "model_id": "laohu-image-gk-v2-edit",
@@ -164,18 +344,83 @@
       "version": 1,
       "evidence_level": "official_documented",
       "inputs": {
-        "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt", "min_chars": 5, "max_chars": 2000},
-        "reference": {"media_type": "image", "min": 1, "max": 3, "role": "reference"}
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt",
+          "min_chars": 5,
+          "max_chars": 2000
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 1,
+          "max": 3,
+          "role": "reference"
+        }
       },
       "parameters": {
-        "resolution": {"level": "optional", "type": "enum", "options": ["1k", "2k"], "source_field": "resolution"},
-        "aspect_ratio": {"level": "optional", "type": "enum", "options": ["auto", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "9:21", "1:2", "2:1"], "source_field": "aspect_ratio"},
-        "count": {"level": "optional", "type": "integer", "min": 1, "max": 10, "source_field": "n"},
-        "nsfw_check": {"level": "optional", "type": "boolean", "default": false, "source_field": "nsfw_check"}
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "2k"
+          ],
+          "source_field": "resolution"
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "1:1",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:3",
+            "4:5",
+            "5:4",
+            "9:16",
+            "16:9",
+            "21:9",
+            "9:21",
+            "1:2",
+            "2:1"
+          ],
+          "source_field": "aspect_ratio"
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 10,
+          "source_field": "n"
+        },
+        "nsfw_check": {
+          "level": "optional",
+          "type": "boolean",
+          "default": false,
+          "source_field": "nsfw_check"
+        }
       },
-      "request_mapping": {"prompt": "prompt", "reference": "images", "resolution": "resolution", "aspect_ratio": "aspect_ratio", "count": "n", "nsfw_check": "nsfw_check"},
-      "output": {"media_type": "image", "min": 1, "max": 10, "async": true},
-      "platform": {"endpoint": "/v1/image/generations"}
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "resolution": "resolution",
+        "aspect_ratio": "aspect_ratio",
+        "count": "n",
+        "nsfw_check": "nsfw_check"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 10,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
     },
     {
       "model_id": "flowmusic-generation",
@@ -192,18 +437,65 @@
       "runnable": true,
       "version": 1,
       "evidence_level": "official_documented",
-      "inputs": {"prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}},
-      "parameters": {
-        "version": {"level": "optional", "type": "text", "default": "lyria-3.5", "ui_hidden": true},
-        "lyrics": {"level": "optional", "type": "text"},
-        "title": {"level": "optional", "type": "text"},
-        "bpm": {"level": "optional", "type": "integer", "min": 1},
-        "length": {"level": "optional", "type": "integer", "min": 1, "max": 240},
-        "seed": {"level": "optional", "type": "integer"}
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        }
       },
-      "request_mapping": {"prompt": "sound_prompt", "version": "version", "lyrics": "lyrics", "title": "title", "bpm": "bpm", "length": "length", "seed": "seed"},
-      "output": {"media_type": "audio", "min": 1, "max": 1, "async": true},
-      "platform": {"endpoint": "/v1/music/generations", "model": "flowmusic", "version": "lyria-3.5"}
+      "parameters": {
+        "version": {
+          "level": "optional",
+          "type": "text",
+          "default": "lyria-3.5",
+          "ui_hidden": true
+        },
+        "lyrics": {
+          "level": "optional",
+          "type": "text"
+        },
+        "title": {
+          "level": "optional",
+          "type": "text"
+        },
+        "bpm": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        },
+        "length": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 240
+        },
+        "seed": {
+          "level": "optional",
+          "type": "integer"
+        }
+      },
+      "request_mapping": {
+        "prompt": "sound_prompt",
+        "version": "version",
+        "lyrics": "lyrics",
+        "title": "title",
+        "bpm": "bpm",
+        "length": "length",
+        "seed": "seed"
+      },
+      "output": {
+        "media_type": "audio",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/music/generations",
+        "model": "flowmusic",
+        "version": "lyria-3.5"
+      }
     },
     {
       "model_id": "flowmusic-lyrics",
@@ -220,11 +512,29 @@
       "runnable": true,
       "version": 1,
       "evidence_level": "official_documented",
-      "inputs": {"prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt", "max_chars": 3000}},
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt",
+          "max_chars": 3000
+        }
+      },
       "parameters": {},
-      "request_mapping": {"prompt": "prompt"},
-      "output": {"media_type": "text", "min": 1, "max": 1, "async": true},
-      "platform": {"endpoint": "/v1/music/generations/lyrics", "model": "flowmusic"}
+      "request_mapping": {
+        "prompt": "prompt"
+      },
+      "output": {
+        "media_type": "text",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/music/generations/lyrics",
+        "model": "flowmusic"
+      }
     },
     {
       "model_id": "flowmusic-extend",
@@ -243,17 +553,60 @@
       "evidence_level": "official_documented",
       "inputs": {},
       "parameters": {
-        "clip_id": {"level": "required", "type": "text"},
-        "version": {"level": "optional", "type": "text", "default": "lyria-3.5", "ui_hidden": true},
-        "extend_from_s": {"level": "required", "type": "number", "min": 0},
-        "extend_s": {"level": "required", "type": "number", "min": 1, "max": 164},
-        "instruction": {"level": "required", "type": "text"},
-        "title": {"level": "optional", "type": "text"},
-        "seed": {"level": "optional", "type": "integer"}
+        "clip_id": {
+          "level": "required",
+          "type": "text"
+        },
+        "version": {
+          "level": "optional",
+          "type": "text",
+          "default": "lyria-3.5",
+          "ui_hidden": true
+        },
+        "extend_from_s": {
+          "level": "required",
+          "type": "number",
+          "min": 0
+        },
+        "extend_s": {
+          "level": "required",
+          "type": "number",
+          "min": 1,
+          "max": 164
+        },
+        "instruction": {
+          "level": "required",
+          "type": "text"
+        },
+        "title": {
+          "level": "optional",
+          "type": "text"
+        },
+        "seed": {
+          "level": "optional",
+          "type": "integer"
+        }
       },
-      "request_mapping": {"clip_id": "clip_id", "version": "version", "extend_from_s": "extend_from_s", "extend_s": "extend_s", "instruction": "instruction", "title": "title", "seed": "seed"},
-      "output": {"media_type": "audio", "min": 1, "max": 1, "async": true},
-      "platform": {"endpoint": "/v1/music/generations/extend", "model": "flowmusic", "version": "lyria-3.5"}
+      "request_mapping": {
+        "clip_id": "clip_id",
+        "version": "version",
+        "extend_from_s": "extend_from_s",
+        "extend_s": "extend_s",
+        "instruction": "instruction",
+        "title": "title",
+        "seed": "seed"
+      },
+      "output": {
+        "media_type": "audio",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/music/generations/extend",
+        "model": "flowmusic",
+        "version": "lyria-3.5"
+      }
     },
     {
       "model_id": "flowmusic-replace",
@@ -272,17 +625,59 @@
       "evidence_level": "official_documented",
       "inputs": {},
       "parameters": {
-        "clip_id": {"level": "required", "type": "text"},
-        "version": {"level": "optional", "type": "text", "default": "lyria-3.5", "ui_hidden": true},
-        "start_s": {"level": "required", "type": "number", "min": 0},
-        "end_s": {"level": "required", "type": "number", "min": 0},
-        "instruction": {"level": "required", "type": "text"},
-        "title": {"level": "optional", "type": "text"},
-        "seed": {"level": "optional", "type": "integer"}
+        "clip_id": {
+          "level": "required",
+          "type": "text"
+        },
+        "version": {
+          "level": "optional",
+          "type": "text",
+          "default": "lyria-3.5",
+          "ui_hidden": true
+        },
+        "start_s": {
+          "level": "required",
+          "type": "number",
+          "min": 0
+        },
+        "end_s": {
+          "level": "required",
+          "type": "number",
+          "min": 0
+        },
+        "instruction": {
+          "level": "required",
+          "type": "text"
+        },
+        "title": {
+          "level": "optional",
+          "type": "text"
+        },
+        "seed": {
+          "level": "optional",
+          "type": "integer"
+        }
       },
-      "request_mapping": {"clip_id": "clip_id", "version": "version", "start_s": "start_s", "end_s": "end_s", "instruction": "instruction", "title": "title", "seed": "seed"},
-      "output": {"media_type": "audio", "min": 1, "max": 1, "async": true},
-      "platform": {"endpoint": "/v1/music/generations/replace", "model": "flowmusic", "version": "lyria-3.5"}
+      "request_mapping": {
+        "clip_id": "clip_id",
+        "version": "version",
+        "start_s": "start_s",
+        "end_s": "end_s",
+        "instruction": "instruction",
+        "title": "title",
+        "seed": "seed"
+      },
+      "output": {
+        "media_type": "audio",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/music/generations/replace",
+        "model": "flowmusic",
+        "version": "lyria-3.5"
+      }
     },
     {
       "model_id": "flowmusic-cover",
@@ -301,15 +696,48 @@
       "evidence_level": "official_documented",
       "inputs": {},
       "parameters": {
-        "clip_id": {"level": "required", "type": "text"},
-        "instruction": {"level": "required", "type": "text"},
-        "strength": {"level": "optional", "type": "number", "min": 0, "max": 1, "default": 0.5},
-        "title": {"level": "optional", "type": "text"},
-        "seed": {"level": "optional", "type": "integer"}
+        "clip_id": {
+          "level": "required",
+          "type": "text"
+        },
+        "instruction": {
+          "level": "required",
+          "type": "text"
+        },
+        "strength": {
+          "level": "optional",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "default": 0.5
+        },
+        "title": {
+          "level": "optional",
+          "type": "text"
+        },
+        "seed": {
+          "level": "optional",
+          "type": "integer"
+        }
       },
-      "request_mapping": {"clip_id": "clip_id", "instruction": "instruction", "strength": "strength", "title": "title", "seed": "seed"},
-      "output": {"media_type": "audio", "min": 1, "max": 1, "async": true},
-      "platform": {"endpoint": "/v1/music/generations/cover", "model": "flowmusic", "version": "lyria-3.5"}
+      "request_mapping": {
+        "clip_id": "clip_id",
+        "instruction": "instruction",
+        "strength": "strength",
+        "title": "title",
+        "seed": "seed"
+      },
+      "output": {
+        "media_type": "audio",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/music/generations/cover",
+        "model": "flowmusic",
+        "version": "lyria-3.5"
+      }
     },
     {
       "model_id": "flowmusic-stems",
@@ -327,10 +755,25 @@
       "version": 1,
       "evidence_level": "official_documented",
       "inputs": {},
-      "parameters": {"clip_id": {"level": "required", "type": "text"}},
-      "request_mapping": {"clip_id": "clip_id"},
-      "output": {"media_type": "file", "min": 1, "max": 1, "async": true},
-      "platform": {"endpoint": "/v1/music/generations/stems", "model": "flowmusic"}
+      "parameters": {
+        "clip_id": {
+          "level": "required",
+          "type": "text"
+        }
+      },
+      "request_mapping": {
+        "clip_id": "clip_id"
+      },
+      "output": {
+        "media_type": "file",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/music/generations/stems",
+        "model": "flowmusic"
+      }
     },
     {
       "model_id": "flowmusic-upload-audio",
@@ -347,11 +790,28 @@
       "runnable": true,
       "version": 1,
       "evidence_level": "official_documented",
-      "inputs": {"reference_audio": {"media_type": "audio", "min": 1, "max": 1, "role": "reference_audio"}},
+      "inputs": {
+        "reference_audio": {
+          "media_type": "audio",
+          "min": 1,
+          "max": 1,
+          "role": "reference_audio"
+        }
+      },
       "parameters": {},
-      "request_mapping": {"reference_audio": "audio_url"},
-      "output": {"media_type": "audio", "min": 1, "max": 1, "async": true},
-      "platform": {"endpoint": "/v1/music/generations/upload-audio", "model": "flowmusic"}
+      "request_mapping": {
+        "reference_audio": "audio_url"
+      },
+      "output": {
+        "media_type": "audio",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/music/generations/upload-audio",
+        "model": "flowmusic"
+      }
     },
     {
       "model_id": "flowmusic-download-audio",
@@ -369,10 +829,35 @@
       "version": 1,
       "evidence_level": "official_documented",
       "inputs": {},
-      "parameters": {"clip_id": {"level": "required", "type": "text"}, "format": {"level": "optional", "type": "enum", "options": ["wav", "mp3"], "default": "wav"}},
-      "request_mapping": {"clip_id": "clip_id", "format": "format"},
-      "output": {"media_type": "audio", "min": 1, "max": 1, "async": true},
-      "platform": {"endpoint": "/v1/music/generations/download-audio", "model": "flowmusic"}
+      "parameters": {
+        "clip_id": {
+          "level": "required",
+          "type": "text"
+        },
+        "format": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "wav",
+            "mp3"
+          ],
+          "default": "wav"
+        }
+      },
+      "request_mapping": {
+        "clip_id": "clip_id",
+        "format": "format"
+      },
+      "output": {
+        "media_type": "audio",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/music/generations/download-audio",
+        "model": "flowmusic"
+      }
     },
     {
       "model_id": "flowmusic-video-clip",
@@ -390,10 +875,36 @@
       "version": 1,
       "evidence_level": "official_documented",
       "inputs": {},
-      "parameters": {"clip_id": {"level": "required", "type": "text"}, "preset": {"level": "optional", "type": "enum", "options": ["simple", "modern", "player"], "default": "modern"}},
-      "request_mapping": {"clip_id": "clip_id", "preset": "preset"},
-      "output": {"media_type": "video", "min": 1, "max": 1, "async": true},
-      "platform": {"endpoint": "/v1/music/generations/video-clip", "model": "flowmusic"}
+      "parameters": {
+        "clip_id": {
+          "level": "required",
+          "type": "text"
+        },
+        "preset": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "simple",
+            "modern",
+            "player"
+          ],
+          "default": "modern"
+        }
+      },
+      "request_mapping": {
+        "clip_id": "clip_id",
+        "preset": "preset"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/music/generations/video-clip",
+        "model": "flowmusic"
+      }
     },
     {
       "model_id": "mureka-v8-bgm",
@@ -403,11 +914,35 @@
       "enabled_in_api_settings": false,
       "version": 1,
       "evidence_level": "official_documented",
-      "inputs": {"prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}},
-      "parameters": {"count": {"level": "optional", "type": "integer", "min": 1, "max": 3}},
-      "request_mapping": {"prompt": "prompt", "count": "n"},
-      "output": {"media_type": "audio", "min": 1, "max": 3, "async": true},
-      "platform": {"endpoint": "/v1/audio/generations"}
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        }
+      },
+      "parameters": {
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 3
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "count": "n"
+      },
+      "output": {
+        "media_type": "audio",
+        "min": 1,
+        "max": 3,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/audio/generations"
+      }
     },
     {
       "model_id": "mureka-v9-bgm",
@@ -417,11 +952,35 @@
       "enabled_in_api_settings": false,
       "version": 1,
       "evidence_level": "official_documented",
-      "inputs": {"prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}},
-      "parameters": {"count": {"level": "optional", "type": "integer", "min": 1, "max": 3}},
-      "request_mapping": {"prompt": "prompt", "count": "n"},
-      "output": {"media_type": "audio", "min": 1, "max": 3, "async": true},
-      "platform": {"endpoint": "/v1/audio/generations"}
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        }
+      },
+      "parameters": {
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 3
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "count": "n"
+      },
+      "output": {
+        "media_type": "audio",
+        "min": 1,
+        "max": 3,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/audio/generations"
+      }
     },
     {
       "model_id": "whisper-1",
@@ -447,20 +1006,123 @@
       "version": 1,
       "evidence_level": "official_documented",
       "inputs": {
-        "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt", "max_chars": 20000},
-        "first_frame": {"media_type": "image", "min": 1, "max": 1, "role": "first_frame"},
-        "last_frame": {"media_type": "image", "min": 0, "max": 1, "role": "last_frame"}
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt",
+          "max_chars": 20000
+        },
+        "first_frame": {
+          "media_type": "image",
+          "min": 1,
+          "max": 1,
+          "role": "first_frame"
+        },
+        "last_frame": {
+          "media_type": "image",
+          "min": 0,
+          "max": 1,
+          "role": "last_frame"
+        }
       },
       "parameters": {
-        "duration": {"level": "optional", "type": "enum", "options": [-1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30], "default": 5, "source_field": "seconds"},
-        "resolution": {"level": "optional", "type": "enum", "options": ["480p", "720p", "1080p"], "default": "720p", "source_field": "metadata.resolution"},
-        "aspect_ratio": {"level": "optional", "type": "enum", "options": ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"], "default": "adaptive", "source_field": "metadata.ratio"},
-        "generate_audio": {"level": "optional", "type": "boolean", "default": true, "source_field": "metadata.generate_audio"},
-        "seed": {"level": "advanced", "type": "integer", "min": 0, "max": 2147483647, "source_field": "metadata.seed"}
+        "duration": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            -1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30
+          ],
+          "default": 5,
+          "source_field": "seconds"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480p",
+            "720p",
+            "1080p"
+          ],
+          "default": "720p",
+          "source_field": "metadata.resolution"
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "adaptive",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16"
+          ],
+          "default": "adaptive",
+          "source_field": "metadata.ratio"
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true,
+          "source_field": "metadata.generate_audio"
+        },
+        "seed": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 0,
+          "max": 2147483647,
+          "source_field": "metadata.seed"
+        }
       },
-      "request_mapping": {"prompt": "prompt", "first_frame": "images", "last_frame": "images", "duration": "seconds", "resolution": "metadata.resolution", "aspect_ratio": "metadata.ratio", "generate_audio": "metadata.generate_audio", "seed": "metadata.seed"},
-      "output": {"media_type": "video", "min": 1, "max": 1, "async": true},
-      "platform": {"endpoint": "/v1/videos"}
+      "request_mapping": {
+        "prompt": "prompt",
+        "first_frame": "images",
+        "last_frame": "images",
+        "duration": "seconds",
+        "resolution": "metadata.resolution",
+        "aspect_ratio": "metadata.ratio",
+        "generate_audio": "metadata.generate_audio",
+        "seed": "metadata.seed"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/videos"
+      }
     },
     {
       "model_id": "wan-3.0-prime-r2v",
@@ -476,22 +1138,135 @@
       "version": 1,
       "evidence_level": "official_documented",
       "inputs": {
-        "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt", "max_chars": 20000},
-        "reference": {"media_type": "image", "min": 0, "max": 10, "role": "reference"},
-        "source_video": {"media_type": "video", "min": 0, "max": 5, "role": "source_video"},
-        "reference_audio": {"media_type": "audio", "min": 0, "max": 5, "role": "reference_audio"}
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt",
+          "max_chars": 20000
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 10,
+          "role": "reference"
+        },
+        "source_video": {
+          "media_type": "video",
+          "min": 0,
+          "max": 5,
+          "role": "source_video"
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "min": 0,
+          "max": 5,
+          "role": "reference_audio"
+        }
       },
       "parameters": {
-        "duration": {"level": "optional", "type": "enum", "options": [-1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30], "default": 5, "source_field": "seconds"},
-        "resolution": {"level": "optional", "type": "enum", "options": ["480p", "720p", "1080p"], "default": "720p", "source_field": "metadata.resolution"},
-        "aspect_ratio": {"level": "optional", "type": "enum", "options": ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"], "default": "adaptive", "source_field": "metadata.ratio"},
-        "generate_audio": {"level": "optional", "type": "boolean", "default": true, "source_field": "metadata.generate_audio"},
-        "seed": {"level": "advanced", "type": "integer", "min": 0, "max": 2147483647, "source_field": "metadata.seed"}
+        "duration": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            -1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30
+          ],
+          "default": 5,
+          "source_field": "seconds"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480p",
+            "720p",
+            "1080p"
+          ],
+          "default": "720p",
+          "source_field": "metadata.resolution"
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "adaptive",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16"
+          ],
+          "default": "adaptive",
+          "source_field": "metadata.ratio"
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true,
+          "source_field": "metadata.generate_audio"
+        },
+        "seed": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 0,
+          "max": 2147483647,
+          "source_field": "metadata.seed"
+        }
       },
-      "request_mapping": {"prompt": "prompt", "reference": "metadata.content", "source_video": "metadata.content", "reference_audio": "metadata.content", "duration": "seconds", "resolution": "metadata.resolution", "aspect_ratio": "metadata.ratio", "generate_audio": "metadata.generate_audio", "seed": "metadata.seed"},
-      "requires_any_media": ["image", "video", "audio"],
-      "output": {"media_type": "video", "min": 1, "max": 1, "async": true},
-      "platform": {"endpoint": "/v1/videos"}
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "metadata.content",
+        "source_video": "metadata.content",
+        "reference_audio": "metadata.content",
+        "duration": "seconds",
+        "resolution": "metadata.resolution",
+        "aspect_ratio": "metadata.ratio",
+        "generate_audio": "metadata.generate_audio",
+        "seed": "metadata.seed"
+      },
+      "requires_any_media": [
+        "image",
+        "video",
+        "audio"
+      ],
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/videos"
+      }
     },
     {
       "model_id": "wan-3.0-global-prime-i2v",
@@ -507,20 +1282,123 @@
       "version": 1,
       "evidence_level": "official_documented",
       "inputs": {
-        "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt", "max_chars": 20000},
-        "first_frame": {"media_type": "image", "min": 1, "max": 1, "role": "first_frame"},
-        "last_frame": {"media_type": "image", "min": 0, "max": 1, "role": "last_frame"}
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt",
+          "max_chars": 20000
+        },
+        "first_frame": {
+          "media_type": "image",
+          "min": 1,
+          "max": 1,
+          "role": "first_frame"
+        },
+        "last_frame": {
+          "media_type": "image",
+          "min": 0,
+          "max": 1,
+          "role": "last_frame"
+        }
       },
       "parameters": {
-        "duration": {"level": "optional", "type": "enum", "options": [-1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30], "default": 5, "source_field": "seconds"},
-        "resolution": {"level": "optional", "type": "enum", "options": ["480p", "720p", "1080p"], "default": "720p", "source_field": "metadata.resolution"},
-        "aspect_ratio": {"level": "optional", "type": "enum", "options": ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"], "default": "adaptive", "source_field": "metadata.ratio"},
-        "generate_audio": {"level": "optional", "type": "boolean", "default": true, "source_field": "metadata.generate_audio"},
-        "seed": {"level": "advanced", "type": "integer", "min": 0, "max": 2147483647, "source_field": "metadata.seed"}
+        "duration": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            -1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30
+          ],
+          "default": 5,
+          "source_field": "seconds"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480p",
+            "720p",
+            "1080p"
+          ],
+          "default": "720p",
+          "source_field": "metadata.resolution"
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "adaptive",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16"
+          ],
+          "default": "adaptive",
+          "source_field": "metadata.ratio"
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true,
+          "source_field": "metadata.generate_audio"
+        },
+        "seed": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 0,
+          "max": 2147483647,
+          "source_field": "metadata.seed"
+        }
       },
-      "request_mapping": {"prompt": "prompt", "first_frame": "images", "last_frame": "images", "duration": "seconds", "resolution": "metadata.resolution", "aspect_ratio": "metadata.ratio", "generate_audio": "metadata.generate_audio", "seed": "metadata.seed"},
-      "output": {"media_type": "video", "min": 1, "max": 1, "async": true},
-      "platform": {"endpoint": "/v1/videos"}
+      "request_mapping": {
+        "prompt": "prompt",
+        "first_frame": "images",
+        "last_frame": "images",
+        "duration": "seconds",
+        "resolution": "metadata.resolution",
+        "aspect_ratio": "metadata.ratio",
+        "generate_audio": "metadata.generate_audio",
+        "seed": "metadata.seed"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/videos"
+      }
     },
     {
       "model_id": "wan-3.0-global-prime-r2v",
@@ -536,22 +1414,135 @@
       "version": 1,
       "evidence_level": "official_documented",
       "inputs": {
-        "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt", "max_chars": 20000},
-        "reference": {"media_type": "image", "min": 0, "max": 10, "role": "reference"},
-        "source_video": {"media_type": "video", "min": 0, "max": 5, "role": "source_video"},
-        "reference_audio": {"media_type": "audio", "min": 0, "max": 5, "role": "reference_audio"}
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt",
+          "max_chars": 20000
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 10,
+          "role": "reference"
+        },
+        "source_video": {
+          "media_type": "video",
+          "min": 0,
+          "max": 5,
+          "role": "source_video"
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "min": 0,
+          "max": 5,
+          "role": "reference_audio"
+        }
       },
       "parameters": {
-        "duration": {"level": "optional", "type": "enum", "options": [-1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30], "default": 5, "source_field": "seconds"},
-        "resolution": {"level": "optional", "type": "enum", "options": ["480p", "720p", "1080p"], "default": "720p", "source_field": "metadata.resolution"},
-        "aspect_ratio": {"level": "optional", "type": "enum", "options": ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"], "default": "adaptive", "source_field": "metadata.ratio"},
-        "generate_audio": {"level": "optional", "type": "boolean", "default": true, "source_field": "metadata.generate_audio"},
-        "seed": {"level": "advanced", "type": "integer", "min": 0, "max": 2147483647, "source_field": "metadata.seed"}
+        "duration": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            -1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30
+          ],
+          "default": 5,
+          "source_field": "seconds"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480p",
+            "720p",
+            "1080p"
+          ],
+          "default": "720p",
+          "source_field": "metadata.resolution"
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "adaptive",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16"
+          ],
+          "default": "adaptive",
+          "source_field": "metadata.ratio"
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true,
+          "source_field": "metadata.generate_audio"
+        },
+        "seed": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 0,
+          "max": 2147483647,
+          "source_field": "metadata.seed"
+        }
       },
-      "request_mapping": {"prompt": "prompt", "reference": "metadata.content", "source_video": "metadata.content", "reference_audio": "metadata.content", "duration": "seconds", "resolution": "metadata.resolution", "aspect_ratio": "metadata.ratio", "generate_audio": "metadata.generate_audio", "seed": "metadata.seed"},
-      "requires_any_media": ["image", "video", "audio"],
-      "output": {"media_type": "video", "min": 1, "max": 1, "async": true},
-      "platform": {"endpoint": "/v1/videos"}
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "metadata.content",
+        "source_video": "metadata.content",
+        "reference_audio": "metadata.content",
+        "duration": "seconds",
+        "resolution": "metadata.resolution",
+        "aspect_ratio": "metadata.ratio",
+        "generate_audio": "metadata.generate_audio",
+        "seed": "metadata.seed"
+      },
+      "requires_any_media": [
+        "image",
+        "video",
+        "audio"
+      ],
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/videos"
+      }
     },
     {
       "model_id": "video-models-from-official-docs",
@@ -562,6 +1553,1938 @@
       "version": 1,
       "evidence_level": "official_documented",
       "note": "官方文档已确认 /v1/videos、-t2v、-i2v、-multi 及部分参数，但模型清单和逐模型能力尚未绑定到当前用户配置；禁止作为具体模型运行。"
+    },
+    {
+      "model_id": "laohu-image-g-v2.5-flare",
+      "family_id": "ai-money-laohu-image-g-v2-5-flare",
+      "family_name": "laohu-image-g-v2.5-flare",
+      "display_name": "laohu-image-g-v2.5-flare",
+      "variant_id": "default",
+      "node_type": "image_generation",
+      "operation": "text_or_reference_to_image",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 16
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "2k",
+            "4k"
+          ]
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "1:1",
+            "3:2",
+            "2:3",
+            "4:3",
+            "3:4",
+            "5:4",
+            "4:5",
+            "16:9",
+            "9:16",
+            "2:1",
+            "1:2",
+            "21:9",
+            "9:21",
+            "3:1",
+            "1:3"
+          ],
+          "source_field": "size"
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 4
+        },
+        "quality": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "output_format": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "png",
+            "jpeg",
+            "webp"
+          ]
+        },
+        "output_compression": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 0,
+          "max": 100
+        },
+        "background": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "auto",
+            "transparent",
+            "opaque"
+          ]
+        },
+        "moderation": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "low",
+            "auto"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "resolution": "resolution",
+        "aspect_ratio": "size",
+        "count": "n",
+        "quality": "quality",
+        "output_format": "output_format",
+        "output_compression": "output_compression",
+        "background": "background",
+        "moderation": "moderation"
+      },
+      "output": {
+        "media_type": "image",
+        "role": "output",
+        "min": 1,
+        "max": 4,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "laohu-image-g-v2.5-sunburst",
+      "family_id": "ai-money-laohu-image-g-v2-5-sunburst",
+      "family_name": "laohu-image-g-v2.5-sunburst",
+      "display_name": "laohu-image-g-v2.5-sunburst",
+      "variant_id": "default",
+      "node_type": "image_generation",
+      "operation": "text_or_reference_to_image",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 16
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "2k",
+            "4k"
+          ]
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "1:1",
+            "3:2",
+            "2:3",
+            "4:3",
+            "3:4",
+            "5:4",
+            "4:5",
+            "16:9",
+            "9:16",
+            "2:1",
+            "1:2",
+            "21:9",
+            "9:21",
+            "3:1",
+            "1:3"
+          ],
+          "source_field": "size"
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 4
+        },
+        "quality": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "output_format": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "png",
+            "jpeg",
+            "webp"
+          ]
+        },
+        "output_compression": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 0,
+          "max": 100
+        },
+        "background": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "auto",
+            "transparent",
+            "opaque"
+          ]
+        },
+        "moderation": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "low",
+            "auto"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "resolution": "resolution",
+        "aspect_ratio": "size",
+        "count": "n",
+        "quality": "quality",
+        "output_format": "output_format",
+        "output_compression": "output_compression",
+        "background": "background",
+        "moderation": "moderation"
+      },
+      "output": {
+        "media_type": "image",
+        "role": "output",
+        "min": 1,
+        "max": 4,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "laohu-image-g-v2.5-lowprice",
+      "family_id": "ai-money-laohu-image-g-v2-5-lowprice",
+      "family_name": "laohu-image-g-v2.5-lowprice",
+      "display_name": "laohu-image-g-v2.5-lowprice",
+      "variant_id": "default",
+      "node_type": "image_generation",
+      "operation": "text_or_reference_to_image",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "max_chars": 5000
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 15
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "2k",
+            "4k"
+          ]
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "1:1",
+            "3:2",
+            "2:3",
+            "4:3",
+            "3:4",
+            "5:4",
+            "4:5",
+            "16:9",
+            "9:16",
+            "2:1",
+            "1:2",
+            "21:9",
+            "9:21",
+            "3:1",
+            "1:3"
+          ],
+          "source_field": "size"
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 1
+        },
+        "nsfw_check": {
+          "level": "advanced",
+          "type": "boolean"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "resolution": "resolution",
+        "aspect_ratio": "size",
+        "count": "n",
+        "nsfw_check": "nsfw_check"
+      },
+      "output": {
+        "media_type": "image",
+        "role": "output",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "deepseek/deepseek-v4-flash-vision-exp",
+      "family_id": "ai-money-deepseek-deepseek-v4-flash-vision-exp",
+      "family_name": "deepseek/deepseek-v4-flash-vision-exp",
+      "display_name": "deepseek/deepseek-v4-flash-vision-exp",
+      "variant_id": "default",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 8,
+          "note": "官方确认视觉输入；当前画布文本适配器最多发送 8 张参考图。"
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "role": "output",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
+    },
+    {
+      "model_id": "glm/glm-5.3-flash",
+      "family_id": "ai-money-glm-glm-5-3-flash",
+      "family_name": "glm/glm-5.3-flash",
+      "display_name": "glm/glm-5.3-flash",
+      "variant_id": "default",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 8,
+          "note": "官方确认视觉输入；当前画布文本适配器最多发送 8 张参考图。"
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "role": "output",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
+    },
+    {
+      "model_id": "qwen/qwen3.8-flash-next",
+      "family_id": "ai-money-qwen-qwen3-8-flash-next",
+      "family_name": "qwen/qwen3.8-flash-next",
+      "display_name": "qwen/qwen3.8-flash-next",
+      "variant_id": "default",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 8,
+          "note": "官方确认视觉输入；当前画布文本适配器最多发送 8 张参考图。"
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "role": "output",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
+    },
+    {
+      "model_id": "laohu/g6-astra",
+      "family_id": "ai-money-laohu-g6-astra",
+      "family_name": "laohu/g6-astra",
+      "display_name": "laohu/g6-astra",
+      "variant_id": "default",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 8,
+          "note": "官方确认视觉输入；当前画布文本适配器最多发送 8 张参考图。"
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "role": "output",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
+    },
+    {
+      "model_id": "laohu/g5.6-sol",
+      "family_id": "ai-money-laohu-g5-6-sol",
+      "family_name": "laohu/g5.6-sol",
+      "display_name": "laohu/g5.6-sol",
+      "variant_id": "default",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 8,
+          "note": "官方确认视觉输入；当前画布文本适配器最多发送 8 张参考图。"
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "role": "output",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
+    },
+    {
+      "model_id": "laohu/g5.6-terra",
+      "family_id": "ai-money-laohu-g5-6-terra",
+      "family_name": "laohu/g5.6-terra",
+      "display_name": "laohu/g5.6-terra",
+      "variant_id": "default",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 8,
+          "note": "官方确认视觉输入；当前画布文本适配器最多发送 8 张参考图。"
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "role": "output",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
+    },
+    {
+      "model_id": "laohu/g5.6-luna",
+      "family_id": "ai-money-laohu-g5-6-luna",
+      "family_name": "laohu/g5.6-luna",
+      "display_name": "laohu/g5.6-luna",
+      "variant_id": "default",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 8,
+          "note": "官方确认视觉输入；当前画布文本适配器最多发送 8 张参考图。"
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "role": "output",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
+    },
+    {
+      "model_id": "laohu/g5.5",
+      "family_id": "ai-money-laohu-g5-5",
+      "family_name": "laohu/g5.5",
+      "display_name": "laohu/g5.5",
+      "variant_id": "default",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 8,
+          "note": "官方确认视觉输入；当前画布文本适配器最多发送 8 张参考图。"
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "role": "output",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
+    },
+    {
+      "model_id": "laohu/gm-3.8-flash",
+      "family_id": "ai-money-laohu-gm-3-8-flash",
+      "family_name": "laohu/gm-3.8-flash",
+      "display_name": "laohu/gm-3.8-flash",
+      "variant_id": "default",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 8,
+          "note": "官方确认视觉输入；当前画布文本适配器最多发送 8 张参考图。"
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "role": "output",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
+    },
+    {
+      "model_id": "glm-5.3",
+      "family_id": "ai-money-glm-5-3",
+      "family_name": "glm-5.3",
+      "display_name": "glm-5.3",
+      "variant_id": "default",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "role": "output",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
+    },
+    {
+      "model_id": "MiniMax-H3",
+      "family_id": "ai-money-minimax-h3",
+      "family_name": "MiniMax-H3",
+      "display_name": "MiniMax-H3",
+      "variant_id": "default",
+      "node_type": "video_generation",
+      "operation": "text_or_reference_to_video",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "max_chars": 10000
+        },
+        "first_frame": {
+          "media_type": "image",
+          "role": "first_frame",
+          "min": 0,
+          "max": 1
+        },
+        "last_frame": {
+          "media_type": "image",
+          "role": "last_frame",
+          "min": 0,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 9
+        },
+        "source_video": {
+          "media_type": "video",
+          "role": "source_video",
+          "min": 0,
+          "max": 3,
+          "min_duration_seconds": 2,
+          "max_duration_seconds": 15
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "role": "reference_audio",
+          "min": 0,
+          "max": 4
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "required",
+          "type": "enum",
+          "options": [
+            "480P",
+            "768P"
+          ],
+          "default": "480P"
+        },
+        "duration": {
+          "level": "required",
+          "type": "integer",
+          "min": 4,
+          "max": 60,
+          "default": 5
+        },
+        "aspect_ratio": {
+          "level": "required",
+          "type": "enum",
+          "options": [
+            "1:1",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:3",
+            "9:16",
+            "16:9",
+            "21:9",
+            "adaptive"
+          ],
+          "default": "16:9"
+        },
+        "audio_role": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "reference_audio",
+            "drive_audio"
+          ],
+          "label": "首条音频用途",
+          "label_en": "First audio role"
+        },
+        "audio_mode": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "lock_source",
+            "remix_source",
+            "reference_only",
+            "native"
+          ],
+          "label": "音轨模式",
+          "label_en": "Audio mode"
+        },
+        "denoise_strength": {
+          "level": "advanced",
+          "type": "number",
+          "min": 0,
+          "max": 1
+        },
+        "add_drive_as_reference": {
+          "level": "advanced",
+          "type": "boolean"
+        },
+        "start_time_seconds": {
+          "level": "advanced",
+          "type": "number",
+          "min": 0,
+          "label": "参考视频起点",
+          "label_en": "Reference video start"
+        }
+      },
+      "request_mapping": {
+        "prompt": "content",
+        "reference": "content",
+        "first_frame": "content",
+        "last_frame": "content",
+        "source_video": "content",
+        "reference_audio": "content",
+        "resolution": "resolution",
+        "duration": "duration",
+        "aspect_ratio": "ratio",
+        "audio_role": "audio_role",
+        "audio_mode": "audio_control.mode",
+        "denoise_strength": "audio_control.denoise_strength",
+        "add_drive_as_reference": "audio_control.add_drive_as_reference",
+        "start_time_seconds": "start_time_seconds"
+      },
+      "output": {
+        "media_type": "video",
+        "role": "output",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v2/video_generation"
+      }
+    },
+    {
+      "model_id": "suno-generation",
+      "family_id": "ai-money-suno-generation",
+      "family_name": "suno-generation",
+      "display_name": "suno-generation",
+      "variant_id": "default",
+      "node_type": "music_generation",
+      "operation": "music",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "max_chars": 5000
+        }
+      },
+      "parameters": {
+        "version": {
+          "level": "required",
+          "type": "enum",
+          "options": [
+            "v6",
+            "v6-wild",
+            "v6-mini"
+          ],
+          "default": "v6"
+        },
+        "instrumental": {
+          "level": "optional",
+          "type": "boolean"
+        },
+        "tags": {
+          "level": "optional",
+          "type": "text",
+          "max_length": 1000
+        },
+        "title": {
+          "level": "optional",
+          "type": "text",
+          "max_length": 80
+        },
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 10,
+          "max": 360
+        },
+        "variety": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "off",
+            "normal",
+            "high",
+            "extra",
+            "max"
+          ]
+        },
+        "max_mode": {
+          "level": "advanced",
+          "type": "boolean"
+        },
+        "audio_format": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "mp3",
+            "m4a",
+            "wav"
+          ]
+        },
+        "custom": {
+          "level": "optional",
+          "type": "boolean"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "version": "version",
+        "instrumental": "instrumental",
+        "tags": "style",
+        "title": "title",
+        "duration": "duration",
+        "variety": "variety",
+        "max_mode": "max_mode",
+        "audio_format": "audio_format",
+        "custom": "custom",
+        "reference_audio": "audio_url"
+      },
+      "output": {
+        "media_type": "audio",
+        "role": "output",
+        "min": 1,
+        "max": 10,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/music/generations"
+      }
+    },
+    {
+      "model_id": "suno-upload-cover",
+      "family_id": "ai-money-suno-upload-cover",
+      "family_name": "suno-upload-cover",
+      "display_name": "suno-upload-cover",
+      "variant_id": "default",
+      "node_type": "music_generation",
+      "operation": "music",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "max_chars": 5000
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "role": "reference_audio",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {
+        "version": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "v6",
+            "v6-wild",
+            "v6-mini"
+          ],
+          "default": "v6"
+        },
+        "instrumental": {
+          "level": "optional",
+          "type": "boolean"
+        },
+        "tags": {
+          "level": "optional",
+          "type": "text",
+          "max_length": 1000
+        },
+        "title": {
+          "level": "optional",
+          "type": "text",
+          "max_length": 80
+        },
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 10,
+          "max": 360
+        },
+        "variety": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "off",
+            "normal",
+            "high",
+            "extra",
+            "max"
+          ]
+        },
+        "max_mode": {
+          "level": "advanced",
+          "type": "boolean"
+        },
+        "audio_format": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "mp3",
+            "m4a",
+            "wav"
+          ]
+        },
+        "custom": {
+          "level": "optional",
+          "type": "boolean"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "version": "version",
+        "instrumental": "instrumental",
+        "tags": "tags",
+        "title": "title",
+        "duration": "duration_s",
+        "variety": "variety",
+        "max_mode": "max_mode",
+        "audio_format": "audio_format",
+        "custom": "custom",
+        "reference_audio": "audio_url"
+      },
+      "output": {
+        "media_type": "audio",
+        "role": "output",
+        "min": 1,
+        "max": 10,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/music/generations/upload-cover"
+      }
+    },
+    {
+      "model_id": "suno-upload-extend",
+      "family_id": "ai-money-suno-upload-extend",
+      "family_name": "suno-upload-extend",
+      "display_name": "suno-upload-extend",
+      "variant_id": "default",
+      "node_type": "music_generation",
+      "operation": "music",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 0,
+          "max": 1,
+          "max_chars": 5000
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "role": "reference_audio",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {
+        "version": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "v6",
+            "v6-wild",
+            "v6-mini"
+          ],
+          "default": "v6"
+        },
+        "instrumental": {
+          "level": "optional",
+          "type": "boolean"
+        },
+        "tags": {
+          "level": "optional",
+          "type": "text",
+          "max_length": 1000
+        },
+        "title": {
+          "level": "optional",
+          "type": "text",
+          "max_length": 80
+        },
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 10,
+          "max": 360
+        },
+        "variety": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "off",
+            "normal",
+            "high",
+            "extra",
+            "max"
+          ]
+        },
+        "max_mode": {
+          "level": "advanced",
+          "type": "boolean"
+        },
+        "audio_format": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "mp3",
+            "m4a",
+            "wav"
+          ]
+        },
+        "continue_at": {
+          "level": "required",
+          "type": "number",
+          "min": 1,
+          "label": "续写起点（秒）",
+          "label_en": "Continue at (seconds)"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "version": "version",
+        "instrumental": "instrumental",
+        "tags": "tags",
+        "title": "title",
+        "duration": "duration_s",
+        "variety": "variety",
+        "max_mode": "max_mode",
+        "audio_format": "audio_format",
+        "continue_at": "continue_at",
+        "reference_audio": "audio_url"
+      },
+      "output": {
+        "media_type": "audio",
+        "role": "output",
+        "min": 1,
+        "max": 10,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/music/generations/upload-extend"
+      }
+    },
+    {
+      "model_id": "suno-create-model",
+      "family_id": "ai-money-suno-create-model",
+      "family_name": "suno-create-model",
+      "display_name": "suno-create-model",
+      "variant_id": "default",
+      "node_type": "music_generation",
+      "operation": "music",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 2,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 0,
+          "max": 1,
+          "max_chars": 5000
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "role": "reference_audio",
+          "min": 6,
+          "max": 24
+        }
+      },
+      "parameters": {
+        "name": {
+          "level": "required",
+          "type": "text",
+          "label": "自定义模型名称",
+          "label_en": "Custom model name"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "name": "name",
+        "tags": "tags",
+        "duration": "duration_s",
+        "reference_audio": "audio_urls"
+      },
+      "output": {
+        "media_type": "text",
+        "role": "output",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/music/generations/create-model"
+      }
+    },
+    {
+      "model_id": "dola-seedream-5.0-pro-t2i",
+      "family_id": "ai-money-dola-seedream-5.0-pro-t2i",
+      "family_name": "dola-seedream-5.0-pro-t2i",
+      "display_name": "dola-seedream-5.0-pro-t2i",
+      "variant_id": "default",
+      "node_type": "image_generation",
+      "operation": "text_to_image",
+      "version": 2,
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 5,
+          "max_chars": 2000
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "2k"
+          ]
+        },
+        "width": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 240,
+          "max": 8192
+        },
+        "height": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 240,
+          "max": 8192
+        },
+        "output_format": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "jpeg",
+            "png"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "resolution": "metadata.resolution",
+        "width": "metadata.width",
+        "height": "metadata.height",
+        "output_format": "metadata.output_format"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "dola-seedream-5.0-pro-i2i",
+      "family_id": "ai-money-dola-seedream-5.0-pro-i2i",
+      "family_name": "dola-seedream-5.0-pro-i2i",
+      "display_name": "dola-seedream-5.0-pro-i2i",
+      "variant_id": "default",
+      "node_type": "image_generation",
+      "operation": "image_to_image",
+      "version": 2,
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 5,
+          "max_chars": 2000
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 1,
+          "max": 10
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "2k"
+          ]
+        },
+        "width": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 240,
+          "max": 8192
+        },
+        "height": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 240,
+          "max": 8192
+        },
+        "output_format": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "jpeg",
+            "png"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "resolution": "metadata.resolution",
+        "width": "metadata.width",
+        "height": "metadata.height",
+        "output_format": "metadata.output_format",
+        "reference": "images"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "vosr2-image-upscale",
+      "family_id": "ai-money-vosr2-image-upscale",
+      "family_name": "vosr2-image-upscale",
+      "display_name": "vosr2-image-upscale",
+      "variant_id": "default",
+      "node_type": "image_generation",
+      "operation": "image_upscale",
+      "version": 2,
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 0,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {},
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "vosr2-video-upscale",
+      "family_id": "ai-money-vosr2-video-upscale",
+      "family_name": "vosr2-video-upscale",
+      "display_name": "vosr2-video-upscale",
+      "variant_id": "default",
+      "node_type": "video_generation",
+      "operation": "video_upscale",
+      "version": 2,
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 0,
+          "max": 1
+        },
+        "source_video": {
+          "media_type": "video",
+          "role": "source_video",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {},
+      "request_mapping": {
+        "prompt": "prompt",
+        "source_video": "metadata.video_url"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "FlashVSR_video_upscale",
+      "family_id": "ai-money-FlashVSR_video_upscale",
+      "family_name": "FlashVSR_video_upscale",
+      "display_name": "FlashVSR_video_upscale",
+      "variant_id": "default",
+      "node_type": "video_generation",
+      "operation": "video_upscale",
+      "version": 2,
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 0,
+          "max": 1
+        },
+        "source_video": {
+          "media_type": "video",
+          "role": "source_video",
+          "min": 1,
+          "max": 1,
+          "min_duration_seconds": 3,
+          "max_duration_seconds": 15
+        }
+      },
+      "parameters": {},
+      "request_mapping": {
+        "prompt": "prompt",
+        "source_video": "metadata.video_url"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "hunyuan3d-v3.1-text-to-3d",
+      "family_id": "ai-money-hunyuan3d-v3.1-text-to-3d",
+      "family_name": "hunyuan3d-v3.1-text-to-3d",
+      "display_name": "hunyuan3d-v3.1-text-to-3d",
+      "variant_id": "default",
+      "node_type": "text_generation",
+      "operation": "text_to_3d",
+      "version": 2,
+      "status": "confirmed",
+      "readiness": "adapter_missing",
+      "runnable": false,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {},
+      "request_mapping": {
+        "prompt": "prompt"
+      },
+      "output": {
+        "media_type": "file",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/3d/generations"
+      },
+      "note": "该接口输出 GLB 3D 文件；当前画布素材契约仅支持文本、图片、视频和音频，尚无 3D 结果适配，禁止误发到聊天或图片接口。"
+    },
+    {
+      "model_id": "hunyuan3d-v3.1-image-to-3d",
+      "family_id": "ai-money-hunyuan3d-v3.1-image-to-3d",
+      "family_name": "hunyuan3d-v3.1-image-to-3d",
+      "display_name": "hunyuan3d-v3.1-image-to-3d",
+      "variant_id": "default",
+      "node_type": "image_generation",
+      "operation": "image_to_3d",
+      "version": 2,
+      "status": "confirmed",
+      "readiness": "adapter_missing",
+      "runnable": false,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-12"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 0,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 1,
+          "max": 8
+        }
+      },
+      "parameters": {},
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images"
+      },
+      "output": {
+        "media_type": "file",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/3d/generations"
+      },
+      "note": "该接口输出 GLB 3D 文件；当前画布素材契约仅支持文本、图片、视频和音频，尚无 3D 结果适配，禁止误发到聊天或图片接口。"
     }
   ]
 }

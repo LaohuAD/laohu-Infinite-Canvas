@@ -1,26 +1,41 @@
 {
-  "version": "2026.09.10",
-  "updated_at": "2026-09-10T09:00:00+08:00",
+  "version": "2026.09.13",
+  "updated_at": "2026-09-13T12:00:00+08:00",
   "items": [
     {
       "type": "feature",
-      "text": "新增 Cloudflare R2 完整更新包发布与下载校验，安装前备份，保留用户配置、密钥和素材。"
+      "text": "融合创作节点：同节点展示结果、历史和参数，共用副本同步，独立修改后分支。",
+      "text_en": "Unified creation nodes show results, history and parameters; shared copies follow updates until branched."
     },
     {
       "type": "feature",
-      "text": "laohu 平台统一使用 api.lao-hu.com，兼容已保存的旧 Key 和历史模型 ID。"
+      "text": "外部 Agent 可组织剧本、分段、资产与视频，创作进度按虚线关系同步。",
+      "text_en": "External agents organize scripts, segments, assets and video; production progress follows dashed relations."
     },
     {
       "type": "improvement",
-      "text": "统一 laohu 品牌与公开模型名称，更新模型目录快照和相关适配。"
+      "text": "统一参数点选、节点工具栏和创作进度固定控制，保留各模型真实参数差异。",
+      "text_en": "Consistent parameter choices, node toolbars and production pin controls preserve model-specific values."
+    },
+    {
+      "type": "feature",
+      "text": "音视频共用可拖动时间轴，支持裁剪、首帧/当前帧/尾帧和音频提取，结果用虚线关联。",
+      "text_en": "Shared draggable audio/video timelines support trimming, frame and audio extraction with linked derived results."
     },
     {
       "type": "fix",
-      "text": "更新范围补齐程序模块和模型能力档案，不再自动回退到原作者的 ModelScope 更新仓库。"
+      "text": "修复媒体工具存在但无法启动的检测，运行状态动效不再随画布操作重启。",
+      "text_en": "Validate media tool startup and preserve running animations across canvas interactions."
+    },
+    {
+      "type": "feature",
+      "text": "安全升级：独立依赖环境、启动验证、程序与结构化数据备份、失败恢复。",
+      "text_en": "Safe updates prepare an isolated dependency environment, verify startup, back up program/data and recover failures."
     },
     {
       "type": "improvement",
-      "text": "更新包校验拒绝损坏文件、越界路径和大小写冲突；依赖变化时提示使用完整安装流程。"
+      "text": "旧版 2026.09.10 首次升级需使用仓库根目录 canvas_update.py，详见 README；升级前保存画布并结束任务。",
+      "text_en": "For the first upgrade from 2026.09.10, use canvas_update.py from the repository root; see README. Save your canvas and finish tasks first."
     }
   ]
 }
