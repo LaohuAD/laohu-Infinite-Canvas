@@ -31,7 +31,9 @@ from project_storage import ProjectStorage
 
 def run_node(source):
     result = subprocess.run(
-        ["node", "-e", source],
+        # 大型能力目录超过 Windows 命令行长度限制，通过标准输入传递脚本。
+        ["node", "-"],
+        input=source,
         cwd=ROOT,
         check=True,
         capture_output=True,
