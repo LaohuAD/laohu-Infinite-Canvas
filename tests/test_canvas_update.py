@@ -6,7 +6,9 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 import zipfile
 
@@ -29,6 +31,28 @@ def package(extra=None):
 
 
 class UpgradeTests(unittest.TestCase):
+    def test_download_identifies_application_and_enforces_size_limit(self):
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_GET(self):
+                self.send_response(200 if self.headers.get('User-Agent') == 'LaohuInfiniteCanvas-Updater/1.0' else 403)
+                self.end_headers()
+                self.wfile.write(b'fixture')
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f'http://127.0.0.1:{server.server_port}/'
+            self.assertEqual(updater.fetch_bytes(url, 7), b'fixture')
+            with self.assertRaises(ValueError):
+                updater.fetch_bytes(url, 6)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

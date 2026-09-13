@@ -136,7 +136,8 @@ def run_checked(command, root, log, timeout=900):
 
 
 def fetch_bytes(url, limit):
-    with urllib.request.urlopen(url, timeout=60) as response:
+    request = urllib.request.Request(url, headers={'User-Agent': 'LaohuInfiniteCanvas-Updater/1.0'})
+    with urllib.request.urlopen(request, timeout=60) as response:
         data = response.read(limit + 1)
     if len(data) > limit:
         raise ValueError('升级下载超过大小限制')
