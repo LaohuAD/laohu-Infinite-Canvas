@@ -195,6 +195,76 @@
         );
     }
 
+    // 选择器可以跨平台读取候选，但这里只按能力档案中的真实 family_id 合并。
+    // 不使用 display_name 推断不同平台的模型等价关系，避免把不同协议误合并。
+    function familiesAcrossProviders(catalog, nodeType, inputCounts={}, providerIds=[], operation='', inputRoles={}, parameters={}){
+        const allowed = new Set((Array.isArray(providerIds) ? providerIds : [providerIds])
+            .map(value => String(value || '').trim())
+            .filter(Boolean));
+        const merged = new Map();
+        (catalog?.providers || []).forEach(provider => {
+            const providerId = String(provider?.id || '').trim();
+            if(!providerId || (allowed.size && !allowed.has(providerId))) return;
+            const families = familiesForInputs(catalog, nodeType, inputCounts, providerId, operation, inputRoles, parameters);
+            families.forEach(family => {
+                const familyId = String(family?.family_id || '').trim();
+                if(!familyId) return;
+                const key = `${nodeType}::${familyId}`;
+                const variants = (family.compatible_variants || []).map(variant => ({
+                    ...variant,
+                    provider_id:providerId,
+                    provider_name:provider.name,
+                    protocol:provider.protocol,
+                    family_id:familyId,
+                    family_name:family.display_name || family.family_name || '',
+                    family_name_en:family.display_name_en || family.family_name_en || ''
+                }));
+                if(!variants.length) return;
+                let item = merged.get(key);
+                if(!item){
+                    item = {
+                        ...family,
+                        provider_id:providerId,
+                        provider_name:provider.name,
+                        protocol:provider.protocol,
+                        providers:[],
+                        provider_ids:[],
+                        variants:[],
+                        compatible_variants:[]
+                    };
+                    merged.set(key, item);
+                }
+                if(!item.provider_ids.includes(providerId)){
+                    item.provider_ids.push(providerId);
+                    item.providers.push({id:providerId, name:provider.name, protocol:provider.protocol});
+                }
+                variants.forEach(variant => {
+                    const variantKey = `${variant.provider_id}::${variant.model_id || variant.variant_id || ''}`;
+                    if(item.compatible_variants.some(existing => `${existing.provider_id}::${existing.model_id || existing.variant_id || ''}` === variantKey)) return;
+                    item.compatible_variants.push(variant);
+                    item.variants.push(variant);
+                });
+                item.resolved_variant = resolveFamilyVariant(item, inputCounts, operation, inputRoles, parameters);
+            });
+        });
+        return [...merged.values()];
+    }
+
+    function variantsAcrossProviders(catalog, nodeType, familyId, inputCounts={}, providerIds=[], operation='', inputRoles={}, parameters={}){
+        const family = familiesAcrossProviders(catalog, nodeType, inputCounts, providerIds, operation, inputRoles, parameters)
+            .find(item => item.family_id === familyId);
+        return family ? [...(family.compatible_variants || [])] : [];
+    }
+
+    // variant_id 是档案里的机器标识；名称只用于避免同一 variant_id 下的 Fast/Mini 等真实变体被合并。
+    function variantSelectionKey(variant){
+        const variantId = String(variant?.variant_id || '').trim();
+        const variantName = String(variant?.variant_name || '').trim();
+        const variantNameEn = String(variant?.variant_name_en || '').trim();
+        return [variantId, variantName, variantNameEn].filter(Boolean).join('::')
+            || String(variant?.model_id || '').trim();
+    }
+
     function familyForModel(provider, modelId, nodeType=''){
         return (provider?.families || []).find(family =>
             (!nodeType || family.node_type === nodeType) &&
@@ -349,6 +419,9 @@
         familyForModel,
         findModel,
         effectiveParameters,
+        familiesAcrossProviders,
+        variantsAcrossProviders,
+        variantSelectionKey,
         resolveVideoExecutionMode,
         capabilitySnapshot,
         buildVideoRequest,

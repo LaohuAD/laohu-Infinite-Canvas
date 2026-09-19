@@ -4288,7 +4288,10 @@ def load_canvas(canvas_id):
         canvas["revision"] = max(1, int(canvas.get("revision") or 1))
         if canvas.get("deleted_at"):
             raise HTTPException(status_code=404, detail="画布已在回收站")
-        changed = retire_canvas_skill_settings(canvas)
+        from canvas_core.workbench_migration import assign_node_numbers, retire_directors
+        changed = retire_directors(canvas, Path(BASE_DIR) / 'backups' / 'workbench-migration')
+        changed = assign_node_numbers(canvas) or changed
+        changed = retire_canvas_skill_settings(canvas) or changed
         changed = migrate_canvas_media_references(canvas) or changed
         changed = hydrate_canvas_result_media_kinds(canvas) or changed
         changed = hydrate_canvas_text_results(canvas) or changed
@@ -17324,6 +17327,17 @@ async def get_canvas_comfy_task(task_id: str):
 @app.post("/api/canvas-tasks/{task_id}/cancel")
 async def cancel_canvas_task(task_id: str):
     task_id = str(task_id or "").strip()
+    if task_id.startswith('studio_'):
+        stored = PROJECT_STORAGE.get_canvas_task(task_id)
+        if not stored:
+            raise HTTPException(404, '创作任务不存在')
+        canvas = load_canvas(stored['canvas_id'])
+        node = next((value for value in canvas['nodes'] if value['id'] == stored['node_id']), None)
+        if node is None:
+            raise HTTPException(404, '源节点已删除')
+        executor = STUDIO_APP_EXECUTION if str(task_id).startswith('studio_app_') else STUDIO_EXECUTION
+        result = await executor.cancel(canvas, node, task_id)
+        return {'task_id': task_id, 'status': result['status'], 'cancelled': result['status'] == 'cancelled'}
     with CANVAS_TASK_LOCK:
         task = CANVAS_TASKS.get(task_id)
         handle = CANVAS_TASK_HANDLES.get(task_id)
@@ -19093,7 +19107,253 @@ async def canvas_llm(payload: CanvasLLMRequest):
 # --- 画布管理 ---
 
 from canvas_agent import create_agent_router
-app.include_router(create_agent_router(BASE_DIR, load_canvas))
+from studio_projects import StudioProjectStore, create_studio_projects_router
+from studio_connection import create_connection_router
+from studio_hypit import create_hypit_router
+from hypit_runtime import HypitRuntime
+from studio_execution import StudioExecution
+from studio_app_execution import StudioAppExecution
+from studio_hypit_models import create_hypit_models_router
+
+
+def studio_canvas_rename(canvas_id, name, expected_revision=None):
+    with CANVAS_LOCK:
+        value = load_canvas(canvas_id)
+        if expected_revision is not None and value.get('revision', 1) != expected_revision:
+            raise HTTPException(409, '项目已更新，请重新读取')
+        value['title'] = name
+        save_canvas(value)
+        return value
+
+
+def studio_canvas_delete(canvas_id, expected_revision=None):
+    with CANVAS_LOCK:
+        value = load_canvas(canvas_id)
+        if expected_revision is not None and value.get('revision', 1) != expected_revision:
+            raise HTTPException(409, '项目已更新，请重新读取')
+        value['deleted_at'] = now_ms()
+        save_canvas(value)
+        return value
+
+
+STUDIO_CANVAS_ADAPTER = {'list': list_canvases, 'get': load_canvas, 'create': new_canvas,
+                         'rename': studio_canvas_rename, 'delete': studio_canvas_delete}
+STUDIO_PROJECTS = StudioProjectStore(BASE_DIR, STUDIO_CANVAS_ADAPTER)
+HYPIT_RUNTIME = HypitRuntime(BASE_DIR)
+
+
+@app.on_event('shutdown')
+async def studio_shutdown():
+    # 仅关闭此服务创建的预览进程；原生 Build 由持久 Worker 管理，不按端口杀进程。
+    await asyncio.to_thread(HYPIT_RUNTIME.close)
+
+
+app.include_router(create_studio_projects_router(BASE_DIR, STUDIO_CANVAS_ADAPTER))
+app.include_router(create_connection_router(STUDIO_PROJECTS.get))
+app.include_router(create_hypit_router(BASE_DIR, STUDIO_PROJECTS.get, HYPIT_RUNTIME, PROJECT_STORAGE.register_managed_result))
+
+
+async def studio_notify(canvas):
+    try:
+        await manager.broadcast_canvas_updated(canvas['id'], int(canvas.get('updated_at') or now_ms()),
+                                               int(canvas.get('revision') or 1), '')
+    except Exception as exc:
+        # 页面通知失败不改变已经持久化的任务和结果。
+        logging.getLogger(__name__).warning('画布通知失败：%s', exc)
+
+
+async def studio_preflight(canvas, node, request, request_id):
+    return await canvas_preflight(CanvasPreflightRequest(
+        canvas_id=canvas['id'], node_id=node['id'], client_operation_id=request_id,
+        provider_id=request['provider_id'], model_id=request['model'],
+        node_type=request['kind'] + '_generation', inputs=request['inputs'],
+        input_counts=request['input_counts'], input_roles=request['input_roles'],
+        parameters=request['parameters'], nodes=canvas['nodes'], connections=canvas.get('connections', [])))
+
+
+async def studio_generate(request):
+    kind, inputs = request['kind'], request['inputs']
+    common = dict(provider_id=request['provider_id'], model=request['model'],
+                  parameters=request['parameters'], input_roles=request['input_roles'])
+    images = inputs.get('first_frame', []) + inputs.get('last_frame', []) + inputs.get('reference', [])
+    refs = [{'url': url, 'kind': 'image'} for url in images]
+    if kind == 'text':
+        return await canvas_llm(CanvasLLMRequest(
+            provider=common['provider_id'], model=common['model'], parameters=common['parameters'],
+            input_roles=common['input_roles'], message=request['prompt'], system_prompt=request.get('system_prompt', ''),
+            images=images, videos=inputs.get('source_video', []), audios=inputs.get('reference_audio', [])))
+    if kind == 'image':
+        return await build_online_image_result(OnlineImageRequest(**common, prompt=request['prompt'], reference_images=refs))
+    if kind == 'video':
+        return await canvas_video(CanvasVideoRequest(**common, prompt=request['prompt'], images=refs,
+                                                     videos=inputs.get('source_video', []), audios=inputs.get('reference_audio', [])))
+    if kind in {'audio', 'music'}:
+        return await canvas_audio_generation(CanvasAudioRequest(**common, prompt=request['prompt'],
+                                            reference_audios=inputs.get('reference_audio', [])), kind + '_generation')
+    raise HTTPException(400, '尚未适配此执行类型')
+
+
+async def studio_hypit_validate(request):
+    return await canvas_preflight(CanvasPreflightRequest(
+        provider_id=request['provider_id'], model_id=request['model'],
+        node_type=request['kind'] + '_generation', inputs=request['inputs'],
+        input_counts=request['input_counts'], input_roles=request['input_roles'],
+        parameters=request['parameters']))
+
+
+async def studio_hypit_generate(request):
+    # 复用相同适配器；未完成任务保留上游 ID，由桥接状态明确提示查询原任务。
+    return await studio_generate(request)
+
+
+app.include_router(create_hypit_models_router(BASE_DIR, STUDIO_PROJECTS.get,
+    build_model_capability_catalog, studio_hypit_validate, studio_hypit_generate))
+
+
+async def studio_collect(result, request, task):
+    media = []
+    if request['kind'] == 'text':
+        text = str(result.get('text') or '')
+        stored = await create_canvas_text_result(CanvasTextResultRequest(text=text, name=(task.get('title') or '正文') + '.md'))
+        media.append({'kind': 'text', 'text': text, 'content': text, 'url': stored['url'],
+                      'resultId': stored['id'], 'name': stored['display_name']})
+    else:
+        for kind, key in [('image', 'images'), ('video', 'videos'), ('audio', 'audios'), ('text', 'texts'), ('file', 'files')]:
+            for item in result.get(key, []):
+                value = dict(item) if isinstance(item, dict) else {'url': item}
+                value['kind'] = kind
+                if value.get('url'):
+                    result_id = value['url'].split('/api/results/')[-1].split('?')[0] if '/api/results/' in value['url'] else ''
+                    stored = PROJECT_STORAGE.get_result(result_id) if result_id else None
+                    if stored:
+                        value.update(resultId=result_id, name=stored['display_name'])
+                        if kind == 'text':
+                            path = PROJECT_STORAGE.result_path(result_id)
+                            if path:
+                                value['text'] = value['content'] = await asyncio.to_thread(path.read_text, encoding='utf-8')
+                    media.append(value)
+    for item in media:
+        item.update(creationId=task['creationId'], creationRecordId=task['id'])
+    run_id = (task.get('runRef') or {}).get('run_id')
+    if run_id:
+        ids = [item['resultId'] for item in media if item.get('resultId')]
+        if ids:
+            PROJECT_STORAGE.append_run_results(run_id, ids)
+    return media
+
+
+STUDIO_EXECUTION = StudioExecution(load_canvas=load_canvas, save_canvas=save_canvas, lock=CANVAS_LOCK,
+                                   storage=PROJECT_STORAGE, preflight=studio_preflight, generate=studio_generate,
+                                   collect=studio_collect, notify=studio_notify)
+
+
+async def studio_app_preflight(canvas, node, request, request_id):
+    if request['kind'] == 'ai_application':
+        return await canvas_preflight(CanvasPreflightRequest(canvas_id=canvas['id'], node_id=node['id'],
+            client_operation_id=request_id, provider_id='runninghub', node_type='ai_application',
+            ai_app_id=request['app_id'], app_field_values=request['app_field_values'],
+            nodes=canvas['nodes'], connections=canvas.get('connections', [])))
+    graph = validate_canvas_preflight_graph(canvas['nodes'], canvas.get('connections', []))
+    if request['kind'] == 'comfy':
+        get_workflow(request['workflow_json'])  # 核对受管理工作流路径，禁止随意读取文件。
+        if not COMFYUI_INSTANCES:
+            raise HTTPException(400, '请先配置 ComfyUI 服务')
+    elif request['kind'] == 'runninghub_workflow':
+        runninghub_api_key(runninghub_provider(request.get('region', '')), use_wallet=request.get('use_wallet', False), region=request.get('region', ''))
+    run = PROJECT_STORAGE.prepare_run(canvas_id=canvas['id'], node_id=node['id'], client_operation_id=request_id,
+        standard_request={'inputs': request['inputs'], 'parameters': request['parameters']},
+        platform_request=request['platform_request'], capability_snapshot={'graph': graph})
+    return {'run_id': run['run_id'], 'graph': graph, 'network_requested': False}
+
+
+async def studio_runninghub_submit(request):
+    payload = request['platform_request']
+    if request['kind'] == 'runninghub_workflow':
+        return await runninghub_workflow_submit(RunningHubWorkflowSubmitRequest(**payload))
+    return await runninghub_submit(RunningHubSubmitRequest(**payload))
+
+
+async def studio_runninghub_upload(ref, request):
+    result = await runninghub_upload_asset(RunningHubUploadAssetRequest(url=ref['url'],
+        useWallet=request.get('use_wallet', False), region=request.get('region', '')))
+    return result['data']['fileName']
+
+
+async def studio_comfy_upload(ref, request):
+    import io
+    from starlette.datastructures import Headers
+    path = runninghub_local_asset_path(ref['url'])
+    if not path:
+        raise HTTPException(400, '请先把工作流引用素材导入工作台')
+    content = await asyncio.to_thread(Path(path).read_bytes)
+    upload = UploadFile(file=io.BytesIO(content), filename=ref.get('name') or Path(path).name,
+        headers=Headers({'content-type': content_type_for_path(path)}))
+    # 原共享上传函数使用同步 requests；放在线程内执行，避免阻塞其他项目。
+    result = await asyncio.to_thread(lambda: asyncio.run(upload_image([upload])))
+    return result['files'][0]['comfy_name']
+
+
+async def studio_app_fields(app_id, node, canvas):
+    settings = node.get('runSettings') or {}
+    if str(settings.get('rhConfigKey') or '').startswith('workflow:') or settings.get('rhMode') == 'workflow':
+        return get_runninghub_workflow(app_id)['workflow']
+    provider = next((p for p in canvas_api_providers() if p.get('id') == 'runninghub'), {})
+    return next((item for item in provider.get('rh_apps', []) if str(item.get('id') or item.get('appId')) == str(app_id)), {})
+
+
+STUDIO_APP_EXECUTION = StudioAppExecution(load_canvas=load_canvas, save_canvas=save_canvas,
+    lock=CANVAS_LOCK, storage=PROJECT_STORAGE, preflight=studio_app_preflight,
+    collect=studio_collect, notify=studio_notify,
+    local_comfy_generate=lambda request: generate(GenerateRequest(**request['platform_request'])),
+    runninghub_submit=studio_runninghub_submit,
+    runninghub_query=lambda task_id, request: runninghub_query(task_id, request.get('use_wallet', False), request.get('region', '')),
+    resolve_runninghub_fields=studio_app_fields,
+    resolve_comfy_fields=lambda name, *_: get_workflow(name)['config']['fields'],
+    upload_runninghub_asset=studio_runninghub_upload, upload_comfy_media=studio_comfy_upload)
+
+
+@app.get('/api/studio/tasks/{task_id}')
+async def studio_task_status(task_id: str):
+    task = PROJECT_STORAGE.get_canvas_task(task_id)
+    if not task:
+        raise HTTPException(404, '任务不存在')
+    return task
+
+from canvas_core.headless_canvas import HeadlessCanvas
+
+
+def studio_validate_model(kind, provider, model, parameters):
+    profile = MODEL_CAPABILITY_REGISTRY.find_model(canvas_api_providers(), provider, model, kind)
+    if not profile or not profile.get('runnable') or profile.get('validation_mode') != 'strict':
+        raise ValueError('模型未启用或尚无可运行的能力档案')
+    unknown = set(parameters) - set(profile.get('parameters') or {})
+    if unknown:
+        raise ValueError('模型不支持参数：' + ', '.join(sorted(unknown)))
+    return profile
+
+
+async def studio_submit_node(canvas, node, request_id):
+    executor = STUDIO_APP_EXECUTION if node.get('type') in {'smart-ai-app', 'smart-comfy-workflow'} else STUDIO_EXECUTION
+    result = await executor.submit(canvas, node, request_id)
+    # 执行服务已经保存了真实任务；命令层继续写回时必须使用这份最新数据。
+    latest = load_canvas(canvas['id'])
+    canvas.clear()
+    canvas.update(latest)
+    return result
+
+
+async def studio_cancel_node(canvas, node, task_id):
+    executor = STUDIO_APP_EXECUTION if str(task_id).startswith('studio_app_') else STUDIO_EXECUTION
+    result = await executor.cancel(canvas, node, task_id)
+    latest = load_canvas(canvas['id'])
+    canvas.clear()
+    canvas.update(latest)
+    return result
+
+
+STUDIO_CANVAS = HeadlessCanvas(load_canvas, save_canvas, CANVAS_LOCK, studio_submit_node,
+                              studio_cancel_node, studio_validate_model, studio_notify)
+app.include_router(create_agent_router(BASE_DIR, load_canvas, executor=STUDIO_CANVAS))
 
 @app.get("/api/canvases")
 async def canvases():
@@ -20261,6 +20521,9 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
         hydrate_canvas_text_results(incoming_nodes)
         canvas["nodes"] = incoming_nodes["nodes"]
         canvas["connections"] = payload.connections
+        from canvas_core.workbench_migration import assign_node_numbers, retire_directors
+        retire_directors(canvas, Path(BASE_DIR) / 'backups' / 'workbench-migration')
+        assign_node_numbers(canvas)
         if canvas["kind"] == "smart":
             canvas["viewport"] = payload.viewport
         else:

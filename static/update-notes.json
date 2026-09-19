@@ -1,41 +1,31 @@
 {
-  "version": "2026.09.13",
-  "updated_at": "2026-09-13T12:00:00+08:00",
+  "version": "2026.09.19",
+  "updated_at": "2026-09-19T20:00:00+08:00",
   "items": [
     {
       "type": "feature",
-      "text": "融合创作节点：同节点展示结果、历史和参数，共用副本同步，独立修改后分支。",
-      "text_en": "Unified creation nodes show results, history and parameters; shared copies follow updates until branched."
-    },
-    {
-      "type": "feature",
-      "text": "外部 Agent 可组织剧本、分段、资产与视频，创作进度按虚线关系同步。",
-      "text_en": "External agents organize scripts, segments, assets and video; production progress follows dashed relations."
+      "text": "新增 Hypit 项目与原生预览接入，复用已有模型配置与素材索引。",
+      "text_en": "Add Hypit projects and native previews using existing model settings and asset indexes."
     },
     {
       "type": "improvement",
-      "text": "统一参数点选、节点工具栏和创作进度固定控制，保留各模型真实参数差异。",
-      "text_en": "Consistent parameter choices, node toolbars and production pin controls preserve model-specific values."
+      "text": "统一项目管理：创建后留在列表，手动打开作品，接入指令通过独立文档提供。",
+      "text_en": "Unified project management: creation stays in the list, works open explicitly, and connection prompts link to dedicated guides."
     },
     {
       "type": "feature",
-      "text": "音视频共用可拖动时间轴，支持裁剪、首帧/当前帧/尾帧和音频提取，结果用虚线关联。",
-      "text_en": "Shared draggable audio/video timelines support trimming, frame and audio extraction with linked derived results."
+      "text": "画布 Agent 支持无页面后台执行，增加稳定节点编号与多标签冲突合并。",
+      "text_en": "Canvas agents support headless execution, stable node numbers and multi-tab conflict merging."
+    },
+    {
+      "type": "improvement",
+      "text": "抽出项目与任务编排模块，保留平台适配器复用；进一步底层统一仍在进行。",
+      "text_en": "Extract project and task orchestration modules while reusing provider adapters; further unification remains in progress."
     },
     {
       "type": "fix",
-      "text": "修复媒体工具存在但无法启动的检测，运行状态动效不再随画布操作重启。",
-      "text_en": "Validate media tool startup and preserve running animations across canvas interactions."
-    },
-    {
-      "type": "feature",
-      "text": "安全升级：独立依赖环境、启动验证、程序与结构化数据备份、失败恢复。",
-      "text_en": "Safe updates prepare an isolated dependency environment, verify startup, back up program/data and recover failures."
-    },
-    {
-      "type": "improvement",
-      "text": "旧版 2026.09.10 首次升级需使用仓库根目录 canvas_update.py，详见 README；升级前保存画布并结束任务。",
-      "text_en": "For the first upgrade from 2026.09.10, use canvas_update.py from the repository root; see README. Save your canvas and finish tasks first."
+      "text": "修复 Hypit 打开地址、项目列表错误状态和新建项目提前打开标签的问题。",
+      "text_en": "Fix Hypit project URLs, project-list error states and premature tab opening."
     }
   ]
 }

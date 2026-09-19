@@ -22,6 +22,7 @@
     <link rel="stylesheet" href="/static/css/theme.css?v=2026.08.17.1786430759">
     <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.08.17.1787100747">
     <link rel="stylesheet" href="/static/css/studio-ui-polish.css?v=2026.08.17.1787804426">
+    <link rel="stylesheet" href="/static/css/hypit-settings.css?v=2026.09.19.1">
 </head>
 <body>
     <div class="page">
@@ -36,6 +37,16 @@
 
             <div class="layout">
                 <aside class="sidebar">
+                    <div id="hypitSubnav" class="hypit-subnav">
+                        <div class="side-section-title" data-i18n="hypit.navTitle">Hypit 原生模型</div>
+                        <button id="hypitSettingsNav" class="provider-card hypit-subnav-item" type="button" onclick="openHypitSettings()">
+                            <span class="provider-mark hypit-logo-mark" aria-hidden="true">H</span>
+                            <span class="provider-info">
+                                <span class="provider-name" data-i18n="hypit.navLabel">Hypit Endpoint</span>
+                                <span class="provider-meta" data-i18n="hypit.navMeta">绑定工作台共享模型</span>
+                            </span>
+                        </button>
+                    </div>
                     <div id="comfyuiSubnav" class="comfyui-subnav">
                         <div class="side-section-title" data-i18n="api.comfyuiSubnavTitle">ComfyUI 设置</div>
                         <div class="comfyui-subnav-list">
@@ -348,6 +359,24 @@
                                 </div>
                             </div>
                             <div id="verifyResult" style="display:none;padding:2px 0;grid-column:1/-1"></div>
+                        </div>
+                    </section>
+
+                    <section id="hypitSettingsBlock" class="hypit-settings-block" hidden>
+                        <div class="hypit-settings-intro">
+                            <div>
+                                <div class="block-title" data-i18n="hypit.title">Hypit 原生模型</div>
+                                <div class="block-desc" data-i18n="hypit.description">为 Hypit 项目选择工作台共享模型。这里不保存 API Key，项目首次接入时会固定一份默认模型快照。</div>
+                            </div>
+                            <button class="action-btn" type="button" onclick="closeHypitSettings()"><i data-lucide="arrow-left" class="w-3.5 h-3.5"></i><span data-i18n="hypit.back">返回平台设置</span></button>
+                        </div>
+                        <div id="hypitSettingsStatus" class="hypit-settings-status" role="status" aria-live="polite"></div>
+                        <div class="hypit-settings-note" data-i18n="hypit.noKeys">Hypit 使用工作台后端执行；外部平台 Key 只由后端读取，不会写入 Hypit 设置或 Endpoint 配置。</div>
+                        <div id="hypitCapabilitySummary" class="hypit-capability-summary"></div>
+                        <div id="hypitSlots" class="hypit-slot-grid"></div>
+                        <div class="hypit-settings-actions">
+                            <button class="action-btn" type="button" onclick="reloadHypitSettings()"><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i><span data-i18n="hypit.reload">重新读取</span></button>
+                            <button class="action-btn save-btn" type="button" onclick="saveHypitSettings()"><i data-lucide="save" class="w-3.5 h-3.5"></i><span data-i18n="hypit.save">保存 Hypit 默认模型</span></button>
                         </div>
                     </section>
 
@@ -673,5 +702,7 @@
     <script src="/static/js/smart-node-contract.js?v=2026.08.17.1787802614"></script>
     <script src="/static/js/i18n/api-settings.js?v=2026.08.17.1787068270"></script>
     <script src="/static/js/api-settings.js?v=2026.08.17.1787833237"></script>
+    <script src="/static/js/smart-model-capabilities.js?v=2026.09.19.1"></script>
+    <script src="/static/js/hypit-settings.js?v=2026.09.19.1"></script>
 </body>
 </html>

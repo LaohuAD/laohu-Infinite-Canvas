@@ -34,6 +34,9 @@ const SMART_MINIMAX_RUNNINGHUB_WORKFLOW_ID = '2084608321469898754';
 const SMART_MINIMAX_RUNNINGHUB_WORKFLOW_TITLE = 'Minimax-多参视频生成';
 const SMART_NODE_CONTRACT = window.SmartNodeContract;
 if(!SMART_NODE_CONTRACT) throw new Error('智能画布节点契约未加载');
+const CANVAS_SYNC = window.CanvasSync;
+if(!CANVAS_SYNC) throw new Error('画布同步模块未加载');
+const canvasDocumentTitle = () => capabilityUiText('画布', 'Canvas');
 const SMART_DIRECTOR_CORE = window.SmartDirectorCore;
 if(!SMART_DIRECTOR_CORE) throw new Error('智能画布导演台核心未加载');
 const SMART_NODE_TYPES = SMART_NODE_CONTRACT.NODE_TYPES;
@@ -1112,7 +1115,7 @@ function insertSmartWorkflowIntoCanvas(imported){
         .filter(conn => conn.from && conn.to);
     newNodes.forEach((node,index)=>{newNodes[index]=remapImportedWorkflowNodeRefs(node,idMap);clearSmartNodeTransientRunState(newNodes[index]);});
     if(!nodes.length && imported.settings?.agentDefaults) canvasDefaultSmartSettings.agentDefaults=JSON.parse(JSON.stringify(imported.settings.agentDefaults));
-    nodes.push(...newNodes);
+    appendSmartNodes(newNodes);
     canvas.connections = [...(canvas.connections || []), ...newConnections];
     selectedIds = newNodes.length > 1 ? newNodes.map(node => node.id) : [];
     selectedId = newNodes.length === 1 ? newNodes[0].id : '';
@@ -2002,7 +2005,7 @@ function createTextMaterialNodeAt(point, text='', options={}){
     node.w = EMPTY_UPLOAD_NODE_WIDTH;
     node.h = EMPTY_UPLOAD_NODE_HEIGHT;
     CanvasCreation.ensure(node);
-    nodes.push(node);
+    appendSmartNodes(node);
     if(options.select !== false) selectedId = node.id;
     render();
     scheduleSave();
@@ -2024,7 +2027,7 @@ function createAngleControlNode(point, options={}){
         created_at:Date.now()
     };
     CanvasCreation.ensure(node);
-    nodes.push(node);
+    appendSmartNodes(node);
     if(options.select !== false) selectedId = node.id;
     render();
     scheduleSave();
@@ -2044,7 +2047,7 @@ function createImageCompareNode(point, options={}){
         created_at:Date.now()
     };
     CanvasCreation.ensure(node);
-    nodes.push(node);
+    appendSmartNodes(node);
     if(options.select !== false) selectedId = node.id;
     render();
     scheduleSave();
@@ -3100,6 +3103,7 @@ function imageProviders(){
     return (apiProviders || []).filter(p => p.enabled !== false && p.id !== 'modelscope' && p.id !== 'volcengine' && (p.image_models || []).length);
 }
 function executionPlatformKind(node=activeSettingsSubject()){
+    if(node?.type === SMART_NODE_TYPES.textGenerator) return 'text';
     if(node?.type === SMART_NODE_TYPES.videoGenerator) return 'video';
     if(node?.type === SMART_NODE_TYPES.audioGenerator) return 'audio';
     if(node?.type === SMART_NODE_TYPES.musicGenerator) return 'music';
@@ -3108,6 +3112,7 @@ function executionPlatformKind(node=activeSettingsSubject()){
 function executionPlatformId(kind=executionPlatformKind()){
     if(settings.engine === 'modelscope') return 'modelscope';
     if(settings.engine === 'volcengine') return 'volcengine';
+    if(kind === 'text') return settings.textProvider || '';
     if(kind === 'video') return settings.videoProvider || '';
     if(kind === 'audio') return settings.audioProvider || '';
     if(kind === 'music') return settings.musicProvider || '';
@@ -3115,6 +3120,7 @@ function executionPlatformId(kind=executionPlatformKind()){
 }
 function executionPlatformModels(provider, kind){
     if(!provider) return [];
+    if(kind === 'text') return provider.chat_models || [];
     if(kind === 'video') return provider.id === 'volcengine' ? volcengineVideoModels() : (provider.video_models || []);
     if(kind === 'audio' || kind === 'music') return provider.audio_models || [];
     if(provider.id === 'volcengine') return providerImageModels('volcengine');
@@ -3152,47 +3158,86 @@ function selectExecutionPlatform(providerId){
     const provider = (apiProviders || []).find(item => item.id === providerId);
     if(!provider) return;
     const kind = executionPlatformKind();
+    const subject = activeSettingsSubject();
+    const descriptor = executionSelectionDescriptor(subject);
+    const previousProvider = descriptor ? String(settings[descriptor.providerKey] || '') : '';
+    const previousFamily = descriptor ? String(settings[descriptor.familyKey] || '') : '';
+    const previousModel = descriptor ? String(settings[descriptor.modelKey] || '') : '';
+    const previousProfile = descriptor && previousModel
+        ? capabilityProfileFor(previousProvider, previousModel, descriptor.nodeType)
+        : null;
+    const previousVariantKey = previousProfile ? capabilityPickerVariantKey(previousProfile) : '';
     if(providerId === 'modelscope') settings.engine = 'modelscope';
     else if(providerId === 'volcengine') settings.engine = 'volcengine';
     else {
         settings.engine = 'api';
-        if(kind === 'video'){
+        if(kind === 'text'){
+            settings.textProvider = providerId;
+            settings.textModel = previousModel;
+            settings.textFamilyId = previousFamily;
+        } else if(kind === 'video'){
             settings.videoProvider = providerId;
-            settings.videoModel = '';
-            settings.videoFamilyId = '';
+            settings.videoModel = previousModel;
+            settings.videoFamilyId = previousFamily;
         } else if(kind === 'audio'){
             settings.audioProvider = providerId;
-            settings.audioModel = '';
-            settings.audioFamilyId = '';
+            settings.audioModel = previousModel;
+            settings.audioFamilyId = previousFamily;
         } else if(kind === 'music'){
             settings.musicProvider = providerId;
-            settings.musicModel = '';
-            settings.musicFamilyId = '';
+            settings.musicModel = previousModel;
+            settings.musicFamilyId = previousFamily;
         } else {
             settings.provider_id = providerId;
-            settings.model = '';
-            settings.imageFamilyId = '';
+            settings.model = previousModel;
+            settings.imageFamilyId = previousFamily;
         }
     }
+    // 旧逻辑会在这里执行 settings.imageFamilyId = ''; settings.videoFamilyId = ''; settings.audioFamilyId = ''; settings.musicFamilyId = ''; 新选择器保留它们以恢复真实旧选择。
     sanitizeSmartApiSelection(settings);
-    if(kind === 'video' && providerId !== 'volcengine'){
-        const selection = resolveCapabilityFamilySelection(providerId, 'video_generation', capabilityInputCounts('video'), '', '', '', capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true));
-        settings.videoFamilyId = selection.family?.family_id || '';
-        settings.videoModel = selection.profile?.model_id || '';
-    } else if(kind === 'audio'){
-        const selection = resolveCapabilityFamilySelection(providerId, 'audio_generation', capabilityInputCounts('audio'), '', '', '', capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true));
-        settings.audioFamilyId = selection.family?.family_id || '';
-        settings.audioModel = selection.profile?.model_id || '';
-    } else if(kind === 'music'){
-        const selection = resolveCapabilityFamilySelection(providerId, 'music_generation', capabilityInputCounts('music'), '', '', '', capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true));
-        settings.musicFamilyId = selection.family?.family_id || '';
-        settings.musicModel = selection.profile?.model_id || '';
-    } else if(kind === 'image' && providerId !== 'modelscope' && providerId !== 'volcengine'){
-        const selection = resolveCapabilityFamilySelection(providerId, 'image_generation', capabilityInputCounts('image'), '', '', '', capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true));
-        settings.imageFamilyId = selection.family?.family_id || '';
-        settings.model = selection.profile?.model_id || '';
+    if(descriptor && providerId !== 'modelscope' && providerId !== 'volcengine'){
+        const refs = visibleReferenceImagesFor(subject);
+        const textRequest = kind === 'text' ? textGenerationRequestForNode(subject) : null;
+        const inputCounts = kind === 'text'
+            ? textGenerationCandidateInputCounts(textRequest)
+            : capabilityInputCounts(kind, subject);
+        const inputRoles = kind === 'text'
+            ? (textRequest?.inputRoles || {})
+            : kind === 'video'
+                ? videoCapabilityInputRoles(refs, settings, true)
+                : capabilityInputRoles(refs, true);
+        const parameterIntent = {};
+        if(kind === 'video') parameterIntent.__execution_mode = videoExecutionModeFor(previousProfile, refs, settings, Boolean(manualSmartVideoLink(settings)));
+        const picker = resolveCapabilityFamilyPickerSelection(
+            descriptor.nodeType,
+            inputCounts,
+            previousFamily,
+            previousModel,
+            '',
+            inputRoles,
+            parameterIntent,
+            providerId,
+            previousVariantKey
+        );
+        if(picker.profile?.provider_id === providerId){
+            settings[descriptor.familyKey] = picker.family?.family_id || previousFamily;
+            settings[descriptor.modelKey] = picker.profile.model_id;
+        } else {
+            // 三类旧 provider 级解算入口保留为精确协议回退：resolveCapabilityFamilySelection(providerId, 'image_generation', ...)、resolveCapabilityFamilySelection(providerId, 'video_generation', ...)、resolveCapabilityFamilySelection(providerId, 'audio_generation', ...)。
+            const providerSelection = resolveCapabilityFamilySelection(
+                providerId,
+                descriptor.nodeType,
+                inputCounts,
+                previousFamily,
+                '',
+                '',
+                inputRoles,
+                parameterIntent
+            );
+            settings[descriptor.familyKey] = providerSelection.family?.family_id || '';
+            settings[descriptor.modelKey] = providerSelection.profile?.model_id || '';
+        }
     }
-    const subject = activeSettingsSubject();
     if(subject) subject.runSettings = settingsForStorage(settings);
     persistActiveSmartSettings();
     renderDynamicParams();
@@ -3257,14 +3302,28 @@ function capabilityProviderEntry(providerId, nodeType, inputCounts, inputRoles={
         capabilityModels:models
     };
 }
+function capabilityProviderConfig(providerId){
+    return (apiProviders || []).find(item => item.id === providerId || item.capability_provider_id === providerId) || null;
+}
+function capabilityProviderEnabled(providerId){
+    const provider = capabilityProviderConfig(providerId);
+    return Boolean(provider && provider.enabled !== false);
+}
 function configuredCapabilityModelIds(providerId, nodeType){
-    const provider = (apiProviders || []).find(item => item.id === providerId || item.capability_provider_id === providerId);
-    if(!provider) return new Set();
+    const provider = capabilityProviderConfig(providerId);
+    if(!provider || provider.enabled === false) return new Set();
     const key = nodeType === 'text_generation' ? 'chat_models'
         : nodeType === 'video_generation' ? 'video_models'
         : ['audio_generation','music_generation'].includes(nodeType) ? 'audio_models'
         : 'image_models';
     return new Set((provider[key] || []).map(model => String(model || '').trim()).filter(Boolean));
+}
+function capabilityEnabledProviderIds(nodeType){
+    return (modelCapabilityCatalog.providers || [])
+        .filter(provider => !['modelscope','volcengine'].includes(provider.id))
+        .filter(provider => capabilityProviderEnabled(provider.id))
+        .filter(provider => configuredCapabilityModelIds(provider.id, nodeType).size)
+        .map(provider => provider.id);
 }
 function capabilityProvidersFor(nodeType, inputCounts, fallback=[], inputRoles={}, parameters={}){
     const entries = [];
@@ -3300,6 +3359,49 @@ function capabilityFamiliesForProvider(providerId, nodeType, inputCounts, operat
     }).filter(Boolean);
     return smartOrderedItems(families, smartPreferenceScopeKey('families', nodeType, providerId), family => family.family_id);
 }
+function capabilityFamiliesAcrossEnabledProviders(nodeType, inputCounts, operation='', inputRoles={}, parameters={}){
+    const providerIds = capabilityEnabledProviderIds(nodeType);
+    const families = window.SmartModelCapabilities?.familiesAcrossProviders?.(
+        modelCapabilityCatalog,
+        nodeType,
+        inputCounts,
+        providerIds,
+        operation,
+        inputRoles,
+        parameters
+    ) || [];
+    return families.map(family => {
+        const variants = (family.compatible_variants || family.variants || []).filter(variant => (
+            capabilityProviderEnabled(variant.provider_id)
+            && configuredCapabilityModelIds(variant.provider_id, nodeType).has(String(variant.model_id || '').trim())
+        ));
+        if(!variants.length) return null;
+        const compatibleVariants = variants.filter(variant => window.SmartModelCapabilities?.modelSupportsInputs(
+            variant,
+            inputCounts,
+            inputRoles,
+            parameters
+        ));
+        if(!compatibleVariants.length) return null;
+        return {
+            ...family,
+            variants,
+            compatible_variants:compatibleVariants,
+            provider_ids:[...new Set(compatibleVariants.map(variant => variant.provider_id).filter(Boolean))],
+            providers:[...new Set(compatibleVariants.map(variant => variant.provider_id).filter(Boolean))].map(providerId => {
+                const provider = capabilityProviderConfig(providerId);
+                return {id:providerId, name:provider?.name || providerId, protocol:provider?.protocol || ''};
+            }),
+            resolved_variant:window.SmartModelCapabilities?.resolveFamilyVariant?.(
+                {...family, variants:compatibleVariants},
+                inputCounts,
+                operation,
+                inputRoles,
+                parameters
+            ) || null
+        };
+    }).filter(Boolean).sort((left, right) => String(left.family_id || '').localeCompare(String(right.family_id || '')));
+}
 function resolveCapabilityFamilySelection(providerId, nodeType, inputCounts, familyId='', legacyModelId='', operation='', inputRoles={}, parameters={}){
     const provider = (modelCapabilityCatalog.providers || []).find(item => item.id === providerId) || null;
     const families = capabilityFamiliesForProvider(providerId, nodeType, inputCounts, operation, inputRoles, parameters);
@@ -3325,6 +3427,96 @@ function resolveCapabilityFamilySelection(providerId, nodeType, inputCounts, fam
         requestedId,
         requestedModelId
     };
+}
+function capabilityPickerVariantKey(variant){
+    return window.SmartModelCapabilities?.variantSelectionKey?.(variant)
+        || [variant?.variant_id, variant?.variant_name, variant?.variant_name_en, variant?.model_id].filter(Boolean).join('::');
+}
+function capabilityPickerVariantGroups(family, preferredProviderId=''){
+    const groups = new Map();
+    (family?.compatible_variants || []).forEach(variant => {
+        const key = capabilityPickerVariantKey(variant);
+        if(!key) return;
+        let group = groups.get(key);
+        if(!group){
+            group = {key, ...variant, profiles:[], representative:variant};
+            groups.set(key, group);
+        }
+        group.profiles.push(variant);
+        if(preferredProviderId && variant.provider_id === preferredProviderId) group.representative = variant;
+    });
+    return [...groups.values()];
+}
+function capabilityPickerProviderEntries(profiles=[]){
+    const ids = [...new Set((profiles || []).map(profile => String(profile?.provider_id || '').trim()).filter(Boolean))];
+    return ids.map(providerId => {
+        const provider = capabilityProviderConfig(providerId);
+        return provider && provider.enabled !== false ? {...provider} : null;
+    }).filter(Boolean);
+}
+function resolveCapabilityFamilyPickerSelection(nodeType, inputCounts, familyId='', legacyModelId='', operation='', inputRoles={}, parameters={}, preferredProviderId='', preferredVariantKey=''){
+    const families = capabilityFamiliesAcrossEnabledProviders(nodeType, inputCounts, operation, inputRoles, parameters);
+    const requestedModelId = String(legacyModelId || '').trim();
+    const legacyFamily = requestedModelId
+        ? families.find(family => (family.compatible_variants || []).some(variant => variant.model_id === requestedModelId))
+        : null;
+    const requestedFamilyId = String(familyId || '').trim();
+    const requestedFamilyExists = requestedFamilyId && families.some(item => item.family_id === requestedFamilyId);
+    // 旧 family_id 可能来自 provider 专属档案；已有真实 model_id 时优先用它恢复所属家族。
+    const requestedId = String((requestedFamilyExists ? requestedFamilyId : legacyFamily?.family_id || requestedFamilyId) || '').trim();
+    const requestedFamily = families.find(item => item.family_id === requestedId) || null;
+    const defaultFamily = requestedFamily || families.find(item => capabilitySafeDefaultProfileForFamily(item)) || families[0] || null;
+    const family = requestedFamily || (!requestedId ? defaultFamily : null);
+    const invalidSelection = Boolean(requestedId && !requestedFamily);
+    const compatibleVariants = family?.compatible_variants || [];
+    let profile = null;
+    let invalidVariant = false;
+    if(requestedModelId){
+        profile = compatibleVariants.find(item => item.model_id === requestedModelId) || null;
+        if(profile && preferredProviderId && preferredVariantKey && profile.provider_id !== preferredProviderId){
+            profile = compatibleVariants.find(item => item.provider_id === preferredProviderId && capabilityPickerVariantKey(item) === preferredVariantKey) || profile;
+        }
+        if(!profile && family) invalidVariant = true;
+    } else if(family){
+        const preferredVariants = preferredProviderId
+            ? compatibleVariants.filter(item => item.provider_id === preferredProviderId)
+            : [];
+        const preferredFamily = preferredVariants.length ? {...family, compatible_variants:preferredVariants, variants:preferredVariants} : family;
+        profile = capabilitySafeDefaultProfileForFamily(preferredFamily)
+            || capabilityDefaultProfileForFamily(preferredFamily)
+            || capabilityDefaultProfileForFamily(family);
+    }
+    const variantGroups = capabilityPickerVariantGroups(family, preferredProviderId);
+    const selectedVariantKey = profile ? capabilityPickerVariantKey(profile) : '';
+    const platformProfiles = selectedVariantKey
+        ? compatibleVariants.filter(variant => capabilityPickerVariantKey(variant) === selectedVariantKey)
+        : compatibleVariants;
+    return {
+        families,
+        family,
+        profile,
+        compatibleVariants,
+        variantGroups,
+        selectedVariantKey,
+        platformProfiles,
+        platforms:capabilityPickerProviderEntries(platformProfiles),
+        invalidSelection,
+        invalidVariant,
+        requiresVariantSelection:Boolean(family && !profile && variantGroups.length > 1),
+        requestedId,
+        requestedModelId
+    };
+}
+function applyCapabilityPickerSelection(target, descriptor, selection){
+    if(!target || !descriptor || !selection) return;
+    if(selection.family?.family_id) target[descriptor.familyKey] = selection.family.family_id;
+    else if(selection.requestedId) target[descriptor.familyKey] = selection.requestedId;
+    if(selection.profile){
+        target[descriptor.providerKey] = selection.profile.provider_id || target[descriptor.providerKey] || '';
+        target[descriptor.modelKey] = selection.profile.model_id || '';
+    } else if(selection.requestedModelId){
+        target[descriptor.modelKey] = selection.requestedModelId;
+    }
 }
 function executionSelectionDescriptor(node){
     if(node?.type === SMART_NODE_TYPES.textGenerator) return {nodeType:'text_generation', providerKey:'textProvider', familyKey:'textFamilyId', modelKey:'textModel', kind:'text'};
@@ -3399,17 +3591,30 @@ function ensureExecutionSelectionDefaults(target, node, {resetSelection=false}={
         || previous.model !== target[descriptor.modelKey];
 }
 function capabilityFamilyLabel(family){
-    if(window.StudioI18n?.lang?.() === 'en') return family?.display_name_en || family?.display_name || family?.family_id || '';
-    return family?.display_name || family?.display_name_en || family?.family_id || '';
+    if(window.StudioI18n?.lang?.() === 'en') return family?.display_name_en || family?.display_name || family?.family_name_en || family?.family_name || family?.family_id || '';
+    return family?.display_name || family?.family_name || family?.display_name_en || family?.family_name_en || family?.family_id || '';
 }
 function renderCapabilityFamilyControl(families, settingKey, selectedId, icon='box'){
     const selected = (families || []).find(item => item.family_id === selectedId) || (!selectedId ? families?.[0] : null) || null;
     const invalid = Boolean(selectedId && !selected);
     const descriptor = executionSelectionDescriptor(activeSettingsSubject());
-    const scope = smartPreferenceScopeKey('families', descriptor?.nodeType || '', settings?.[descriptor?.providerKey] || '');
+    const scope = smartPreferenceScopeKey('families', descriptor?.nodeType || '');
     const orderedFamilies = smartOrderedItems(families || [], scope, family => family.family_id);
-    const options = `${invalid ? `<div class="muted-note">${escapeHtml(tr('smart.familyInputMismatch'))}</div>` : ''}${orderedFamilies.map(family => `<button type="button" class="direct-option ${family.family_id === (selected?.family_id || '') ? 'active' : ''}" data-execution-family-option="${escapeAttr(family.family_id)}" data-execution-setting="${escapeAttr(settingKey)}" data-preference-id="${escapeAttr(family.family_id)}">${renderPreferenceHandle(scope, family.family_id)}<span>${escapeHtml(capabilityFamilyLabel(family))}</span></button>`).join('')}`;
-    return renderExecutionChoiceControl(tr('smart.model'), icon, 'model-control', options, !families?.length, invalid, selected ? capabilityFamilyLabel(selected) : '');
+    const labelCounts = new Map();
+    orderedFamilies.forEach(family => {
+        const label = capabilityFamilyLabel(family);
+        labelCounts.set(label, (labelCounts.get(label) || 0) + 1);
+    });
+    const familyPickerLabel = family => {
+        const label = capabilityFamilyLabel(family);
+        if((labelCounts.get(label) || 0) < 2) return label;
+        const providerName = family?.providers?.length === 1
+            ? family.providers[0].name
+            : family?.provider_name || family?.provider_id || '';
+        return providerName ? `${label} · ${providerName}` : `${label} · ${family?.family_id || ''}`;
+    };
+    const options = `${invalid ? `<div class="muted-note">${escapeHtml(tr('smart.familyInputMismatch'))}</div>` : ''}${orderedFamilies.map(family => `<button type="button" class="direct-option ${family.family_id === (selected?.family_id || '') ? 'active' : ''}" data-execution-family-option="${escapeAttr(family.family_id)}" data-execution-setting="${escapeAttr(settingKey)}" data-preference-id="${escapeAttr(family.family_id)}" title="${escapeAttr(family.family_id)}">${renderPreferenceHandle(scope, family.family_id)}<span>${escapeHtml(familyPickerLabel(family))}</span></button>`).join('')}`;
+    return renderExecutionChoiceControl(capabilityUiText('模型家族','Model family'), icon, 'model-control', options, !families?.length, invalid, selected ? familyPickerLabel(selected) : '');
 }
 const SUNO_ACTION_INFO = {
     'suno-generation':{zhTitle:'歌曲生成',enTitle:'Song Generation',zhDescription:'根据灵感描述或自定义歌词生成完整歌曲。',enDescription:'Generate a complete song from an idea or custom lyrics.'},
@@ -3457,12 +3662,22 @@ function capabilityVariantLabel(variant){
 function renderCapabilityVariantControl(selection, settingKey){
     selection = selection || {};
     const descriptor = executionSelectionDescriptor(activeSettingsSubject());
-    const scope = smartPreferenceScopeKey('variants', descriptor?.nodeType || '', settings?.[descriptor?.providerKey] || '', selection.family?.family_id || '');
-    const variants = smartOrderedItems(selection.compatibleVariants || [], scope, variant => variant.model_id);
+    const scope = smartPreferenceScopeKey('variants', descriptor?.nodeType || '', selection.family?.family_id || '');
+    const variants = smartOrderedItems(selection.variantGroups || [], scope, variant => variant.key || variant.model_id);
     const selectedModelId = String(settings?.[settingKey] || '').trim();
-    const selected = variants.find(item => item.model_id === selectedModelId) || selection.profile || variants[0] || null;
+    const selectedGroup = variants.find(item => (item.profiles || []).some(profile => profile.model_id === selectedModelId)) || null;
+    const fallback = selection.profile || variants[0] || null;
+    const profileGroup = selection.profile
+        ? variants.find(item => (item.profiles || []).some(profile => profile.model_id === selection.profile.model_id && profile.provider_id === selection.profile.provider_id))
+        : null;
+    const selected = selection.invalidVariant ? null : (selectedGroup || profileGroup || (fallback?.key ? fallback : null));
     const label = tr('smart.mode') || '运行模式';
-    const options = `${!selected ? `<div class="muted-note">${escapeHtml(tr('smart.selectMode') || '请选择运行模式')}</div>` : ''}${variants.map(variant => `<button type="button" class="direct-option ${variant.model_id === selected?.model_id ? 'active' : ''}" data-execution-variant-option="${escapeAttr(variant.model_id)}" data-execution-setting="${escapeAttr(settingKey)}" data-preference-id="${escapeAttr(variant.model_id)}">${renderPreferenceHandle(scope, variant.model_id)}<span>${escapeHtml(capabilityVariantLabel(variant))}</span></button>`).join('')}`;
+    const currentProvider = String(settings?.[descriptor?.providerKey] || '').trim();
+    const options = `${!selected ? `<div class="muted-note">${escapeHtml(selection.invalidVariant ? (tr('smart.variantInputMismatch') || '当前运行模式不兼容，请重新选择') : (tr('smart.selectMode') || '请选择运行模式'))}</div>` : ''}${variants.map(variant => {
+        const profile = (variant.profiles || []).find(item => item.provider_id === currentProvider) || variant.representative || variant.profiles?.[0] || variant;
+        const value = profile.model_id || variant.model_id || variant.key;
+        return `<button type="button" class="direct-option ${variant.key === selected?.key ? 'active' : ''}" data-execution-variant-option="${escapeAttr(value)}" data-execution-variant-provider="${escapeAttr(profile.provider_id || '')}" data-execution-variant-family="${escapeAttr(selection.family?.family_id || '')}" data-execution-variant-key="${escapeAttr(variant.key)}" data-execution-setting="${escapeAttr(settingKey)}" data-preference-id="${escapeAttr(variant.key)}" title="${escapeAttr(profile.model_id || value)}">${renderPreferenceHandle(scope, variant.key)}<span>${escapeHtml(capabilityVariantLabel(variant))}</span></button>`;
+    }).join('')}`;
     return renderExecutionChoiceControl(label, 'list-filter', 'model-variant-control', options, !variants.length, Boolean(selection.invalidVariant), selected ? capabilityVariantLabel(selected) : '');
 }
 function renderExecutionModeFallbackControl(){
@@ -3605,6 +3820,9 @@ function setCapabilityParameter(profile, key, value){
         const current=settings[storeKey][key];
         settings[storeKey][key]=profile._externalEngine==='rh'?{...(current && typeof current==='object'?current:{}),value}:value;
         persistActiveSmartSettings();scheduleSave();return;
+    }
+    if(key === 'count' && value !== CAPABILITY_PARAMETER_UNSET && value !== undefined && value !== null && value !== ''){
+        settings.count = Number(value) || 1;
     }
     const modelId = String(profile?.model_id || '').trim();
     if(!modelId || !key) return;
@@ -3888,7 +4106,8 @@ function renderExecutionConfigPanel(content, profile, className='', settingsCont
 }
 function renderExecutionCountControl(profile){
     const spec = profile?.parameters?.count;
-    if(!spec || profile?.node_type === 'text_generation') return '';
+    // 严格能力档案的数量参数也由统一参数弹层承载，兼容旧模型才保留旧入口。
+    if(!spec || profile?.node_type === 'text_generation' || profile?.validation_mode === 'strict') return '';
     const options = capabilityParameterChoiceOptions('count', spec);
     const minimum = Number.isFinite(Number(spec?.min)) ? Number(spec.min) : 1;
     const maximum = Number.isFinite(Number(spec?.max)) ? Math.min(8, Number(spec.max)) : Math.min(8, Math.max(3, options.length || 3));
@@ -4209,7 +4428,7 @@ function renderCapabilityParameterEditor(key, spec, profile, values){
 }
 function renderCapabilitySettingsControl(entries, extraSettings=''){
     if(!entries.length && !extraSettings) return '';
-    const title = capabilityUiText('更多参数','More settings');
+    const title = capabilityUiText('参数','Parameters');
     const itemCount = entries.length + (extraSettings ? 1 : 0);
     return `<div class="smart-control capability-settings-control" data-capability-settings data-control-key="capability-settings-control">
         <button class="smart-pill capability-settings-pill" type="button" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}"><i data-lucide="settings-2"></i></button>
@@ -4232,12 +4451,12 @@ function renderCapabilityParameterBundleForSource(profile, source, excluded=[], 
     const shortcutOrder = {resolution:0, duration:1, aspect_ratio:2};
     const shortcutPriority = entry => entry.semantic === 'quality' ? 1 : (shortcutOrder[entry.semantic] ?? 99);
     const shortcuts = entries.filter(entry => entry.semantic).sort((left, right) => shortcutPriority(left) - shortcutPriority(right));
-    const orderedShortcuts = shortcuts;
-    const settingsEntries = entries.filter(entry => !entry.semantic && entry.key !== 'count');
+    const orderedEntries = [...shortcuts, ...entries.filter(entry => !entry.semantic)];
     return {
-        markup:orderedShortcuts.map(entry => renderCapabilityParameterControl(entry.key, entry.label, profile.parameters[entry.key], profile, entry.value, entry.unset, entry.body, entry.extraClass)).join(''),
-        settingsControl:renderCapabilitySettingsControl(settingsEntries, extraSettings),
-        layout:{key:capabilityLayoutKey(profile), mode:'grid', order:orderedShortcuts.map(entry => entry.key)}
+        // 五类生成节点的模型参数统一进入同一个弹层，避免快捷参数与高级参数出现两套入口。
+        markup:'',
+        settingsControl:renderCapabilitySettingsControl(orderedEntries, extraSettings),
+        layout:{key:capabilityLayoutKey(profile), mode:'grid', order:orderedEntries.map(entry => entry.key)}
     };
 }
 function renderCapabilityParameterBundle(profile, excluded=[]){
@@ -4959,6 +5178,7 @@ function restoreOpenControl(state){
     if(!match) return;
     match.classList.add('pinned');
     match.querySelector(':scope > .smart-pill')?.setAttribute('aria-expanded', 'true');
+    requestAnimationFrame(() => positionPinnedSmartPopover(match));
 }
 function dynamicParamsScrollSnapshot(){
     if(!dynamicParams) return null;
@@ -5092,14 +5312,16 @@ function renderTextGenerationParams(node=activeSettingsSubject()){
         settings.textFamilyId = '';
         settings.textModel = '';
     }
-    const selection = resolveCapabilityFamilySelection(settings.textProvider, 'text_generation', inputCounts, settings.textFamilyId, settings.textModel, '', request.inputRoles, parameterIntent);
-    settings.textFamilyId = selection.family?.family_id || (selection.invalidSelection ? selection.requestedId : '');
-    settings.textModel = selection.profile?.model_id || '';
+    const descriptor = executionSelectionDescriptor(node);
+    // 保留 provider 级运行校验入口：resolveCapabilityFamilySelection(settings.textProvider, 'text_generation', inputCounts, ...)。
+    const selection = resolveCapabilityFamilyPickerSelection('text_generation', inputCounts, settings.textFamilyId, settings.textModel, '', request.inputRoles, parameterIntent, settings.textProvider);
+    applyCapabilityPickerSelection(settings, descriptor, selection);
     const parameterBundle = renderCapabilityParameterBundle(selection.profile);
+    const platformEntries = selection.platforms?.length ? selection.platforms : capabilityPickerProviderEntries(models);
     dynamicParams.innerHTML = renderExecutionConfigPanel(`<div class="text-generation-params">
-        ${renderTextExecutionPlatformControl(models, inputCounts)}
         ${renderCapabilityFamilyControl(selection.families, 'textFamilyId', settings.textFamilyId, 'box')}
         ${renderCapabilityVariantControl(selection, 'textModel')}
+        ${renderExecutionPlatformControl('text', platformEntries)}
         ${renderTextProviderCompatibilityNote(models, inputCounts)}
         ${!models.length ? `<div class="smart-capability-note warning text-generation-empty"><i data-lucide="triangle-alert"></i><span>${escapeHtml(tr('smart.noVerifiedTextModel'))}</span></div>` : ''}
         ${capabilityFamilySelectionNote(selection)}
@@ -5116,15 +5338,12 @@ function renderApiParams(){
     const inputCounts = capabilityInputCounts('image');
     const inputRoles = capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true);
     const parameterIntent = {};
-    const providers = capabilityProvidersFor('image_generation', inputCounts, imageProviders(), inputRoles, parameterIntent);
-    if(!settings.provider_id) {
-        settings.provider_id = providers[0]?.id || '';
-        settings.imageFamilyId = '';
-        settings.model = '';
+    const descriptor = executionSelectionDescriptor(activeSettingsSubject());
+    const selection = resolveCapabilityFamilyPickerSelection('image_generation', inputCounts, settings.imageFamilyId, settings.model, '', inputRoles, parameterIntent, settings.provider_id);
+    applyCapabilityPickerSelection(settings, descriptor, selection);
+    if(!settings.provider_id){
+        if(selection.profile?.provider_id) settings.provider_id = selection.profile.provider_id;
     }
-    const selection = resolveCapabilityFamilySelection(settings.provider_id, 'image_generation', inputCounts, settings.imageFamilyId, settings.model, '', inputRoles, parameterIntent);
-    settings.imageFamilyId = selection.family?.family_id || (selection.invalidSelection ? selection.requestedId : '');
-    settings.model = selection.profile?.model_id || '';
     normalizeJimengImageResolutionSettings(settings);
     const profile = selection.profile;
     // 切换平台/模型时保留用户已选的分辨率（记忆），normalizeApiSizeSettings 只会修正非法的 auto。
@@ -5133,10 +5352,11 @@ function renderApiParams(){
     const compatibleControls = profile?.validation_mode === 'strict'
         ? ''
         : `${renderSizePickerControl('', true)}${renderQualityControl()}${renderCountVisualControl()}`;
+    const providers = selection.platforms?.length ? selection.platforms : capabilityProvidersFor('image_generation', inputCounts, imageProviders(), inputRoles, parameterIntent);
     dynamicParams.innerHTML = renderExecutionConfigPanel(`
-        ${renderExecutionPlatformControl('image', providers)}
         ${renderCapabilityFamilyControl(selection.families, 'imageFamilyId', settings.imageFamilyId, 'image')}
         ${renderCapabilityVariantControl(selection, 'model')}
+        ${renderExecutionPlatformControl('image', providers)}
         ${capabilityFamilySelectionNote(selection)}
         ${capabilityVariantSelectionNote(selection)}
         ${profileControls.markup || compatibleControls}
@@ -5159,21 +5379,19 @@ function renderApiVideoParams(){
     const parameterIntent = {};
     const currentProfile = capabilityProfileFor(settings.videoProvider, settings.videoModel, 'video_generation');
     parameterIntent.__execution_mode = videoExecutionModeFor(currentProfile, refs, settings, Boolean(manualSmartVideoLink(settings)));
-    const providers = capabilityProvidersFor('video_generation', inputCounts, videoApiProviders(), inputRoles, parameterIntent);
-    if(!settings.videoProvider) {
-        settings.videoProvider = providers[0]?.id || '';
-        settings.videoFamilyId = '';
-        settings.videoModel = '';
+    const descriptor = executionSelectionDescriptor(activeSettingsSubject());
+    const selection = resolveCapabilityFamilyPickerSelection('video_generation', inputCounts, settings.videoFamilyId, settings.videoModel, '', inputRoles, parameterIntent, settings.videoProvider);
+    applyCapabilityPickerSelection(settings, descriptor, selection);
+    if(!settings.videoProvider){
+        if(selection.profile?.provider_id) settings.videoProvider = selection.profile.provider_id;
     }
-    const selection = resolveCapabilityFamilySelection(settings.videoProvider, 'video_generation', inputCounts, settings.videoFamilyId, settings.videoModel, '', inputRoles, parameterIntent);
-    settings.videoFamilyId = selection.family?.family_id || (selection.invalidSelection ? selection.requestedId : '');
-    settings.videoModel = selection.profile?.model_id || '';
     const profile = selection.profile;
     const profileControls = renderCapabilityParameters(profile, 'video');
+    const providers = selection.platforms?.length ? selection.platforms : capabilityProvidersFor('video_generation', inputCounts, videoApiProviders(), inputRoles, parameterIntent);
     dynamicParams.innerHTML = renderExecutionConfigPanel(`
-        ${renderExecutionPlatformControl('video', providers)}
         ${renderCapabilityFamilyControl(selection.families, 'videoFamilyId', settings.videoFamilyId, 'film')}
         ${renderCapabilityVariantControl(selection, 'videoModel')}
+        ${renderExecutionPlatformControl('video', providers)}
         ${capabilityFamilySelectionNote(selection)}
         ${capabilityVariantSelectionNote(selection)}
         ${renderVideoInputModeControl(profile, refs)}
@@ -5185,26 +5403,22 @@ function renderApiAudioParams(){
     const inputCounts = capabilityInputCounts('audio');
     const inputRoles = capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true);
     const parameterIntent = {};
-    const providers = capabilityProvidersFor('audio_generation', inputCounts, audioApiProviders(), inputRoles, parameterIntent);
-    if(!settings.audioProvider) {
-        settings.audioProvider = providers[0]?.id || '';
-        settings.audioFamilyId = '';
-        settings.audioModel = '';
+    const descriptor = executionSelectionDescriptor(activeSettingsSubject());
+    const selection = resolveCapabilityFamilyPickerSelection('audio_generation', inputCounts, settings.audioFamilyId, settings.audioModel, '', inputRoles, parameterIntent, settings.audioProvider);
+    applyCapabilityPickerSelection(settings, descriptor, selection);
+    if(!settings.audioProvider){
+        if(selection.profile?.provider_id) settings.audioProvider = selection.profile.provider_id;
     }
-    const selection = resolveCapabilityFamilySelection(settings.audioProvider, 'audio_generation', inputCounts, settings.audioFamilyId, settings.audioModel, '', inputRoles, parameterIntent);
-    settings.audioFamilyId = selection.family?.family_id || (selection.invalidSelection ? selection.requestedId : '');
-    settings.audioModel = selection.profile?.model_id || '';
     const profile = selection.profile;
-    const hasReferenceAudio = inputCounts.audio > 0;
-    if(hasReferenceAudio) settings.audioSpeaker = '';
+    if(inputCounts.audio > 0) settings.audioSpeaker = '';
     const profileControls = renderCapabilityParameters(profile, 'audio');
+    const providers = selection.platforms?.length ? selection.platforms : capabilityProvidersFor('audio_generation', inputCounts, audioApiProviders(), inputRoles, parameterIntent);
     dynamicParams.innerHTML = renderExecutionConfigPanel(`
-        ${renderExecutionPlatformControl('audio', providers)}
         ${renderCapabilityFamilyControl(selection.families, 'audioFamilyId', settings.audioFamilyId, 'audio-lines')}
         ${renderCapabilityVariantControl(selection, 'audioModel')}
+        ${renderExecutionPlatformControl('audio', providers)}
         ${capabilityFamilySelectionNote(selection)}
         ${capabilityVariantSelectionNote(selection)}
-        ${profile?.parameters?.speaker ? renderAudioSpeakerControl(hasReferenceAudio) : ''}
         ${profileControls.markup}
         ${capabilityStatusNote(profile)}
     `, profile, 'audio-execution-config', profileControls.settingsControl);
@@ -5213,21 +5427,16 @@ function renderApiMusicParams(){
     const inputCounts = capabilityInputCounts('music');
     const inputRoles = capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true);
     const parameterIntent = {};
-    const providers = capabilityProvidersFor('music_generation', inputCounts, audioApiProviders(), inputRoles, parameterIntent);
-    if(!settings.musicProvider) {
-        settings.musicProvider = providers[0]?.id || '';
-        settings.musicFamilyId = '';
-        settings.musicModel = '';
-    }
-    const selection = resolveCapabilityFamilySelection(settings.musicProvider, 'music_generation', inputCounts, settings.musicFamilyId, settings.musicModel, '', inputRoles, parameterIntent);
-    settings.musicFamilyId = selection.family?.family_id || (selection.invalidSelection ? selection.requestedId : '');
-    settings.musicModel = selection.profile?.model_id || '';
+    const descriptor = executionSelectionDescriptor(activeSettingsSubject());
+    const selection = resolveCapabilityFamilyPickerSelection('music_generation', inputCounts, settings.musicFamilyId, settings.musicModel, '', inputRoles, parameterIntent, settings.musicProvider);
+    applyCapabilityPickerSelection(settings, descriptor, selection);
     const profile = selection.profile;
     const profileControls = renderCapabilityParameters(profile, 'music');
+    const providers = selection.platforms?.length ? selection.platforms : capabilityProvidersFor('music_generation', inputCounts, audioApiProviders(), inputRoles, parameterIntent);
     dynamicParams.innerHTML = renderExecutionConfigPanel(`
-        ${renderExecutionPlatformControl('music', providers)}
         ${renderCapabilityFamilyControl(selection.families, 'musicFamilyId', settings.musicFamilyId, 'music-2')}
         ${renderCapabilityVariantControl(selection, 'musicModel')}
+        ${renderExecutionPlatformControl('music', providers)}
         ${capabilityFamilySelectionNote(selection)}
         ${capabilityVariantSelectionNote(selection)}
         ${profileControls.markup}
@@ -7183,6 +7392,10 @@ function bindDynamicParams(){
     bindCapabilityOptionSort();
     bindPreferenceSortDrag();
     dynamicParams.querySelector('.capability-settings-list')?.addEventListener('scroll', hideCapabilityParameterTooltip, {passive:true});
+    dynamicParams.querySelectorAll('.smart-popover').forEach(popover => {
+        // 参数弹层内部滚动只滚动弹层，不能把事件传给画布缩放层。
+        popover.addEventListener('wheel', event => event.stopPropagation(), {passive:true});
+    });
     dynamicParams.querySelectorAll('[data-execution-platform-option]').forEach(button => {
         button.onclick = event => {
             if(smartPreferenceDragMoved) return;
@@ -7198,14 +7411,30 @@ function bindDynamicParams(){
             event.preventDefault();
             event.stopPropagation();
             const key = button.dataset.executionSetting;
-            settings[key] = button.dataset.executionFamilyOption || '';
-            if(key === 'imageFamilyId') settings.model = '';
-            if(key === 'videoFamilyId') settings.videoModel = '';
-            if(key === 'audioFamilyId') settings.audioModel = '';
-            if(key === 'musicFamilyId') settings.musicModel = '';
-            if(key === 'textFamilyId') settings.textModel = '';
+            const node = activeSettingsSubject();
+            const descriptor = executionSelectionDescriptor(node);
+            const familyId = button.dataset.executionFamilyOption || '';
+            if(descriptor){
+                const state = executionSelectionInputState(node, descriptor);
+                const selection = resolveCapabilityFamilyPickerSelection(
+                    descriptor.nodeType,
+                    state.inputCounts,
+                    familyId,
+                    '',
+                    '',
+                    state.inputRoles,
+                    {},
+                    settings[descriptor.providerKey] || ''
+                );
+                settings[descriptor.familyKey] = familyId;
+                settings[descriptor.modelKey] = selection.profile?.model_id || '';
+                if(selection.profile?.provider_id) settings[descriptor.providerKey] = selection.profile.provider_id;
+                // 保留旧设置恢复校验；新选择已先按跨平台 family/variant 解算。
+                ensureExecutionSelectionDefaults(settings, node);
+            } else {
+                settings[key] = familyId;
+            }
             closeAllSmartPopovers();
-            ensureExecutionSelectionDefaults(settings, activeSettingsSubject());
             persistActiveSmartSettings();
             renderDynamicParams();
             scheduleSave();
@@ -7217,7 +7446,16 @@ function bindDynamicParams(){
             if(smartPreferenceDragMoved) return;
             event.preventDefault();
             event.stopPropagation();
-            settings[button.dataset.executionSetting] = button.dataset.executionVariantOption || '';
+            const node = activeSettingsSubject();
+            const descriptor = executionSelectionDescriptor(node);
+            const value = button.dataset.executionVariantOption || '';
+            if(descriptor){
+                settings[descriptor.familyKey] = button.dataset.executionVariantFamily || settings[descriptor.familyKey] || '';
+                settings[descriptor.modelKey] = value;
+                if(button.dataset.executionVariantProvider) settings[descriptor.providerKey] = button.dataset.executionVariantProvider;
+            } else {
+                settings[button.dataset.executionSetting] = value;
+            }
             closeAllSmartPopovers();
             persistActiveSmartSettings();
             renderDynamicParams();
@@ -7283,9 +7521,11 @@ function bindDynamicParams(){
         btn.onclick = event => {
             event.preventDefault();
             event.stopPropagation();
-            closeAllSmartPopovers();
+            const inCapabilitySettings = Boolean(btn.closest('.capability-settings-popover'));
+            if(!inCapabilitySettings) closeAllSmartPopovers();
             setDynamicSetting(btn.dataset.smartParam, btn.dataset.smartValue);
             if(btn.dataset.smartParam === 'videoDuration') renderDynamicParams();
+            else if(inCapabilitySettings && btn.dataset.smartParam !== 'jimengUpscaleRes') renderDynamicParams();
         };
     });
     dynamicParams.querySelectorAll('[data-video-input-mode]').forEach(btn => {
@@ -7364,7 +7604,7 @@ function bindDynamicParams(){
             const raw = btn.dataset.capabilityValue;
             const value = type === 'boolean' ? raw === 'true' : type === 'integer' ? Math.round(Number(raw)) : type === 'number' ? Number(raw) : raw;
             setCapabilityParameter(currentCapabilityProfile(btn), btn.dataset.capabilityParam, value);
-            closeAllSmartPopovers();
+            // 选择单项后保留统一参数弹层，便于连续调整多个参数。
             renderDynamicParams();
         };
     });
@@ -7374,7 +7614,6 @@ function bindDynamicParams(){
             event.stopPropagation();
             const profile = currentCapabilityProfile(btn);
             setCapabilityParameter(profile, btn.dataset.capabilityParam, CAPABILITY_PARAMETER_UNSET);
-            closeAllSmartPopovers();
             renderDynamicParams();
         };
     });
@@ -8554,7 +8793,138 @@ const smartClientId = `canvas_smart_${Math.random().toString(36).slice(2, 10)}${
 let canvasSyncInFlight = false;
 let canvasSyncTimer = null;
 let canvasMetaPollTimer = null;
+let canvasSyncBase = null;
+let canvasSyncRetryBase = null;
+let canvasSyncConflictState = null;
+let canvasSyncConflictDialogPromise = null;
+let canvasSyncSaveQueued = false;
+let canvasSyncSaveBlocked = false;
+let canvasSyncLastErrorAt = 0;
 let connectionLayerRaf = 0;
+function canvasSyncText(zh, en){
+    return window.StudioI18n?.lang?.() === 'en' ? en : zh;
+}
+function canvasSyncNormalizeConnections(connections){
+    return (Array.isArray(connections) ? connections : []).filter(Boolean).map(connection => ({
+        ...connection,
+        id:connection.id || CANVAS_SYNC.connectionId(connection)
+    }));
+}
+function canvasSyncIncomingSnapshot(source){
+    const snapshot = CANVAS_SYNC.clone(source || {});
+    snapshot.connections = canvasSyncNormalizeConnections(snapshot.connections);
+    return CANVAS_SYNC.assignDisplayNumbers(snapshot);
+}
+function canvasSyncComparableSnapshot(source){
+    const snapshot = CANVAS_SYNC.clone(source || {});
+    delete snapshot.viewport;
+    delete snapshot.revision;
+    delete snapshot.updated_at;
+    return snapshot;
+}
+function canvasSyncHasLocalChanges(localSnapshot, baseSnapshot){
+    if(!localSnapshot || !baseSnapshot) return Boolean(localSnapshot);
+    return !CANVAS_SYNC.equal(canvasSyncComparableSnapshot(localSnapshot), canvasSyncComparableSnapshot(baseSnapshot));
+}
+function canvasSyncCurrentSnapshot(){
+    if(!canvas) return null;
+    savePromptDraftForCurrent();
+    canvas.nodes = nodes;
+    canvas.viewport = {...viewport};
+    const snapshot = canvasSyncIncomingSnapshot(canvasForStorage());
+    snapshot.viewport = {...viewport};
+    return snapshot;
+}
+function canvasSyncRememberBase(snapshot){
+    canvasSyncBase = canvasSyncIncomingSnapshot(snapshot);
+    canvasSyncRetryBase = null;
+}
+function canvasSyncDraftKey(){ return `smart_canvas_sync_draft:${canvasId}`; }
+function canvasSyncStoreDraft(localSnapshot, conflicts, remoteSnapshot){
+    try {
+        localStorage.setItem(canvasSyncDraftKey(), JSON.stringify({
+            savedAt:Date.now(),
+            canvas:CANVAS_SYNC.clone(localSnapshot),
+            remote:CANVAS_SYNC.clone(remoteSnapshot),
+            conflicts:CANVAS_SYNC.clone(conflicts || [])
+        }));
+    } catch(_) {}
+}
+function canvasSyncClearDraft(){
+    try { localStorage.removeItem(canvasSyncDraftKey()); } catch(_) {}
+}
+function canvasSyncReportError(message){
+    const now = Date.now();
+    if(now - canvasSyncLastErrorAt < 4000) return;
+    canvasSyncLastErrorAt = now;
+    toast(canvasSyncText(
+        `画布保存失败，已保留本地修改：${String(message || '网络错误').slice(0, 180)}`,
+        `Canvas save failed; local changes were kept: ${String(message || 'Network error').slice(0, 180)}`
+    ), {tone:'error', duration:5200});
+}
+function canvasSyncApplySnapshot(snapshot){
+    if(!snapshot || !canvas) return false;
+    const localViewport = {...viewport};
+    const normalized = canvasSyncIncomingSnapshot(snapshot);
+    canvas = {...canvas, ...normalized, viewport:localViewport};
+    nodes = (Array.isArray(normalized.nodes) ? normalized.nodes : []).map(normalizeLegacySmartNode).filter(Boolean);
+    canvas.nodes = nodes;
+    canvas.connections = canvasSyncNormalizeConnections(normalized.connections);
+    if(normalized.settings && typeof normalized.settings === 'object'){
+        settings = {...settings, ...CANVAS_SYNC.clone(normalized.settings)};
+        canvasDefaultSmartSettings = CANVAS_SYNC.clone(settings);
+        sanitizeSmartApiSelection(settings);
+    }
+    const titleEl = document.getElementById('smartTitle');
+    if(titleEl && normalized.title) titleEl.textContent = normalized.title;
+    const cleanedState = clearCompletedNodeBusyStates();
+    const recoveredLoopOutputs = recoverStuckLoopOutputsFromLogs();
+    render();
+    hydrateTextResultMediaContent(nodes).then(changed => {
+        if(!changed) return;
+        render();
+        scheduleSave();
+    });
+    if(typeof scheduleConnectionLayerRefresh === 'function') scheduleConnectionLayerRefresh();
+    if(cleanedState || recoveredLoopOutputs) scheduleSave();
+    resumeSmartPendingTasks();
+    resumeJimengPendingNodes();
+    return true;
+}
+function canvasNodeDisplayNumber(value){
+    const number = Number(value);
+    return Number.isInteger(number) && number > 0 ? number : 0;
+}
+function allocateCanvasNodeDisplayNumber(){
+    if(canvas){
+        const holder = {nodes, nextNodeNumber:canvas.nextNodeNumber};
+        const number = CANVAS_SYNC.allocateDisplayNumber(holder);
+        canvas.nextNodeNumber = holder.nextNodeNumber;
+        return number;
+    }
+    const used = new Set(nodes.map(node => canvasNodeDisplayNumber(node?.displayNumber)).filter(Boolean));
+    let number = used.size ? Math.max(...used) + 1 : 1;
+    while(used.has(number)) number += 1;
+    return number;
+}
+function appendSmartNodes(...incoming){
+    const additions = incoming.flat ? incoming.flat().filter(Boolean) : incoming.filter(Boolean);
+    const used = new Set(nodes.map(node => canvasNodeDisplayNumber(node?.displayNumber)).filter(Boolean));
+    let next = Math.max(1, Number(canvas?.nextNodeNumber) || 1, ...used, 0);
+    additions.forEach(node => {
+        let number = canvasNodeDisplayNumber(node.displayNumber);
+        if(!number || used.has(number)){
+            while(used.has(next)) next += 1;
+            number = next;
+        }
+        node.displayNumber = number;
+        used.add(number);
+        next = Math.max(next, number + 1);
+    });
+    if(canvas) canvas.nextNodeNumber = Math.max(Number(canvas.nextNodeNumber) || 1, next);
+    nodes.push(...additions);
+    return additions;
+}
 function mergeSmartImageLists(localImgs, remoteImgs){
     const out = [];
     const seen = new Set();
@@ -8571,6 +8941,27 @@ function mergeSmartImageLists(localImgs, remoteImgs){
         out.push(img);
     });
     return out;
+}
+// 旧运行路径的兼容适配：真正的三方合并统一由 CanvasSync.merge(base, local, remote) 负责。
+function mergeSmartGenerationVersions(localVersions=[], remoteVersions=[]){
+    const result = CANVAS_SYNC.merge({resultVersions:[]}, {resultVersions:localVersions}, {resultVersions:remoteVersions});
+    return result.canvas.resultVersions || [];
+}
+function mergeSmartNode(local, remote){
+    const resultVersions = mergeSmartGenerationVersions(local.resultVersions, remote.resultVersions);
+    const preferredVersionSource = (Array.isArray(local?.resultVersions) ? local.resultVersions.length : 0)
+        >= (Array.isArray(remote?.resultVersions) ? remote.resultVersions.length : 0) ? local : remote;
+    const result = CANVAS_SYNC.merge({nodes:[local]}, {nodes:[local]}, {nodes:[remote]}).canvas.nodes[0] || {...local};
+    if(resultVersions.length && !result.resultVersions) result.resultVersions = resultVersions;
+    if(preferredVersionSource && result.activeResultVersion === undefined) result.activeResultVersion = Number(preferredVersionSource.activeResultVersion || 0);
+    return result;
+}
+function mergeSmartNodeLists(localNodes=[], remoteNodes=[]){
+    return CANVAS_SYNC.merge({nodes:[]}, {nodes:localNodes}, {nodes:remoteNodes}).canvas.nodes || [];
+}
+function mergeSmartConnections(localConns=[], remoteConns=[], nodeIds=new Set()){
+    const merged = CANVAS_SYNC.merge({connections:[]}, {connections:localConns}, {connections:remoteConns}).canvas.connections || [];
+    return merged.filter(connection => !nodeIds.size || (nodeIds.has(connection.from) && nodeIds.has(connection.to)));
 }
 function smartNodeInFlight(node){
     if(smartNodeHasCompletedResult(node)) return false;
@@ -8721,118 +9112,63 @@ function smartGenerationVersionKey(version){
     const urls = (version.images || []).map(item => String(item?.url || '').trim()).filter(Boolean);
     return urls.length ? `media:${urls.join('|')}` : '';
 }
-function mergeSmartGenerationVersions(localVersions=[], remoteVersions=[]){
-    const merged = [];
-    const byKey = new Map();
-    [...(localVersions || []), ...(remoteVersions || [])].forEach(version => {
-        if(!version || !Array.isArray(version.images) || !version.images.length) return;
-        const key = smartGenerationVersionKey(version) || `index:${merged.length}`;
-        const current = byKey.get(key);
-        if(!current){
-            const copy = cloneSmartSettings(version);
-            byKey.set(key, copy);
-            merged.push(copy);
-            return;
+async function reviewCanvasSyncConflicts(state){
+    if(!state?.conflicts?.length || canvasSyncConflictDialogPromise) return;
+    canvasSyncConflictDialogPromise = (async()=>{
+        const details = state.conflicts.slice(0, 8).map(item => `• ${item.path}`).join('\n');
+        const more = state.conflicts.length > 8 ? `\n… ${state.conflicts.length - 8} ${canvasSyncText('处冲突未展开','more conflicts')}` : '';
+        if(window.StudioDialog?.alert){
+            await window.StudioDialog.alert(
+                canvasSyncText(`同一画布有并行修改，已保留本地草稿。冲突字段：\n${details}${more}`,
+                    `This canvas has concurrent edits. The local draft was kept. Conflicting fields:\n${details}${more}`),
+                {title:canvasSyncText('需要审阅画布冲突','Review canvas conflicts'), type:'warning'}
+            );
         }
-        current.images = mergeSmartImageLists(current.images, version.images);
-        Object.assign(current, cloneSmartSettings(version), {images:current.images});
-    });
-    return merged;
-}
-function mergeSmartNode(local, remote){
-    if(local.creationId && remote.creationId) return CanvasCreation.merge(local,remote);
-    const images = mergeSmartImageLists(local.images, remote.images);
-    const resultVersions = mergeSmartGenerationVersions(local.resultVersions, remote.resultVersions);
-    const preferredVersionSource = (Array.isArray(local?.resultVersions) ? local.resultVersions.length : 0)
-        >= (Array.isArray(remote?.resultVersions) ? remote.resultVersions.length : 0) ? local : remote;
-    const finalize = node => {
-        const merged = {...node};
-        if(resultVersions.length){
-            merged.resultVersions = resultVersions;
-            const preferred = Array.isArray(preferredVersionSource?.resultVersions)
-                ? preferredVersionSource.resultVersions[Math.max(0, Number(preferredVersionSource.activeResultVersion) || 0)]
-                : null;
-            const preferredKey = smartGenerationVersionKey(preferred);
-            const preferredIndex = preferredKey ? resultVersions.findIndex(version => smartGenerationVersionKey(version) === preferredKey) : -1;
-            merged.activeResultVersion = preferredIndex >= 0 ? preferredIndex : Math.max(0, resultVersions.length - 1);
+        const keepLocal = window.StudioDialog?.confirm
+            ? await window.StudioDialog.confirm(
+                canvasSyncText('确定保留本地草稿并尝试保存吗？选择“取消”将采用远端版本，但本地草稿仍保存在本机。',
+                    'Keep the local draft and try saving it? Choose “Cancel” to use the remote version; the local draft remains on this device.'),
+                {title:canvasSyncText('选择保留版本','Choose a version'), type:'warning'}
+            )
+            : true;
+        if(canvasSyncConflictState !== state) return;
+        canvasSyncRetryBase = state.remote;
+        canvasSyncSaveBlocked = true;
+        if(keepLocal){
+            canvasSyncApplySnapshot(state.merged.canvas);
+            canvasSyncConflictState = null;
+            canvasSyncSaveBlocked = false;
+            scheduleSave();
+        } else {
+            canvasSyncApplySnapshot(state.remote);
+            canvasSyncConflictState = null;
+            canvasSyncSaveQueued = false;
+            canvasSyncSaveBlocked = false;
         }
-        return merged;
-    };
-    const localDone = smartNodeHasCompletedResult(local);
-    const remoteDone = smartNodeHasCompletedResult(remote);
-    const localBusy = smartNodeInFlight(local);
-    const remoteBusy = smartNodeInFlight(remote);
-    if(localDone && remoteBusy && !remoteDone) return finalize(completeSmartNodeWithImages(local, images));
-    if(remoteDone && localBusy && !localDone) return finalize(completeSmartNodeWithImages(remote, images));
-    if(localDone && remoteDone){
-        const localFinished = Number(local.runFinishedAt || 0);
-        const remoteFinished = Number(remote.runFinishedAt || 0);
-        return finalize(completeSmartNodeWithImages(remoteFinished >= localFinished ? remote : local, images));
-    }
-    // 本地正在生成/排队的节点完全以本地为准，只把对方可能多出来的图并进来，绝不被对方旧状态冲掉
-    if(smartNodeInFlight(local)){
-        return finalize({...local, images});
-    }
-    // 否则以对方（最新保存方）的布局/标题/设置为基底，但图片取并集——双方生成结果都不丢
-    const merged = finalize({...remote, images});
-    return smartNodeHasDisplayResult(merged) && (merged.pending || merged.queued || smartPendingTasks(merged).length)
-        ? finalize(completeSmartNodeWithImages(merged, images))
-        : merged;
+    })().catch(error => {
+        canvasSyncReportError(error?.message || canvasSyncText('冲突审阅失败','Conflict review failed'));
+    }).finally(()=>{ canvasSyncConflictDialogPromise = null; });
+    await canvasSyncConflictDialogPromise;
 }
-function mergeSmartNodeLists(localNodes, remoteNodes){
-    const localById = new Map((localNodes || []).map(n => [n.id, n]));
-    const remoteById = new Map((remoteNodes || []).map(n => [n.id, n]));
-    const order = [];
-    const seen = new Set();
-    (localNodes || []).forEach(n => { if(!seen.has(n.id)){ seen.add(n.id); order.push(n.id); } });
-    (remoteNodes || []).forEach(n => { if(!seen.has(n.id)){ seen.add(n.id); order.push(n.id); } });
-    return order.map(id => {
-        const local = localById.get(id);
-        const remote = remoteById.get(id);
-        if(local && !remote) return local;     // 仅本地存在：保留（我新建的节点；对方删了也宁可复活也不丢结果）
-        if(remote && !local) return remote;     // 仅对方存在：加入对方新建的节点
-        return mergeSmartNode(local, remote);
-    }).filter(Boolean);
-}
-function mergeSmartConnections(localConns, remoteConns, nodeIds){
-    const out = [];
-    const seen = new Set();
-    [...(localConns || []), ...(remoteConns || [])].forEach(c => {
-        if(!c || !nodeIds.has(c.from) || !nodeIds.has(c.to)) return;
-        const key = `${c.from}->${c.to}:${c.kind || 'flow'}`;
-        if(seen.has(key)) return;
-        seen.add(key);
-        out.push(c);
-    });
-    return out;
-}
-function applyMergedServerCanvas(serverCanvas){
-    if(!serverCanvas || !canvas) return false;
-    const remoteNodes = (Array.isArray(serverCanvas.nodes) ? serverCanvas.nodes : []).map(normalizeLegacySmartNode).filter(Boolean);
-    const mergedNodes = mergeSmartNodeLists(nodes, remoteNodes);
-    const nodeIds = new Set(mergedNodes.map(n => n.id));
-    nodes = mergedNodes;
-    canvas.connections = mergeSmartConnections(canvas.connections, serverCanvas.connections, nodeIds);
-    const cleanedState = clearCompletedNodeBusyStates();
-    const recoveredLoopOutputs = recoverStuckLoopOutputsFromLogs();
-    canvas.updated_at = Number(serverCanvas.updated_at || canvas.updated_at || 0);
-    canvas.revision = Math.max(1, Number(serverCanvas.revision || canvas.revision || 1));
-    if(canvas.title !== serverCanvas.title && serverCanvas.title){
-        canvas.title = serverCanvas.title;
-        const titleEl = document.getElementById('smartTitle');
-        if(titleEl) titleEl.textContent = canvas.title;
+function applyMergedServerCanvas(serverCanvas, options={}){
+    if(!serverCanvas || !canvas) return null;
+    const remote = canvasSyncIncomingSnapshot(serverCanvas);
+    const local = options.localSnapshot || canvasSyncCurrentSnapshot() || remote;
+    const base = options.base || canvasSyncRetryBase || canvasSyncBase || local;
+    const merged = CANVAS_SYNC.merge(base, local, remote);
+    const hadLocalChanges = canvasSyncHasLocalChanges(local, base);
+    canvasSyncRetryBase = remote;
+    canvasSyncSaveBlocked = Boolean(merged.conflicts.length);
+    if(merged.conflicts.length){
+        canvasSyncConflictState = {base, local, remote, merged, conflicts:merged.conflicts};
+        canvasSyncStoreDraft(local, merged.conflicts, remote);
+    } else {
+        canvasSyncConflictState = null;
     }
-    render();
-    hydrateTextResultMediaContent(nodes).then(changed => {
-        if(!changed) return;
-        render();
-        scheduleSave();
-    });
-    if(typeof scheduleConnectionLayerRefresh === 'function') scheduleConnectionLayerRefresh();
-    if(cleanedState || recoveredLoopOutputs) scheduleSave();
-    resumeSmartPendingTasks();
-    resumeJimengPendingNodes();
-    return true;
+    canvasSyncApplySnapshot(merged.canvas);
+    if(merged.conflicts.length && options.prompt !== false) void reviewCanvasSyncConflicts(canvasSyncConflictState);
+    if(!merged.conflicts.length && options.scheduleSave && hadLocalChanges) scheduleSave();
+    return {...merged, base, local, remote, hadLocalChanges};
 }
 async function mergeReloadCanvasNow(){
     if(!canvasId) return;
@@ -8845,8 +9181,10 @@ async function mergeReloadCanvasNow(){
         const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`);
         if(!res.ok) return;
         const data = await res.json();
-        if(data && data.canvas) applyMergedServerCanvas(data.canvas);
-    } catch(e) {}
+        if(data && data.canvas) applyMergedServerCanvas(data.canvas, {prompt:true, scheduleSave:true});
+    } catch(e) {
+        canvasSyncReportError(e?.message || canvasSyncText('读取远端画布失败','Failed to read the remote canvas'));
+    }
 }
 function scheduleCanvasMergeReload(delay=200){
     clearTimeout(canvasSyncTimer);
@@ -9459,7 +9797,7 @@ function migrateSmartGroupImageMembers(){
                 scale:1,
                 created_at:group.created_at || Date.now()
             };
-            nodes.push(member);
+            appendSmartNodes(member);
             memberIds.push(member.id);
         });
         group.items = Array.from(new Set([...(group.items || []), ...memberIds]));
@@ -9576,10 +9914,11 @@ async function loadCanvas(){
         const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`);
         if(!res.ok) return;
         const data = await res.json();
-        canvas = data.canvas;
+        canvas = canvasSyncIncomingSnapshot(data.canvas);
+        canvasSyncRememberBase(canvas);
         rememberCanvasListProject(canvas.project || 'default');
         canvasUsesConnections = Object.prototype.hasOwnProperty.call(canvas || {}, 'connections');
-        document.title = canvas.title || tr('canvas.smartCanvas');
+        document.title = canvasDocumentTitle();
         document.getElementById('smartTitle').textContent = canvas.title || tr('canvas.smartCanvas');
     const legacyMigration = SMART_NODE_CONTRACT.migrateLegacyCanvas(canvas.nodes, canvas.connections);
     const migration = CanvasCreation.migrate(legacyMigration.nodes, legacyMigration.connections);
@@ -9590,6 +9929,9 @@ async function loadCanvas(){
         smartNodeMigrationPending = Number(canvas.node_schema_version || 0) < SMART_NODE_SCHEMA_VERSION;
         migrateSmartGroupImageMembers();
         canvas.connections = Array.isArray(canvas.connections) ? canvas.connections : [];
+        const numberedCanvas = CANVAS_SYNC.assignDisplayNumbers({...canvas, nodes});
+        nodes = numberedCanvas.nodes;
+        canvas.nextNodeNumber = numberedCanvas.nextNodeNumber;
         nodes.forEach(n => {
             if(isSmartDirectorNode(n)) n.timelinePlaying = false;
             const pendingTasks = smartPendingTasks(n);
@@ -9657,6 +9999,7 @@ function migrateLegacyMusicGeneratorNodes(){
     return changed;
 }
 function scheduleSave(){
+    if(canvasSyncSaveBlocked) return;
     CanvasCreation.reconcile(nodes, undefined, canvas?.connections || []);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveCanvas, 450);
@@ -9678,17 +10021,30 @@ function syncServerMediaUrls(serverNodes){
     });
     return changed;
 }
-async function saveCanvas(){
-    if(!canvasId || !canvas) return;
-    savePromptDraftForCurrent();
+function syncServerNodeNumbers(serverNodes){
+    if(!Array.isArray(serverNodes)) return false;
+    const remoteById = new Map(serverNodes.filter(node => node?.id).map(node => [node.id, node]));
+    let changed = false;
     nodes.forEach(node => {
-        node.images = (node.images || []).map(img => mediaItemForStorage(stripImageGenerationMeta(img)));
-        if(node.runSettings) node.runSettings = settingsForStorage(node.runSettings);
+        const remote = remoteById.get(node?.id);
+        const number = canvasNodeDisplayNumber(remote?.displayNumber);
+        if(!remote || !number || node.displayNumber === number) return;
+        node.displayNumber = number;
+        changed = true;
     });
-    canvas.nodes = nodes;
-    canvas.settings = settingsForStorage(canvasDefaultSmartSettings || initialSmartSettings);
-    canvas.viewport = {...viewport};
-    const storageCanvas = canvasForStorage();
+    return changed;
+}
+async function saveCanvas(options={}){
+    if(!canvasId || !canvas || canvasSyncSaveBlocked) return false;
+    if(canvasSyncInFlight){ canvasSyncSaveQueued = true; return false; }
+    savePromptDraftForCurrent();
+    const storageCanvas = canvasSyncCurrentSnapshot();
+    if(!storageCanvas) return false;
+    const base = canvasSyncRetryBase || canvasSyncBase || storageCanvas;
+    storageCanvas.revision = Number(base.revision || storageCanvas.revision || canvas.revision || 0);
+    storageCanvas.updated_at = Number(base.updated_at || storageCanvas.updated_at || canvas.updated_at || 0);
+    const retryCount = Math.max(0, Number(options.retryCount) || 0);
+    canvasSyncSaveQueued = false;
     canvasSyncInFlight = true;
     try {
         const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`, {
@@ -9698,25 +10054,32 @@ async function saveCanvas(){
                 title:storageCanvas.title || tr('smart.title'),
                 icon:storageCanvas.icon || 'sparkles',
                 nodes:storageCanvas.nodes || [],
-                connections:storageCanvas.connections || [],
+                connections:canvasSyncNormalizeConnections(storageCanvas.connections),
                 viewport:storageCanvas.viewport || {x:0,y:0,scale:1},
                 logs:storageCanvas.logs || [],
                 settings:storageCanvas.settings,
-                base_updated_at:storageCanvas.updated_at || canvas.updated_at || 0,
-                base_revision:storageCanvas.revision || canvas.revision || 0,
+                base_updated_at:storageCanvas.updated_at,
+                base_revision:storageCanvas.revision,
                 client_id:smartClientId,
                 migration_version:smartNodeMigrationPending ? SMART_NODE_SCHEMA_VERSION : 0
             })
         });
         if(res.ok){
-            const data = await res.json();
-            if(data.canvas && data.canvas.updated_at) canvas.updated_at = data.canvas.updated_at;
-            canvas.revision = Number(data.canvas?.revision || canvas.revision || 1);
-            if(syncServerMediaUrls(data.canvas?.nodes)){
+            const data = await res.json().catch(() => ({}));
+            const savedCanvas = canvasSyncIncomingSnapshot(data.canvas || storageCanvas);
+            if(syncServerMediaUrls(data.canvas?.nodes) || syncServerNodeNumbers(data.canvas?.nodes)){
                 canvas.nodes = nodes;
                 render();
                 scheduleConnectionLayerRefresh();
             }
+            if(data.canvas && data.canvas.updated_at) canvas.updated_at = data.canvas.updated_at;
+            canvas.revision = Number(data.canvas?.revision || canvas.revision || 1);
+            canvas.updated_at = Number(savedCanvas.updated_at || canvas.updated_at || 0);
+            canvas.nextNodeNumber = Number(savedCanvas.nextNodeNumber || canvas.nextNodeNumber || 1);
+            canvasSyncRememberBase(savedCanvas);
+            canvasSyncSaveBlocked = false;
+            canvasSyncConflictState = null;
+            canvasSyncClearDraft();
             if(smartNodeMigrationPending){
                 const migrationConfirmed = Number(data.canvas?.node_schema_version || 0) >= SMART_NODE_SCHEMA_VERSION;
                 if(migrationConfirmed){
@@ -9728,27 +10091,37 @@ async function saveCanvas(){
                     toast(tr('smart.toastMigrationRestart'));
                 }
             }
-        } else if(res.status === 409) {
-            // 冲突：别人先保存了。合并对方的状态（节点 id 合并、图片取并集，谁都不丢），
-            // 然后用对方最新的 updated_at 作为基底重存，把合并结果落盘——而不是直接覆盖对方。
-            const data = await res.json().catch(() => ({}));
+            return true;
+        }
+        const data = await res.json().catch(() => ({}));
+        if(res.status === 409){
             const serverCanvas = data.detail?.canvas;
             if(serverCanvas){
-                applyMergedServerCanvas(serverCanvas);
-                nodes.forEach(node => {
-                    node.images = (node.images || []).map(img => mediaItemForStorage(stripImageGenerationMeta(img)));
-                    if(node.runSettings) node.runSettings = settingsForStorage(node.runSettings);
-                });
-                canvas.nodes = nodes;
-            } else if(data.detail?.updated_at || data.detail?.revision) {
-                if(data.detail.updated_at) canvas.updated_at = data.detail.updated_at;
-                if(data.detail.revision) canvas.revision = Number(data.detail.revision);
+                canvas.revision = Math.max(1, Number(serverCanvas.revision || canvas.revision || 1));
+                const merged = applyMergedServerCanvas(serverCanvas, {base, localSnapshot:canvasSyncCurrentSnapshot(), prompt:true});
+                if(merged?.conflicts?.length) return false;
+                if(retryCount < 1){
+                    clearTimeout(saveTimer);
+                    saveTimer = setTimeout(() => saveCanvas({retryCount:retryCount + 1}), 300);
+                } else {
+                    canvasSyncReportError(canvasSyncText('远端版本再次变化，请稍后重试','The remote version changed again; please retry shortly'));
+                }
+            } else {
+                canvasSyncReportError(apiErrorMessage(data, canvasSyncText('画布冲突响应缺少远端内容','Canvas conflict response has no remote content')));
             }
-            clearTimeout(saveTimer);
-            saveTimer = setTimeout(saveCanvas, 300);
+            return false;
         }
-    } catch(e) {} finally {
+        canvasSyncReportError(apiErrorMessage(data, canvasSyncText(`服务器返回 ${res.status}` , `Server returned ${res.status}`)));
+        return false;
+    } catch(e) {
+        canvasSyncReportError(e?.message || canvasSyncText('网络错误','Network error'));
+        return false;
+    } finally {
         canvasSyncInFlight = false;
+        if(canvasSyncSaveQueued && !canvasSyncSaveBlocked){
+            canvasSyncSaveQueued = false;
+            scheduleSave();
+        }
     }
 }
 function imageMetaFromNode(node){
@@ -9816,7 +10189,7 @@ function createNode(x, y, images=[], options={}){
     }
     inheritNodeMetaFromImage(node);
     CanvasCreation.ensure(node);
-    nodes.push(node);
+    appendSmartNodes(node);
     if(options.select !== false) selectedId = node.id;
     render();
     scheduleSave();
@@ -9873,7 +10246,7 @@ function createExecutionNode(x, y, type, options={}){
     ensureExecutionSelectionDefaults(node.runSettings, node, {resetSelection:!hasInherited});
     node.runSettings=SMART_NODE_CONTRACT.normalizeExecutionSettings(node,node.runSettings);
     CanvasCreation.ensure(node);
-    nodes.push(node);
+    if(typeof appendSmartNodes === 'function') appendSmartNodes(node); else nodes.push(node);
     if(options.select !== false) selectedId = node.id;
     render();
     scheduleSave();
@@ -9908,7 +10281,7 @@ function createResultGroupNode(x, y, entries=[], options={}){
         created_at:Date.now()
     };
     CanvasCreation.ensure(node);
-    nodes.push(node);
+    appendSmartNodes(node);
     items.forEach(entry => addConnection(entry.nodeId, node.id, 'result'));
     if(options.select !== false) selectedId = node.id;
     render();
@@ -9938,7 +10311,7 @@ function createPromptNode(x, y, options={}){
         created_at:Date.now()
     };
     CanvasCreation.ensure(node);
-    nodes.push(node);
+    appendSmartNodes(node);
     if(options.select !== false) selectedId = node.id;
     render();
     scheduleSave();
@@ -9948,7 +10321,7 @@ function createLoopNode(x, y, options={}){
     if(!options.skipUndo) pushUndo();
     const node = {id:uid('loop'), type:'smart-loop', x, y, w:340, h:168, title:'Loop', count:1, mode:'serial', showPrompt:false, imageInput:false, loopStart:1, imageBatchSize:1, variablePrompt:'', created_at:Date.now()};
     CanvasCreation.ensure(node);
-    nodes.push(node);
+    appendSmartNodes(node);
     if(options.select !== false) selectedId = node.id;
     render();
     scheduleSave();
@@ -9993,7 +10366,7 @@ function createDirectorNode(kind, x, y, options={}){
     }));
     smartMinimaxEnsureSegment(node);
     CanvasCreation.ensure(node);
-    nodes.push(node);
+    appendSmartNodes(node);
     if(options.select !== false) selectedId = node.id;
     render();
     scheduleSave();
@@ -10006,7 +10379,7 @@ function createSmartGroupNode(x, y, options={}){
     if(!options.skipUndo) pushUndo();
     const node = {id:uid('group'), type:'smart-group', x, y, w:SMART_GROUP_DEFAULT_WIDTH, h:SMART_GROUP_DEFAULT_HEIGHT, title:'智能分组', items:[], created_at:Date.now()};
     CanvasCreation.ensure(node);
-    nodes.push(node);
+    appendSmartNodes(node);
     if(options.select !== false) selectedId = node.id;
     render();
     scheduleSave();
@@ -10036,6 +10409,7 @@ function cloneSmartNode(node, dx=0, dy=0){
     copy.x = (Number(node.x) || 0) + dx;
     copy.y = (Number(node.y) || 0) + dy;
     clearSmartNodeTransientRunState(copy, {clearRunHistory:true});
+    copy.displayNumber = allocateCanvasNodeDisplayNumber();
     delete copy.creationTasks;
     if(['script','segment'].includes(copy.production?.role)) copy.production={role:'none'};
     if(copy.type === 'smart-group') copy.title = copy.title || '智能分组';
@@ -10103,7 +10477,7 @@ function pasteNodes(){
         to:idMap.get(conn.to)
     })).filter(conn => conn.from && conn.to && conn.from !== conn.to);
     canvas.connections = [...(canvas.connections || []), ...newConnections];
-    nodes.push(...copies);
+    appendSmartNodes(copies);
     selectedId = copies.length === 1 ? copies[0].id : '';
     selectedIds = copies.length > 1 ? copies.map(n => n.id) : [];
     selectedImage = {nodeId:'', index:-1};
@@ -10186,7 +10560,7 @@ function duplicateForAltDrag(node, preserveConnections=true){
         });
         canvas.connections = nextConnections;
     }
-    nodes.push(...copies);
+    appendSmartNodes(copies);
     selectedId = copies.length === 1 ? copies[0].id : '';
     selectedIds = copies.length > 1 ? copies.map(copy => copy.id) : [];
     selectedImage = {nodeId:'', index:-1};
@@ -13956,12 +14330,16 @@ async function rerunSmartGeneratedMaterial(nodeId, draft=null){
 }
 function smartNodeHeaderHtml(node, fallback){
     const modern=isSmartExecutionNode(node)||isSmartMaterialNode(node);
-    if(!modern)return `<div class="node-head"><div class="node-title">${fallback}</div><div class="node-actions"><button class="mini-x node-delete" type="button" title="${escapeAttr(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div></div>`;
+    const displayNumber = canvasNodeDisplayNumber(node?.displayNumber);
+    const numberMarkup = displayNumber
+        ? `<span class="node-display-number" aria-label="${escapeAttr(canvasSyncText('节点编号','Node number'))}" title="${escapeAttr(canvasSyncText('节点编号','Node number'))}" style="display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;min-width:18px;height:18px;padding:0 4px;box-sizing:border-box;color:var(--muted);font-size:10px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;opacity:.82;pointer-events:none;">${displayNumber}</span>`
+        : '';
+    if(!modern)return `<div class="node-head">${numberMarkup}<div class="node-title">${fallback}</div><div class="node-actions"><button class="mini-x node-delete" type="button" title="${escapeAttr(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div></div>`;
     const item=node.images?.[smartNodeToolbarImageIndex(node)]||node.images?.[0];
     const hasMedia=!!(item&&(item.url||isTextMediaItem(item)));
     const action=(key,icon,label)=>`<button type="button" class="node-header-action" data-smart-node-action="${key}" data-node-id="${escapeAttr(node.id)}" title="${escapeAttr(label)}"><i data-lucide="${icon}"></i><span>${escapeHtml(label)}</span></button>`;
     const tools=hasMedia?smartNodeToolbarHtml(node).replace('class="smart-node-floating-menu"','class="node-inline-tools"'):'';
-    return `<div class="node-head">${canvasTitleEditor.markup(node,node.images?.[0]?.name||capabilityUiText('素材','Material'))}<div class="node-actions" role="toolbar" aria-label="${escapeAttr(capabilityUiText('素材操作','Material actions'))}">${hasMedia?action('preview','scan',capabilityUiText('预览 / 编辑','Preview / edit')):''}${tools}${item?.url?action('download','download',capabilityUiText('下载','Download')):''}<button class="node-header-action node-delete" type="button" title="${escapeAttr(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i><span>${escapeHtml(tr('smart.deleteNode'))}</span></button></div></div>`;
+    return `<div class="node-head">${numberMarkup}${canvasTitleEditor.markup(node,node.images?.[0]?.name||capabilityUiText('素材','Material'))}<div class="node-actions" role="toolbar" aria-label="${escapeAttr(capabilityUiText('素材操作','Material actions'))}">${hasMedia?action('preview','scan',capabilityUiText('预览 / 编辑','Preview / edit')):''}${tools}${item?.url?action('download','download',capabilityUiText('下载','Download')):''}<button class="node-header-action node-delete" type="button" title="${escapeAttr(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i><span>${escapeHtml(tr('smart.deleteNode'))}</span></button></div></div>`;
 }
 function smartNodeToolbarHtml(node){
     const isImageNode = isSmartImageNode(node) || isSmartExecutionNode(node);
@@ -19478,7 +19856,7 @@ async function persistSmartInlineTextEdit(nodeId, imageIndex, text){
         });
         if(created){
             created.node.scale = MEDIA_NODE_DEFAULT_SCALE;
-            nodes.push(created.node);
+            appendSmartNodes(created.node);
             addConnection(created.connection.from, created.connection.to, created.connection.kind);
             selectedId = created.node.id;
         }
@@ -21319,7 +21697,9 @@ function addConnection(fromId, toId, kind='flow', options={}){
     const sourceMediaKey = String(options?.sourceMediaKey || options?.source_media_key || '').trim();
     const targetFieldKey = String(options?.targetFieldKey || options?.target_field_key || '').trim();
     if(canvas.connections.some(c => c.from === fromId && c.to === toId && (c.kind || 'flow') === kind && connectionSourceResultId(c) === sourceResultId && connectionSourceMediaKey(c) === sourceMediaKey && connectionTargetFieldKey(c) === targetFieldKey)) return;
-    canvas.connections.push({from:fromId, to:toId, kind, ...(sourceResultId ? {sourceResultId} : {}), ...(sourceMediaKey ? {sourceMediaKey} : {}), ...(targetFieldKey ? {targetFieldKey} : {})});
+    const connection = {from:fromId, to:toId, kind, ...(sourceResultId ? {sourceResultId} : {}), ...(sourceMediaKey ? {sourceMediaKey} : {}), ...(targetFieldKey ? {targetFieldKey} : {})};
+    connection.id = CANVAS_SYNC.connectionId(connection);
+    canvas.connections.push(connection);
 }
 function connectInputNode(fromId, toId, options={}){
     const from = nodes.find(n => n.id === fromId);
@@ -22346,7 +22726,7 @@ function createPendingOutputFromSource(sourceNode, expectedCount, meta, options=
     };
     SMART_NODE_CONTRACT.markExecutionRunStarted(output, output.runStartedAt);
     output._selectAfterRunId = options.selectOutput ? output.id : sourceNode.id;
-    nodes.push(output);
+    appendSmartNodes(output);
     if(options.connectSource === false || isSmartExecutionNode(sourceNode)) addConnection(sourceNode.id, output.id, 'result');
     else connectInputNode(sourceNode.id, output.id);
     attachRunMeta(output, options.stripInputMeta ? stripRunInputMeta(meta) : meta);
@@ -22470,7 +22850,7 @@ function createParallelLoopOutputNode(templateNode, sourceNode, roundIndex, roun
     output.inputNodeIds = [];
     delete output.blockedInputRefs;
     delete output.manualInputRefs;
-    nodes.push(output);
+    appendSmartNodes(output);
     connectInputNode(sourceNode.id, output.id);
     return output;
 }
@@ -22553,7 +22933,7 @@ function createLoopOutputSlot(rootNode, roundIndex, roundOffset=0, options={}){
         }
     });
     output.y = y;
-    nodes.push(output);
+    appendSmartNodes(output);
     addConnection(rootNode.id, output.id, 'result');
         const runPath = smartCascadePathForCtx(options.ctx || options.runState);
         if(runPath?.states) runPath.states[`${rootNode.id}->${output.id}`] = 'wait';
@@ -22580,7 +22960,7 @@ function extractCurrentImagesToSource(node, meta=null){
     if(Number.isFinite(Number(node.w))) source.w = node.w;
     if(Number.isFinite(Number(node.h))) source.h = node.h;
     if(Number.isFinite(Number(node.scale))) source.scale = node.scale;
-    nodes.push(source);
+    appendSmartNodes(source);
     connectInputNode(source.id, node.id);
     node.images = [];
     delete node.w;
@@ -23050,7 +23430,7 @@ function ensureHistoryGroupForNode(node){
             scale:MEDIA_GROUP_DEFAULT_SCALE,
             created_at:Date.now()
         };
-        nodes.push(group);
+        appendSmartNodes(group);
     }
     group.type = SMART_NODE_TYPES.material;
     group.sourceKind = 'result';
@@ -24273,7 +24653,7 @@ async function runPromptLLMNode(nodeId){
                     name:stored.display_name || '文本结果.md', provider, model
                 });
                 created.node.scale = MEDIA_NODE_DEFAULT_SCALE;
-                nodes.push(created.node);
+                appendSmartNodes(created.node);
                 addConnection(created.connection.from, created.connection.to, created.connection.kind);
                 selectedId = created.node.id;
             }
@@ -25934,7 +26314,7 @@ function groupSelectedNodes(){
         images:[],
         created_at:Date.now()
     };
-    nodes.push(group);
+    appendSmartNodes(group);
     selected.forEach(node => addNodeToSmartGroup(group, node));
     fitSmartGroupBounds(group, smartGroupMembers(group));
     selectedIds = [];
@@ -25995,7 +26375,7 @@ function ungroupNode(groupId){
         return node;
     });
     nodes = nodes.filter(n => n.id !== groupId);
-    nodes.push(...created);
+    appendSmartNodes(created);
     if(canvas) canvas.connections = (canvas.connections || []).filter(c => c.from !== groupId && c.to !== groupId);
     nodes.forEach(node => {
         if(Array.isArray(node.inputNodeIds)){
@@ -26181,8 +26561,6 @@ function createNodeFromMenu(type){
     else if(type === 'angle-control') created = createAngleControlNode(p, createOptions);
     else if(type === 'image-compare') created = createImageCompareNode(p, createOptions);
     else if(type === 'loop') created = createLoopNode(p.x - 135, p.y - 95, createOptions);
-    else if(type === 'video-director') { const origin = directorMenuNodeOrigin(p); created = createDirectorNode('generic', origin.x, origin.y, createOptions); }
-    else if(type === 'minimax-director') { const origin = directorMenuNodeOrigin(p); created = createDirectorNode('minimax-h3', origin.x, origin.y, createOptions); }
     else if(type === 'image-generator') created = createExecutionNode(p.x - 158, p.y - 97, SMART_NODE_TYPES.imageGenerator, createOptions);
     else if(type === 'video-generator') created = createExecutionNode(p.x - 158, p.y - 97, SMART_NODE_TYPES.videoGenerator, createOptions);
     else if(type === 'audio-generator') created = createExecutionNode(p.x - 158, p.y - 97, SMART_NODE_TYPES.audioGenerator, createOptions);
@@ -27998,6 +28376,7 @@ window.addEventListener('message', event => {
     }
 });
 window.addEventListener('studio-lang-change', () => {
+    document.title = canvasDocumentTitle();
     renderDynamicParams();
     renderInputThumbsRow(selectedNode());
     renderAssetLibrary();

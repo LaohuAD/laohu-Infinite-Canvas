@@ -1,6 +1,8 @@
-"""Agent 命令信箱：仅接受结构化操作，浏览器复用画布现有执行链。"""
+"""Agent 命令信箱：接受结构化操作，并可由服务端执行器持久执行。"""
+import asyncio
 import hashlib
 import ipaddress
+import inspect
 import json
 import secrets
 import socket
@@ -116,6 +118,33 @@ class AgentMailbox:
             self.write(canvas_id, commands)
             return self.public(command)
 
+    def start_backend(self, canvas_id, command_id):
+        """仅将排队命令交给服务端；running 命令永不自动重投。"""
+        with self.lock:
+            commands = self.read(canvas_id)
+            command = next((x for x in commands if x['id'] == command_id), None)
+            if not command:
+                raise HTTPException(404, '命令不存在')
+            if command['status'] != 'queued':
+                return self.public(command)
+            command.update(status='running', executor='server', started_at=time.time())
+            self.write(canvas_id, commands)
+            return self.public(command)
+
+    def complete_backend(self, canvas_id, command_id, status, result=None, error=''):
+        if status not in {'succeeded', 'failed'}:
+            raise HTTPException(400, '结果状态必须为 succeeded 或 failed')
+        with self.lock:
+            commands = self.read(canvas_id)
+            command = next((x for x in commands if x['id'] == command_id), None)
+            if not command:
+                raise HTTPException(404, '命令不存在')
+            if command['status'] in {'succeeded', 'failed'}:
+                return self.public(command)
+            command.update(status=status, result=result or {}, error=error or '', completed_at=time.time())
+            self.write(canvas_id, commands)
+            return self.public(command)
+
 
 @lru_cache(maxsize=2)
 def local_addresses(time_bucket):
@@ -146,9 +175,45 @@ def is_local_client(host):
         return False
 
 
-def create_agent_router(root, load_canvas):
+def create_agent_router(root, load_canvas, executor=None):
     mailbox = AgentMailbox(Path(root) / 'data' / 'agent_commands')
     router = APIRouter(prefix='/api/agent', tags=['Canvas Agent'])
+    backend_executor = getattr(executor, 'execute', executor) if executor is not None else None
+    backend_tasks = {}
+
+    def schedule_backend(canvas_id, command):
+        if backend_executor is None or command.get('status') != 'queued':
+            return command
+        started = mailbox.start_backend(canvas_id, command['id'])
+        if started.get('status') != 'running':
+            return started
+
+        async def run_backend():
+            try:
+                result = backend_executor(canvas_id, command['action'], command.get('args') or {}, command['request_id'])
+                if inspect.isawaitable(result):
+                    result = await result
+                mailbox.complete_backend(canvas_id, command['id'], 'succeeded', result=result if isinstance(result, dict) else {'value': result})
+            except BaseException as exc:
+                detail = getattr(exc, 'detail', None) or str(exc) or exc.__class__.__name__
+                try:
+                    mailbox.complete_backend(canvas_id, command['id'], 'failed', error=str(detail))
+                except Exception:
+                    # 原命令已进入 running；不能因为写回异常而创建第二次执行。
+                    pass
+
+        task = asyncio.create_task(run_backend())
+        backend_tasks[command['id']] = task
+
+        def forget(done):
+            backend_tasks.pop(command['id'], None)
+            try:
+                done.exception()
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        task.add_done_callback(forget)
+        return started
 
     async def local_request(request: Request):
         host = request.client.host if request.client else ''
@@ -164,8 +229,8 @@ def create_agent_router(root, load_canvas):
 
     @router.get('/capabilities')
     async def capabilities():
-        return {'protocol_version': 1, 'name': '老胡无限画布', 'transport': 'http-json',
-                'requires_open_canvas': True, 'defaults': '/api/agent/canvases/{canvas_id}/defaults', 'guide': '/api/agent/guide', 'openapi': '/openapi.json',
+        return {'protocol_version': 1, 'name': '老胡创意工作台', 'transport': 'http-json',
+                'requires_open_canvas': backend_executor is None, 'defaults': '/api/agent/canvases/{canvas_id}/defaults', 'guide': '/api/agent/guide', 'openapi': '/openapi.json',
                 'node_index': '/api/agent/canvases/{canvas_id}/nodes',
                 'node_context': '/api/agent/canvases/{canvas_id}/nodes/{node_id}',
                 'actions': ACTIONS, 'models': '/api/model-capabilities', 'canvases': '/api/canvases',
@@ -188,7 +253,7 @@ def create_agent_router(root, load_canvas):
     async def node_index(canvas_id: str):
         canvas = await run_in_threadpool(load_canvas, canvas_id)
         return {'canvas_id': canvas_id, 'nodes': [
-            {key: node[key] for key in ('id', 'title', 'type', 'creationRevision') if key in node}
+            {key: node[key] for key in ('id', 'displayNumber', 'title', 'type', 'creationRevision') if key in node}
             for node in canvas.get('nodes') or []]}
 
     @router.get('/canvases/{canvas_id}/nodes/{node_id}')
@@ -200,7 +265,7 @@ def create_agent_router(root, load_canvas):
         # 完整返回当前内容；历史任务和其他段正文不会挤占 Agent 上下文。
         from canvas_core.creation_records import creation_record
         context = creation_record(node)
-        context.update({key: node[key] for key in ('id', 'creationRevision', 'images', 'items', 'activeResultVersion', 'production') if key in node})
+        context.update({key: node[key] for key in ('id', 'displayNumber', 'creationRevision', 'images', 'items', 'activeResultVersion', 'production') if key in node})
         return {'canvas_id': canvas_id, 'node': context,
                 'connections': [c for c in canvas.get('connections') or [] if node_id in (c.get('from'), c.get('to'))],
                 'source': 'saved_canvas'}
@@ -215,7 +280,8 @@ def create_agent_router(root, load_canvas):
     @router.post('/canvases/{canvas_id}/commands')
     async def submit(canvas_id: str, payload: CommandRequest):
         load_canvas(canvas_id)
-        return mailbox.submit(canvas_id, payload)
+        command = mailbox.submit(canvas_id, payload)
+        return schedule_backend(canvas_id, command)
 
     @router.get('/canvases/{canvas_id}/commands/{command_id}')
     async def command(canvas_id: str, command_id: str):
@@ -227,11 +293,15 @@ def create_agent_router(root, load_canvas):
 
     @router.post('/canvases/{canvas_id}/claim')
     async def claim(canvas_id: str, payload: ClaimRequest):
+        if backend_executor is not None:
+            raise HTTPException(410, '服务端已执行 Agent 命令，浏览器不得 claim')
         load_canvas(canvas_id)
         return {'command': mailbox.claim(canvas_id, payload.client_id)}
 
     @router.post('/canvases/{canvas_id}/commands/{command_id}/complete')
     async def complete(canvas_id: str, command_id: str, payload: CompleteRequest):
+        if backend_executor is not None:
+            raise HTTPException(410, '服务端已执行 Agent 命令，浏览器不得 complete')
         return mailbox.complete(canvas_id, command_id, payload)
 
     return router

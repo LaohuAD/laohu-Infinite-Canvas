@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" href="/static/images/logo.png" type="image/png">
-    <title data-i18n="smart.title">智能画布</title>
+    <title>画布</title>
     <script>
         (function(){
             try {
@@ -88,8 +88,6 @@
                     <button class="create-card" type="button" data-create-type="angle-control"><span class="create-card-icon"><i data-lucide="scan-eye"></i></span><span class="create-card-title" data-i18n="smart.createAngleControl">角度控制</span></button>
                     <button class="create-card" type="button" data-create-type="image-compare"><span class="create-card-icon"><i data-lucide="columns-2"></i></span><span class="create-card-title" data-i18n="smart.createImageCompare">图像对比</span></button>
                     <button class="create-card" type="button" data-create-type="loop"><span class="create-card-icon"><i data-lucide="repeat-2"></i></span><span class="create-card-title">循环</span></button>
-                    <button class="create-card" type="button" data-create-type="video-director"><span class="create-card-icon"><i data-lucide="clapperboard"></i></span><span class="create-card-title" data-i18n="smart.createVideoDirector">通用导演台</span></button>
-                    <button class="create-card" type="button" data-create-type="minimax-director"><span class="create-card-icon"><i data-lucide="panels-top-left"></i></span><span class="create-card-title" data-i18n="smart.createMinimaxDirector">MiniMax H3 导演台</span></button>
                 </div>
             </div>
         </div>
@@ -136,7 +134,7 @@
             </div>
         </div>
         <button id="canvasProductionToggle" class="smart-production-toggle" type="button" aria-expanded="false"><i data-lucide="table-properties"></i><span>创作进度</span></button>
-        <button id="canvasAgentToggle" disabled class="smart-agent-toggle" type="button"><i data-lucide="bot"></i><span>Agent 接入</span></button>
+        <button id="canvasAgentToggle" disabled class="smart-agent-toggle" type="button"><i data-lucide="bot"></i><span>节点默认设置</span></button>
         <button id="smartPriceToggle" class="smart-price-toggle" type="button" title="价格对比" aria-label="价格对比" data-i18n-title="smart.priceComparison"><i data-lucide="circle-dollar-sign"></i><span data-i18n="smart.priceComparison">价格对比</span></button>
         <button id="smartWorkflowToggle" class="smart-workflow-toggle" type="button" title="导入导出工作流" aria-label="导入导出工作流"><i data-lucide="package-open"></i><span>工作流</span></button>
         <button id="smartShortcutToggle" class="smart-shortcut-toggle" type="button" onclick="toggleSmartCanvasShortcuts()" title="快捷键" aria-label="快捷键" data-i18n-title="smart.shortcuts"><i data-lucide="keyboard"></i><span data-i18n="smart.shortcuts">快捷键</span></button>
@@ -467,7 +465,7 @@
         <div id="toast" class="toast"></div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
-    <dialog id="canvasAgentDialog" class="canvas-agent-dialog"><div class="canvas-agent-head"><h2 id="canvasAgentHeading"></h2><button id="canvasAgentClose" type="button" aria-label="关闭">×</button></div><p id="canvasAgentSummary"></p><section id="canvasAgentDefaults"></section><textarea id="canvasAgentInstructions" readonly aria-label="Agent connection instructions"></textarea><p id="canvasAgentFeedback" role="status" aria-live="polite"></p><div class="canvas-agent-actions"><a id="canvasAgentDocs" href="/api/agent/guide" target="_blank" rel="noopener"></a><button id="canvasAgentCopy" type="button"></button></div></dialog>
+    <dialog id="canvasAgentDialog" class="canvas-agent-dialog"><div class="canvas-agent-head"><h2 id="canvasAgentHeading"></h2><button id="canvasAgentClose" type="button" aria-label="关闭">×</button></div><section id="canvasAgentDefaults"></section><p id="canvasAgentFeedback" role="status" aria-live="polite"></p></dialog>
     <script src="/static/js/media-ui.js"></script>
     <script src="/static/js/material-promote.js?v=2026.08.17.1786546376"></script>
     <script src="/static/js/canvas-node-view.js"></script>
@@ -477,6 +475,7 @@
     <script src="/static/js/smart-node-contract.js?v=2026.08.17.1787802614"></script>
     <script src="/static/js/smart-director-core.js?v=2026.08.29.1"></script>
     <script src="/static/js/smart-model-capabilities.js?v=2026.08.17.1787829684"></script>
+<script src="/static/js/canvas-sync.js"></script>
 <script src="/static/js/smart-canvas.js?v=2026.08.17.1787814085"></script>
 <script src="/static/js/canvas-agent.js"></script>
 </body>

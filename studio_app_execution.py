@@ -1,0 +1,583 @@
+"""AI 应用与 ComfyUI 的画布后台执行适配。
+
+本模块只编排画布任务和已有主程序回调，不直接导入 ``main``，也不创建新的
+RunningHub/ComfyUI HTTP 客户端。主控把现有的预检、提交、查询、上传和结果
+保存函数注入进来即可，因此浏览器页面关闭后任务仍由服务端继续运行。
+"""
+from __future__ import annotations
+
+import asyncio
+import copy
+import hashlib
+import inspect
+import mimetypes
+import time
+import uuid
+from typing import Any, Callable
+
+from studio_execution import recipe, request_for, stable
+
+
+APP_NODE_TYPES = {'smart-ai-app', 'smart-comfy-workflow'}
+RUNNINGHUB_KINDS = {'ai_application', 'runninghub_workflow'}
+async def _invoke(callback: Callable[..., Any] | None, *args: Any) -> Any:
+    """调用同步/异步回调，并兼容主控只接收所需前缀参数的函数。"""
+    if callback is None:
+        raise ValueError('缺少执行回调')
+    call_args = args
+    try:
+        signature = inspect.signature(callback)
+        parameters = list(signature.parameters.values())
+        if not any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters):
+            positional = [parameter for parameter in parameters if parameter.kind in (
+                inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD
+            )]
+            call_args = args[:len(positional)]
+    except (TypeError, ValueError):
+        pass
+    result = callback(*call_args)
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+async def _invoke_threaded(callback: Callable[..., Any] | None, *args: Any) -> Any:
+    """在线程中运行已有同步平台函数；不让 ComfyUI 渲染阻塞事件循环。"""
+    if callback is None:
+        raise ValueError('缺少执行回调')
+    if inspect.iscoroutinefunction(callback):
+        return await _invoke(callback, *args)
+    call_args = args
+    try:
+        signature = inspect.signature(callback)
+        parameters = list(signature.parameters.values())
+        if not any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters):
+            positional = [parameter for parameter in parameters if parameter.kind in (
+                inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD
+            )]
+            call_args = args[:len(positional)]
+    except (TypeError, ValueError):
+        pass
+    result = await asyncio.to_thread(callback, *call_args)
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+def _schema_fields(value: Any, *, comfy: bool = False) -> list[dict[str, Any]]:
+    """从已有工作流/应用响应中取字段 Schema，不猜测平台字段。"""
+    if isinstance(value, list):
+        return [copy.deepcopy(item) for item in value if isinstance(item, dict)]
+    if not isinstance(value, dict):
+        return []
+    candidates = []
+    if comfy:
+        candidates.extend([
+            value.get('config', {}).get('fields') if isinstance(value.get('config'), dict) else None,
+            value.get('fields'), value.get('workflowFields'),
+        ])
+    else:
+        candidates.extend([
+            value.get('fields'), value.get('rhFields'), value.get('nodeInfoList'),
+            value.get('data', {}).get('fields') if isinstance(value.get('data'), dict) else None,
+            value.get('data', {}).get('nodeInfoList') if isinstance(value.get('data'), dict) else None,
+            value.get('workflow') if isinstance(value.get('workflow'), (dict, list)) else None,
+        ])
+    for candidate in candidates:
+        fields = _schema_fields(candidate, comfy=comfy)
+        if fields:
+            return fields
+    return []
+
+
+def _task_id_from_submission(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ''
+    candidates = [
+        value.get('task_id'), value.get('taskId'), value.get('provider_task_id'),
+        value.get('data', {}).get('taskId') if isinstance(value.get('data'), dict) else None,
+        value.get('data', {}).get('task_id') if isinstance(value.get('data'), dict) else None,
+        value.get('result', {}).get('taskId') if isinstance(value.get('result'), dict) else None,
+    ]
+    return next((str(item).strip() for item in candidates if str(item or '').strip()), '')
+
+
+def _query_payload(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    data = value.get('data')
+    if isinstance(data, dict) and not any(key in value for key in ('status', 'state', 'urls', 'images', 'outputs')):
+        return data
+    return value
+
+
+def _media_kind(url: str, item: dict[str, Any] | None = None) -> str:
+    item = item or {}
+    explicit = str(item.get('kind') or item.get('mediaKind') or item.get('type') or '').strip().lower()
+    if explicit in {'image', 'video', 'audio', 'text', 'file'}:
+        return explicit
+    mime = str(item.get('mime') or mimetypes.guess_type(str(url or ''))[0] or '').lower()
+    if mime.startswith('video/'):
+        return 'video'
+    if mime.startswith('audio/'):
+        return 'audio'
+    if mime.startswith('text/'):
+        return 'text'
+    return 'image'
+
+
+def _normalize_runninghub_result(value: Any) -> dict[str, Any]:
+    """把既有 RunningHub 查询返回统一成 studio_collect 可保存的结果形状。"""
+    payload = copy.deepcopy(_query_payload(value))
+    if not payload:
+        return {}
+    if any(payload.get(key) for key in ('images', 'videos', 'audios', 'texts', 'files')):
+        return payload
+    items = payload.get('image_items') or payload.get('items') or []
+    urls = payload.get('urls') or payload.get('outputs') or []
+    if not isinstance(items, list):
+        items = []
+    if not isinstance(urls, list):
+        urls = [urls]
+    entries = [item if isinstance(item, dict) else {'url': item} for item in items]
+    known_urls = {str(item.get('url') or '') for item in entries}
+    entries.extend({'url': url} for url in urls if str(url or '') not in known_urls)
+    for item in entries:
+        url = str(item.get('url') or item.get('value') or '').strip()
+        if not url:
+            continue
+        item['url'] = url
+        kind = _media_kind(url, item)
+        item['kind'] = kind
+        payload.setdefault({'image': 'images', 'video': 'videos', 'audio': 'audios', 'text': 'texts', 'file': 'files'}[kind], []).append(item)
+    return payload
+
+
+class StudioAppExecution:
+    """服务端执行 ``smart-ai-app`` 和 ``smart-comfy-workflow`` 节点。
+
+    回调契约：
+
+    * ``preflight(canvas, node, request, request_id)``：调用现有画布真实预检。
+    * ``local_comfy_generate(request)``：接收包含 ``platform_request``、工作流
+      字段和已投影 ``params`` 的规范请求，调用现有 ``GenerateRequest``/``generate`` 路径。
+    * ``runninghub_submit(request)``：接收包含 ``app_id``/``workflow_id``、
+      ``node_info_list``、计费方式和地区的规范请求；只提交一次。
+    * ``runninghub_query(provider_task_id, request)``：接收上一次提交返回的任务
+      ID 和原请求，调用现有 RunningHub 查询路径。
+    * ``upload_runninghub_asset(ref, request)``、``upload_comfy_media(ref, request)``：
+      可选，分别复用既有素材上传接口，返回平台字段值。
+    * ``collect(result, request, task)``：复用现有结果存储，返回画布媒体引用列表。
+
+    回调可以是同步函数或 async 函数。模块不重试提交；查询失败、上游失败和
+    本地取消只会结束当前任务，避免页面重开或异常恢复导致重复付费。
+    """
+
+    def __init__(
+        self,
+        *,
+        load_canvas: Callable[[str], dict[str, Any]],
+        save_canvas: Callable[[dict[str, Any]], Any],
+        lock: Any,
+        storage: Any,
+        preflight: Callable[..., Any],
+        collect: Callable[..., Any],
+        notify: Callable[..., Any],
+        local_comfy_generate: Callable[..., Any] | None = None,
+        runninghub_submit: Callable[..., Any] | None = None,
+        runninghub_query: Callable[..., Any] | None = None,
+        resolve_runninghub_fields: Callable[..., Any] | None = None,
+        resolve_comfy_fields: Callable[..., Any] | None = None,
+        upload_runninghub_asset: Callable[..., Any] | None = None,
+        upload_comfy_media: Callable[..., Any] | None = None,
+        poll_interval: float = 1.6,
+        max_polls: int = 720,
+    ):
+        self.load = load_canvas
+        self.save = save_canvas
+        self.lock = lock
+        self.storage = storage
+        self.preflight = preflight
+        self.collect = collect
+        self.notify = notify
+        self.local_comfy_generate = local_comfy_generate
+        self.runninghub_submit = runninghub_submit
+        self.runninghub_query = runninghub_query
+        self.resolve_runninghub_fields = resolve_runninghub_fields
+        self.resolve_comfy_fields = resolve_comfy_fields
+        self.upload_runninghub_asset = upload_runninghub_asset
+        self.upload_comfy_media = upload_comfy_media
+        self.poll_interval = max(0.0, float(poll_interval))
+        self.max_polls = max(1, int(max_polls))
+        self.handles: dict[str, asyncio.Task] = {}
+
+    async def _prepare_request(self, canvas: dict[str, Any], node: dict[str, Any], request_id: str) -> dict[str, Any]:
+        node_type = node.get('type')
+        settings = node.get('runSettings') or {}
+        if node_type == 'smart-ai-app':
+            fields = []
+            resolved = None
+            if self.resolve_runninghub_fields:
+                config_key = str(settings.get('rhConfigKey') or '').strip()
+                entry_id = config_key.split(':', 1)[1] if ':' in config_key else str(
+                    settings.get('rhWorkflowId') or settings.get('rhAppId') or config_key
+                )
+                resolved = await _invoke(self.resolve_runninghub_fields, entry_id, node, canvas)
+                fields = _schema_fields(resolved)
+            if not fields and not self.resolve_runninghub_fields:
+                fields = _schema_fields(settings.get('rhFields') or settings.get('rhSchemaSnapshot'))
+            request_node = node
+            mode = str(settings.get('rhMode') or '').strip().lower()
+            config_key = str(settings.get('rhConfigKey') or '').strip().lower()
+            if (mode == 'workflow' or config_key.startswith('workflow:')) and isinstance(resolved, dict):
+                workflow_json = resolved.get('workflowJson') or resolved.get('workflow_json')
+                if not workflow_json and isinstance(resolved.get('data'), dict):
+                    workflow_json = resolved['data'].get('workflowJson') or resolved['data'].get('workflow_json')
+                if workflow_json and not settings.get('rhWorkflowJson'):
+                    request_node = copy.deepcopy(node)
+                    request_settings = request_node.setdefault('runSettings', {})
+                    request_settings['rhWorkflowJson'] = copy.deepcopy(workflow_json)
+                    optional_mode = resolved.get('optionalImageMode') or resolved.get('optional_image_mode')
+                    if optional_mode and not request_settings.get('rhOptionalImageMode'):
+                        request_settings['rhOptionalImageMode'] = optional_mode
+            request = request_for(canvas, request_node, app_fields=fields)
+        elif node_type == 'smart-comfy-workflow':
+            fields = []
+            if self.resolve_comfy_fields:
+                workflow_name = str(settings.get('comfyWorkflow') or '').strip()
+                fields = _schema_fields(await _invoke(self.resolve_comfy_fields, workflow_name, node, canvas), comfy=True)
+            if not fields and not self.resolve_comfy_fields:
+                fields = _schema_fields(settings.get('comfyFields') or settings.get('workflowFields'), comfy=True)
+            request = request_for(canvas, node, comfy_fields=fields)
+        else:
+            raise ValueError('此服务只接受 AI 应用和 ComfyUI 节点')
+        request['request_id'] = str(request_id)
+        request['client_id'] = str(settings.get('clientId') or settings.get('client_id') or request_id)
+        if request['kind'] == 'comfy':
+            request['platform_request'] = {
+                'prompt': request.get('prompt', ''),
+                'workflow_json': request.get('workflow_json', ''),
+                'params': copy.deepcopy(request.get('params') or {}),
+                'type': 'workflow-custom',
+                'client_id': request['client_id'],
+            }
+        else:
+            request['platform_request'] = {
+                'webappId': request.get('app_id', ''),
+                'workflowId': request.get('workflow_id', ''),
+                'nodeInfoList': copy.deepcopy(request.get('node_info_list') or []),
+                'useWallet': bool(request.get('use_wallet')),
+                'instanceType': request.get('instance_type', ''),
+                'region': request.get('region', ''),
+            }
+            if request.get('workflow'):
+                request['platform_request']['workflow'] = copy.deepcopy(request['workflow'])
+        return request
+
+    async def submit(self, canvas: dict[str, Any], node: dict[str, Any], request_id: str) -> dict[str, Any]:
+        if node.get('type') not in APP_NODE_TYPES:
+            raise ValueError('此服务只接受 AI 应用和 ComfyUI 节点')
+        task_id = 'studio_app_' + hashlib.sha256(
+            f"{canvas['id']}:{node['id']}:{request_id}".encode()
+        ).hexdigest()[:32]
+        existing = self.storage.get_canvas_task(task_id)
+        if existing:
+            return {'task_ids': [task_id], 'status': existing['status']}
+        request = await self._prepare_request(canvas, node, request_id)
+        validated = await _invoke(self.preflight, canvas, node, request, request_id)
+        with self.lock:
+            existing = self.storage.get_canvas_task(task_id)
+            if existing:
+                return {'task_ids': [task_id], 'status': existing['status']}
+            latest = self.load(canvas['id'])
+            current = next((item for item in latest.get('nodes', []) if item.get('id') == node.get('id')), None)
+            if current is None or recipe(current) != recipe(node):
+                raise ValueError('预检期间节点已修改，请重新读取后运行')
+            current.setdefault('creationId', 'creation_' + uuid.uuid4().hex)
+            if current.get('creationOwnerNodeId', current['id']) != current['id']:
+                current['creationParentId'] = current['creationId']
+                current['creationId'] = 'creation_' + uuid.uuid4().hex
+            current['creationOwnerNodeId'] = current['id']
+            current['creationRevision'] = current.get('creationRevision', 0) + 1
+            signature = stable(recipe(current))
+            current['creationSignature'] = signature
+            task = {
+                **copy.deepcopy(current), 'id': task_id, 'type': 'smart-material',
+                'creationType': current['type'], 'sourceExecutionNodeId': current['id'],
+                'creationTask': True, 'runStatus': 'queued', 'isRunPlaceholder': True,
+                'pending': 1, 'runStartedAt': int(time.time() * 1000), 'images': [],
+                'runInputRefs': request['references'], 'runPrompt': request.get('prompt', ''),
+                'runRef': validated, 'creationSignature': signature,
+            }
+            for key in ('creationTasks', 'resultVersions'):
+                task.pop(key, None)
+            self.storage.create_canvas_task({
+                'id': task_id, 'status': 'queued', 'kind': request['kind'],
+                'canvas_id': canvas['id'], 'node_id': node['id'], 'request': request,
+                'creation_snapshot': task,
+            })
+            current.setdefault('creationTasks', []).append(task)
+            self.save(latest)
+        await _invoke(self.notify, latest)
+        handle = asyncio.create_task(self._run(canvas['id'], task, request))
+        self.handles[task_id] = handle
+        handle.add_done_callback(lambda _: self.handles.pop(task_id, None))
+        return {'task_ids': [task_id], 'status': 'queued'}
+
+    async def _upload_value(self, callback, ref: dict[str, Any], request: dict[str, Any]) -> str:
+        value = await _invoke(callback, ref, request)
+        if isinstance(value, dict):
+            value = value.get('fileName') or value.get('filename') or value.get('name') or value.get('url')
+        return str(value or '').strip()
+
+    async def _prepare_comfy_request(self, request: dict[str, Any]) -> dict[str, Any]:
+        prepared = copy.deepcopy(request)
+        fields = prepared.get('workflow_fields') or []
+        refs_by_kind = {kind: [ref for ref in prepared.get('references', []) if ref.get('kind') == kind]
+                        for kind in ('image', 'video', 'audio')}
+        indexes = {kind: 0 for kind in refs_by_kind}
+        values = prepared.get('workflow_values') or {}
+        for field in fields:
+            raw = str(field.get('fieldType') or field.get('type') or field.get('kind') or '').strip().lower()
+            if raw not in {'image', 'video', 'audio'}:
+                continue
+            kind = raw
+            index = indexes[kind]
+            indexes[kind] += 1
+            ref = refs_by_kind[kind][index] if index < len(refs_by_kind[kind]) else None
+            if not ref or ref.get('comfy_name') or not self.upload_comfy_media:
+                continue
+            uploaded = await self._upload_value(self.upload_comfy_media, ref, prepared)
+            if uploaded:
+                field_key = str(field.get('id') or field.get('paramid') or field.get('paramId') or field.get('key') or '')
+                field_node = str(field.get('node') or field.get('nodeId') or '')
+                field_input = str(field.get('input') or field.get('fieldName') or '')
+                values[field_key] = uploaded
+                for node_id, node_inputs in (prepared.get('params') or {}).items():
+                    if field_node == str(node_id) and isinstance(node_inputs, dict) and field_input:
+                        node_inputs[field_input] = uploaded
+        prepared['workflow_values'] = values
+        prepared['parameters'] = values
+        if isinstance(prepared.get('platform_request'), dict):
+            prepared['platform_request']['params'] = copy.deepcopy(prepared.get('params') or {})
+        return prepared
+
+    async def _prepare_runninghub_request(self, request: dict[str, Any]) -> dict[str, Any]:
+        prepared = copy.deepcopy(request)
+        refs = prepared.get('references') or []
+        refs_by_kind = {kind: [ref for ref in refs if ref.get('kind') == kind and ref.get('url')]
+                        for kind in ('image', 'video', 'audio')}
+        used: set[str] = set()
+        for field in prepared.get('fields') or []:
+            raw = str(field.get('fieldType') or field.get('type') or field.get('kind') or '').strip().lower()
+            if raw not in refs_by_kind or not self.upload_runninghub_asset:
+                continue
+            node_id = str(field.get('nodeId') or field.get('node_id') or '').strip()
+            field_name = str(field.get('fieldName') or field.get('field_name') or field.get('inputName') or '').strip()
+            if not node_id or not field_name:
+                param_id = str(field.get('paramid') or field.get('paramId') or field.get('key') or '').strip()
+                if '::' in param_id:
+                    node_id, field_name = (part.strip() for part in param_id.split('::', 1))
+            key = f'{node_id}::{field_name}' if node_id or field_name else str(
+                field.get('key') or field.get('paramid') or field.get('paramId') or ''
+            ).strip()
+            value = (prepared.get('app_field_values') or {}).get(key)
+            ref = next((item for item in refs_by_kind[raw] if str(item.get('url')) == str(value) and id(item) not in used), None)
+            if ref is None:
+                ref = next((item for item in refs_by_kind[raw] if id(item) not in used), None)
+            if ref is None:
+                continue
+            used.add(id(ref))
+            uploaded = await self._upload_value(self.upload_runninghub_asset, ref, prepared)
+            if not uploaded:
+                continue
+            prepared.setdefault('app_field_values', {})[key] = uploaded
+            prepared.setdefault('inputs', {})[key] = uploaded
+            for item in prepared.get('node_info_list') or []:
+                if str(item.get('nodeId')) == node_id and str(item.get('fieldName')) == field_name:
+                    item['fieldValue'] = uploaded
+        if isinstance(prepared.get('platform_request'), dict):
+            prepared['platform_request']['nodeInfoList'] = copy.deepcopy(prepared.get('node_info_list') or [])
+            if prepared.get('kind') == 'runninghub_workflow' and isinstance(prepared.get('workflow'), dict):
+                workflow = copy.deepcopy(prepared['workflow'])
+                if str(prepared.get('optional_image_mode') or 'prune-workflow').strip() == 'prune-workflow':
+                    remove_ids: set[str] = set()
+                    supplied = prepared.get('app_field_values') or {}
+                    for field in prepared.get('fields') or []:
+                        raw = str(field.get('fieldType') or field.get('type') or field.get('kind') or '').strip().lower()
+                        if raw not in refs_by_kind or field.get('required') is True:
+                            continue
+                        node_id = str(field.get('nodeId') or field.get('node_id') or '').strip()
+                        field_name = str(field.get('fieldName') or field.get('field_name') or field.get('inputName') or '').strip()
+                        if not node_id or not field_name:
+                            param_id = str(field.get('paramid') or field.get('paramId') or field.get('key') or '').strip()
+                            if '::' in param_id:
+                                node_id, field_name = (part.strip() for part in param_id.split('::', 1))
+                        key = f'{node_id}::{field_name}' if node_id or field_name else str(
+                            field.get('key') or field.get('paramid') or field.get('paramId') or ''
+                        ).strip()
+                        node = workflow.get(node_id)
+                        if key in supplied or not isinstance(node, dict) or not isinstance(node.get('inputs'), dict):
+                            continue
+                        if field_name in node['inputs']:
+                            del node['inputs'][field_name]
+                        if not node['inputs']:
+                            remove_ids.add(node_id)
+                    for node_id in remove_ids:
+                        workflow.pop(node_id, None)
+                    for node in workflow.values():
+                        if not isinstance(node, dict) or not isinstance(node.get('inputs'), dict):
+                            continue
+                        for input_name, value in list(node['inputs'].items()):
+                            if (isinstance(value, list) and len(value) == 2
+                                    and isinstance(value[1], int) and str(value[0]) in remove_ids):
+                                del node['inputs'][input_name]
+                for item in prepared.get('node_info_list') or []:
+                    node = workflow.get(str(item.get('nodeId')))
+                    field_name = str(item.get('fieldName') or '')
+                    if isinstance(node, dict) and isinstance(node.get('inputs'), dict) and field_name:
+                        if field_name in node['inputs']:
+                            node['inputs'][field_name] = item.get('fieldValue')
+                prepared['workflow'] = workflow
+                prepared['platform_request']['workflow'] = copy.deepcopy(prepared['workflow'])
+        return prepared
+
+    async def _run_runninghub(self, request: dict[str, Any], on_submitted=None) -> dict[str, Any]:
+        prepared = await self._prepare_runninghub_request(request)
+        request.clear()
+        request.update(prepared)
+        submission = await _invoke(self.runninghub_submit, request)
+        provider_task_id = _task_id_from_submission(submission)
+        if not provider_task_id:
+            normalized = _normalize_runninghub_result(submission)
+            if any(normalized.get(key) for key in ('images', 'videos', 'audios', 'texts', 'files')):
+                return normalized
+            raise ValueError('RunningHub 提交成功但没有返回 taskId')
+        request['provider_task_id'] = provider_task_id
+        if on_submitted:
+            await on_submitted(provider_task_id)
+        last = {}
+        for index in range(self.max_polls):
+            if index and self.poll_interval:
+                await asyncio.sleep(self.poll_interval)
+            queried = await _invoke(self.runninghub_query, provider_task_id, request)
+            payload = _query_payload(queried)
+            last = payload
+            status = str(payload.get('status') or payload.get('state') or '').strip().upper()
+            normalized = _normalize_runninghub_result(payload)
+            if status in {'SUCCESS', 'SUCCEEDED', 'COMPLETED'} or any(
+                normalized.get(key) for key in ('images', 'videos', 'audios', 'texts', 'files')
+            ):
+                return normalized
+            if status in {'FAILED', 'FAIL', 'ERROR', 'CANCELLED', 'CANCELED', 'TIMEOUT', 'REVOKED'}:
+                reason = payload.get('failReason') or payload.get('error') or payload.get('message') or status
+                raise ValueError(f'RunningHub 任务失败：{reason}')
+        raise TimeoutError(f'RunningHub 查询超时，任务编号：{provider_task_id}，最近状态：{last.get("status") or last.get("state") or "unknown"}')
+
+    async def _generate(self, request: dict[str, Any], on_submitted=None) -> dict[str, Any]:
+        if request['kind'] == 'comfy':
+            prepared = await self._prepare_comfy_request(request)
+            result = await _invoke_threaded(self.local_comfy_generate, prepared)
+            return result if isinstance(result, dict) else {'outputs': result}
+        if request['kind'] in RUNNINGHUB_KINDS:
+            return await self._run_runninghub(request, on_submitted)
+        raise ValueError('未支持的应用执行类型')
+
+    async def _transition(self, canvas_id: str, task: dict[str, Any], status: str,
+                          media: list[dict[str, Any]] | None = None, error: str = '') -> None:
+        task.update(
+            runStatus=status,
+            pending=int(status in {'queued', 'running'}),
+            isRunPlaceholder=status in {'queued', 'running'},
+            error=error,
+        )
+        if status not in {'queued', 'running'}:
+            task['runFinishedAt'] = int(time.time() * 1000)
+        if media:
+            task['images'] = media
+        self.storage.update_canvas_task(
+            task['id'], status=status, error=error,
+            result={'media': media or [], 'creation_snapshot': task},
+        )
+        run_id = (task.get('runRef') or {}).get('run_id')
+        if run_id and hasattr(self.storage, 'update_run_status'):
+            self.storage.update_run_status(run_id, 'submitted' if status == 'running' else status, error=error)
+        with self.lock:
+            canvas = self.load(canvas_id)
+            if not canvas:
+                return
+            for node in canvas.get('nodes', []):
+                for index, prior in enumerate(node.get('creationTasks', [])):
+                    if prior.get('id') == task['id']:
+                        node['creationTasks'][index] = copy.deepcopy(task)
+                if media and node.get('creationId') == task.get('creationId') and stable(recipe(node)) == task.get('creationSignature'):
+                    versions = node.setdefault('resultVersions', ([copy.deepcopy(node)] if node.get('images') else []))
+                    version = copy.deepcopy(task)
+                    version.update(type=task['creationType'], outputKind=media[0].get('kind', 'file'))
+                    old = next((index for index, item in enumerate(versions) if item.get('id') == task['id']), None)
+                    if old is None:
+                        versions.append(version)
+                        old = len(versions) - 1
+                    else:
+                        versions[old] = version
+                    node.update(
+                        activeResultVersion=old, images=copy.deepcopy(media), sourceKind='result',
+                        outputKind=media[0].get('kind', 'file'),
+                        creationRevision=node.get('creationRevision', 0) + 1,
+                    )
+            self.save(canvas)
+        await _invoke(self.notify, canvas)
+
+    async def _run(self, canvas_id: str, task: dict[str, Any], request: dict[str, Any]) -> None:
+        try:
+            await self._transition(canvas_id, task, 'running')
+            async def remember_submission(provider_task_id):
+                task['providerTaskId'] = provider_task_id
+                await self._transition(canvas_id, task, 'running')
+            result = await self._generate(request, remember_submission)
+            if request.get('provider_task_id'):
+                task['providerTaskId'] = request['provider_task_id']
+            if result.get('error'):
+                raise ValueError(str(result['error']))
+            if result.get('pending') or result.get('jimeng_pending'):
+                task['upstreamPending'] = copy.deepcopy(result)
+                await self._transition(canvas_id, task, 'recoverable', error='上游仍在运行，需查询原任务')
+                return
+            media = await _invoke(self.collect, result, request, task)
+            if not media:
+                raise ValueError('接口没有返回可保存的结果')
+            await self._transition(canvas_id, task, 'succeeded', media=media)
+        except asyncio.CancelledError:
+            await self._transition(canvas_id, task, 'cancelled', error='已取消本地任务；已提交的上游请求可能仍在运行')
+        except Exception as exc:
+            await self._transition(canvas_id, task, 'failed', error=str(getattr(exc, 'detail', None) or exc))
+
+    async def cancel(self, canvas: dict[str, Any], node: dict[str, Any], task_id: str) -> dict[str, Any]:
+        task = self.storage.get_canvas_task(task_id)
+        if not task or task.get('canvas_id') != canvas.get('id') or task.get('node_id') != node.get('id'):
+            raise ValueError('当前节点不存在此任务')
+        handle = self.handles.get(task_id)
+        if handle:
+            handle.cancel()
+            await asyncio.gather(handle, return_exceptions=True)
+            current = self.storage.get_canvas_task(task_id)
+            if current and current.get('status') in {'queued', 'running'}:
+                await self._transition(
+                    canvas['id'], task['creation_snapshot'], 'cancelled',
+                    error='已取消本地任务；已提交的上游请求可能仍在运行',
+                )
+        return self.storage.get_canvas_task(task_id)
+
+
+def create_studio_app_execution(**callbacks: Any) -> StudioAppExecution:
+    """主控装配入口；参数与 ``StudioAppExecution`` 构造器一一对应。
+
+    主控在画布节点运行入口调用 ``await service.submit(canvas, node, request_id)``，
+    在取消入口调用 ``await service.cancel(canvas, node, task_id)``。提交回调收到的
+    是规范请求；其中 ``platform_request`` 可直接适配现有 GenerateRequest、
+    RunningHub 应用提交或 RunningHub 工作流提交，而无需在本模块创建 HTTP 客户端。
+    """
+    return StudioAppExecution(**callbacks)
+
+
+__all__ = ['APP_NODE_TYPES', 'StudioAppExecution', 'create_studio_app_execution']

@@ -18,7 +18,7 @@
     }
     scripts.reduce((promise, src) => promise.then(() => new Promise((resolve, reject) => {
         const script = document.createElement('script');
-        script.src = src + '?v=' + VERSION;
+        script.src = src + '?v=' + CACHE_VERSION;
         script.onload = resolve;
         script.onerror = reject;
         document.head.appendChild(script);

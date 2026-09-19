@@ -24,6 +24,7 @@ uploads/
 /workflows/
 cache/
 backups/
+runtime/
 
 # 本地测试与系统临时文件
 tests/.pytest_cache/

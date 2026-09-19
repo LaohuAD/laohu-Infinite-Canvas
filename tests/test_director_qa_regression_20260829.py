@@ -94,12 +94,11 @@ console.log(JSON.stringify({
         self.assertIn("? label", renderer)
         self.assertNotIn("? capabilityUiText('默认','Default')", renderer)
 
-    def test_short_connection_clips_have_safe_hit_targets_and_new_directors_avoid_toolbar(self):
+    def test_legacy_connection_clips_have_safe_hit_targets(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
         css = (ROOT / "static/css/smart-canvas.css").read_text(encoding="utf-8")
 
         self.assertIn("function directorMenuNodeOrigin", source)
-        self.assertIn("directorMenuNodeOrigin(p)", source)
         self.assertIn("world.getBoundingClientRect()", source)
         self.assertIn("min-width:18px", css)
         self.assertIn(".director-connection-clip .minimax-clip-delete", css)

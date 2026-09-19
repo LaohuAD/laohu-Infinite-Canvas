@@ -2,9 +2,14 @@
 <html lang="zh-CN" data-studio-scale="off">
 <head>
     <meta charset="UTF-8">
+    <script>
+        // 修复早期项目入口误指向列表的地址，已打开的标签刷新后也能进入原项目。
+        const legacyProjectId = new URLSearchParams(location.search).get('id');
+        if(legacyProjectId) location.replace('/static/hypit.html?id=' + encodeURIComponent(legacyProjectId));
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" href="/static/images/logo.png" type="image/png">
-    <title>画布</title>
+    <title>Hypit</title>
     <script>
         (function(){
             try {
@@ -23,12 +28,12 @@
     <link rel="stylesheet" href="/static/css/studio-ui-polish.css?v=2026.08.17.1787804426">
     <link rel="stylesheet" href="/static/css/studio-projects.css?v=2026.09.19.1">
 </head>
-<body data-studio-module="canvas">
+<body data-studio-module="hypit">
     <div class="studio-project-page">
         <main class="studio-project-main">
             <section class="studio-project-toolbar" aria-labelledby="studioProjectListTitle">
                 <div>
-                    <h2 id="studioProjectListTitle">画布项目</h2>
+                    <h2 id="studioProjectListTitle">Hypit 项目</h2>
                     <p id="studioProjectCount" class="studio-project-count">正在读取...</p>
                 </div>
                 <div class="studio-project-toolbar-actions">
@@ -36,6 +41,9 @@
                         <i data-lucide="search" aria-hidden="true"></i>
                         <input id="studioProjectSearch" type="search" autocomplete="off" placeholder="搜索项目" aria-label="搜索项目">
                     </label>
+                    <button id="studioPrepareButton" class="studio-secondary-button" type="button">
+                        <i data-lucide="book-open-check" aria-hidden="true"></i><span>准备环境</span>
+                    </button>
                     <button id="studioNewProjectButton" class="studio-primary-button" type="button">
                         <i data-lucide="plus" aria-hidden="true"></i><span>新建项目</span>
                     </button>
@@ -48,18 +56,6 @@
                 <span>项目记录来自服务端，列表不会以临时页面状态代替保存。</span>
             </section>
             <section id="studioProjectGrid" class="studio-project-grid" aria-live="polite"></section>
-
-            <section id="studioCanvasTools" class="studio-legacy-tools">
-                <div class="studio-legacy-copy">
-                    <div class="studio-section-kicker" data-copy="canvasTools">画布工具</div>
-                    <strong data-copy="canvasToolsTitle">保留原有画布导出与回收站入口</strong>
-                    <span data-copy="canvasToolsHint">ZIP 导入仍在打开画布后的工作流工具中完成，不会在项目列表重复一套画布数据。</span>
-                </div>
-                <div class="studio-legacy-actions">
-                    <button id="studioImportGuide" class="studio-secondary-button" type="button"><i data-lucide="file-input" aria-hidden="true"></i><span>导入 ZIP</span></button>
-                    <button id="studioTrashButton" class="studio-secondary-button" type="button"><i data-lucide="trash-2" aria-hidden="true"></i><span>回收站</span><b id="studioTrashBadge" hidden>0</b></button>
-                </div>
-            </section>
         </main>
 
         <div id="studioOpenFallback" class="studio-open-fallback" hidden>
@@ -74,17 +70,6 @@
                     <button id="studioOpenFallbackClose" class="studio-secondary-button" type="button">关闭</button>
                 </div>
             </div>
-        </div>
-
-        <div id="studioTrashPanel" class="studio-trash-panel" hidden>
-            <div class="studio-trash-panel-head">
-                <div>
-                    <div class="studio-section-kicker" data-copy="trashKicker">画布回收站</div>
-                    <strong data-copy="trashTitle">可恢复的画布</strong>
-                </div>
-                <button id="studioTrashClose" class="studio-quiet-button" type="button" title="关闭回收站" aria-label="关闭回收站"><i data-lucide="x" aria-hidden="true"></i></button>
-            </div>
-            <div id="studioTrashList" class="studio-trash-list"></div>
         </div>
     </div>
     <script src="/static/js/studio-projects.js?v=2026.09.19.1"></script>

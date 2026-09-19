@@ -179,39 +179,29 @@ class RetiredSkillTests(unittest.TestCase):
         self.assertEqual(library['libraries'][0]['items'][0]['positive'],'ordinary')
         self.assertEqual(library['active_library_id'],'system')
 
-class AgentDefaultMergeTests(unittest.TestCase):
-    def test_new_nodes_inherit_defaults_and_only_explicit_fields_override(self):
-        import subprocess
-        script=r"""
-const SMART_NODE_CONTRACT=require('./static/js/smart-node-contract.js'); const fs=require('fs'), assert=require('assert'); const CanvasCreation=require('./static/js/canvas-creation.js');
-const source=fs.readFileSync('static/js/canvas-agent.js','utf8');
-const text=(zh,en)=>en;
-const nodeKinds={image:'smart-image-generator'};
-const fields={image:['provider_id','model','imageFamilyId','image_generation']};
-const nodes=[]; let selectedId='';
-const CAPABILITY_PARAMETER_UNSET='__canvas_unset__';
-const canvasDefaultSmartSettings={agentDefaults:{image:{provider_id:'test',model:'one',parameters:{resolution:'2k',aspect_ratio:'16:9',flag:true,seed:8}}}};
-const cloneSmartSettings=x=>JSON.parse(JSON.stringify(x));
-const capabilityProfileFor=(provider,model)=>({runnable:provider==='test',family_id:model,parameters:{resolution:{},aspect_ratio:{},flag:{},seed:{}}});
-const createExecutionNode=(x,y,type)=>{const node={id:String(nodes.length),type,runSettings:{count:4,capabilityParameters:{one:{stale:'old'}}}};nodes.push(node);return node;};
-const deleteNode=id=>nodes.splice(nodes.findIndex(n=>n.id===id),1);
-const setPromptDraftForNode=(n,value)=>n.promptDraftText=value;
-const render=()=>{},persist=async()=>{};
-eval(source.slice(source.indexOf('    function configure('),source.indexOf('    async function persist(')));
-eval(source.slice(source.indexOf('    async function execute('),source.indexOf('    async function finish(')));
-(async()=>{
- const first=await execute({action:'create_node',args:{title:'测试图片',kind:'image',text:'scene'}});
- assert.deepStrictEqual(first.node.runSettings.capabilityParameters.one,{resolution:'2k',aspect_ratio:'16:9',flag:true,seed:8});
- assert.equal(first.node.runSettings.count,1);
- const second=await execute({action:'create_node',args:{title:'测试图片',kind:'image',parameters:{aspect_ratio:'9:16',flag:false,seed:0}}});
- assert.deepStrictEqual(second.node.runSettings.capabilityParameters.one,{resolution:'2k',aspect_ratio:'9:16',flag:false,seed:0});
- const changed=await execute({action:'create_node',args:{title:'测试图片',kind:'image',model:'two',parameters:{resolution:'1k'}}});
- assert.deepStrictEqual(changed.node.runSettings.capabilityParameters.two,{resolution:'1k'});
- const reset=await execute({action:'create_node',args:{title:'测试图片',kind:'image',parameters:{resolution:CAPABILITY_PARAMETER_UNSET}}});
- assert.equal(reset.node.runSettings.capabilityParameters.one.resolution,CAPABILITY_PARAMETER_UNSET);
- delete canvasDefaultSmartSettings.agentDefaults.image;
- await assert.rejects(()=>execute({action:'create_node',args:{title:'测试图片',kind:'image'}}),/Set defaults/);
-})().catch(e=>{console.error(e);process.exitCode=1});
-"""
-        result=subprocess.run(['node','-e',script],cwd=Path(__file__).resolve().parents[1],capture_output=True,text=True)
-        self.assertEqual(result.returncode,0,result.stderr)
+class AgentDefaultMergeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_new_nodes_inherit_defaults_and_only_explicit_fields_override(self):
+        import copy
+        from threading import RLock
+        from canvas_core.headless_canvas import HeadlessCanvas
+        canvas = {'id':'test','nodes':[],'connections':[], 'settings':{'agentDefaults':{'image':{
+            'provider_id':'test','model':'one','parameters':{'resolution':'2k','aspect_ratio':'16:9','flag':True,'seed':8}}}}}
+        def save(value):
+            canvas.clear()
+            canvas.update(copy.deepcopy(value))
+        def validate(kind, provider, model, parameters):
+            return {'runnable':provider=='test','family_id':model,'parameters':{key:{} for key in ['resolution','aspect_ratio','flag','seed']}}
+        executor = HeadlessCanvas(lambda _:copy.deepcopy(canvas),save,RLock(),lambda *_:None,lambda *_:None,validate,lambda *_:None)
+        async def create(number, **changes):
+            return (await executor.execute('test','create_node',{'kind':'image','title':'测试图片',**changes},str(number)))['node']
+        first = await create(1,text='scene')
+        self.assertEqual(first['runSettings']['capabilityParameters']['one'],{'resolution':'2k','aspect_ratio':'16:9','flag':True,'seed':8})
+        second = await create(2,parameters={'aspect_ratio':'9:16','flag':False,'seed':0})
+        self.assertEqual(second['runSettings']['capabilityParameters']['one'],{'resolution':'2k','aspect_ratio':'9:16','flag':False,'seed':0})
+        changed = await create(3,model='two',parameters={'resolution':'1k'})
+        self.assertEqual(changed['runSettings']['capabilityParameters']['two'],{'resolution':'1k'})
+        reset = await create(4,parameters={'resolution':'__canvas_unset__'})
+        self.assertEqual(reset['runSettings']['capabilityParameters']['one']['resolution'],'__canvas_unset__')
+        del canvas['settings']['agentDefaults']['image']
+        with self.assertRaises(ValueError):
+            await create(5)

@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" href="/static/images/logo.png" type="image/png">
-    <title>老胡无限画布</title>
+    <title data-i18n="studio.productName">老胡创意工作台</title>
     <style>
         html.studio-route-booting body {
             visibility: hidden !important;
@@ -1475,7 +1475,7 @@
                         <rect x="14" y="14" width="7" height="7"></rect>
                         <rect x="3" y="14" width="7" height="7"></rect>
                     </svg>
-                    <span class="nav-text" data-i18n="nav.canvas">无限画布</span>
+                    <span class="nav-text" data-i18n="nav.canvas">画布</span>
                 </div>
                 <div class="nav-item" onclick="switchUI(this, 'asset-manager')">
                     <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1485,6 +1485,10 @@
                         <path d="M7 16h6"></path>
                     </svg>
                     <span class="nav-text" data-i18n="nav.assetManager">素材库</span>
+                </div>
+                <div class="nav-item" onclick="switchUI(this, 'hypit')">
+                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="m10 8 6 4-6 4z"></path></svg>
+                    <span class="nav-text">Hypit</span>
                 </div>
             </nav>
 
@@ -1592,6 +1596,7 @@
             <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=2026.08.17.1787828134" scrolling="yes"></iframe>
             <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=2026.08.17.1787833320" scrolling="yes"></iframe>
             <iframe id="frame-canvas" data-src="/static/canvas-list.html?v=2026.08.17.1787828134" scrolling="yes"></iframe>
+            <iframe id="frame-hypit" data-src="/static/hypit-list.html" scrolling="yes"></iframe>
 
         </main>
     </div>
@@ -1707,7 +1712,7 @@
         const SIDEBAR_SETTINGS_COLLAPSED_KEY = 'studio_sidebar_settings_collapsed';
         const SIDEBAR_PINNED_KEY = 'studio_sidebar_pinned';
         const DEFAULT_PAGE_ID = 'canvas';
-        const PAGE_IDS = ['canvas','asset-manager','api-settings'];
+        const PAGE_IDS = ['canvas','asset-manager','hypit','api-settings'];
         const PROJECT_URL = 'https://github.com/LaohuAD/laohu-Infinite-Canvas';
         let appInfo = { version:'', repo_url:PROJECT_URL, version_url:'https://raw.githubusercontent.com/LaohuAD/laohu-Infinite-Canvas/main/VERSION' };
         let updateConnectivityResult = null;

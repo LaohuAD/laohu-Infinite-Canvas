@@ -832,6 +832,28 @@ class ProjectStorage:
             value["url"] = self.result_url(result_id)
             return value
 
+    def register_managed_result(self, source: str | os.PathLike[str], display_name: str = "", **metadata: Any) -> dict[str, Any]:
+        """登记受管原生结果，保留伴随清单的相对文件布局，不再复制媒体。"""
+        path = Path(source).resolve()
+        if not path.is_file() or not path.is_relative_to(self.results_dir.resolve()):
+            raise StorageError("只能登记生成结果目录内的真实文件")
+        digest = sha256_file(path)
+        name = safe_name(display_name or path.name, "结果")
+        with self._lock:
+            index = self._load_index(self.result_index_path)
+            item = next((entry for entry in index['items'] if entry.get('sha256') == digest
+                         and entry.get('path') and self._asset_path(entry['path']).is_file()), None)
+            if item is None:
+                item = {'id': f'res_{uuid.uuid4().hex[:24]}', 'sha256': digest,
+                        'display_name': name, 'original_name': path.name, 'kind': media_kind(name),
+                        'mime': mimetypes.guess_type(name)[0] or 'application/octet-stream',
+                        'size': path.stat().st_size, 'path': self._asset_relative(path),
+                        'created_at': now_ms(), 'updated_at': now_ms()}
+                item.update({key: str(metadata[key]) for key in ('source_module', 'source_project_id', 'source_build_id') if key in metadata})
+                index['items'].append(item)
+                self._save_index(self.result_index_path, index)
+            return {**item, 'url': self.result_url(item['id'])}
+
     def delete_result(self, result_id: str) -> bool:
         with self._lock:
             index = self._load_index(self.result_index_path)

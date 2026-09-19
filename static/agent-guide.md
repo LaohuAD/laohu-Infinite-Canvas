@@ -1,19 +1,19 @@
-# Agent 操作老胡无限画布
+# Agent 接入老胡创意工作台 · 画布
 
 Codex、Claude Code 或其他能调用 HTTP／Python 的 Agent，可以通过结构化命令在当前画布创建节点、填写内容、连接素材、调用模型并检查结果。无需安装新的 Codex 插件，也不要求把模型密钥交给 Agent。
 
 ## 连接
 
-1. 启动本项目，使用启动器打开的地址（例如 `http://192.168.1.253:3000/`），或本机 `http://127.0.0.1:3000/`，打开需要创作的画布并保持打开。
+1. 启动本项目，使用启动器打开的地址（例如 `http://192.168.1.253:3000/`），或本机 `http://127.0.0.1:3000/`，选择需要创作的项目。标签页可以关闭，服务需保持运行。
 2. 点击画布右上角 **Agent 接入**，复制说明到新的 Codex 对话。说明包含实际服务地址、画布 ID 和本指南地址。
 3. Agent 先读取 `GET /api/agent/canvases/{canvas_id}/defaults` 获取当前画布默认设置，再读取 `GET /api/agent/capabilities`、`GET /api/model-capabilities`、`GET /api/canvases/{canvas_id}`。能力清单中的模型是用户已经启用的子集，必须选择 `runnable: true` 且支持当前输入的模型。
 4. Agent 根据用户的 Skill 产出文本或素材，通过下面的命令填写画布。Skill 可以留在 Agent 所在项目；无需复制进画布工程。
 
-服务端 Agent 路由识别本机回环地址及本机网卡地址，拒绝其他电脑和跨站 Origin。局域网地址以启动器及浏览器地址栏为准，不硬编码 IP。此版本的节点操作由已打开的画布页面执行；页面关闭时命令保持 `queued`。不声称支持无人值守的无浏览器生成。所有创作节点复用画布预检、日志和保存机制。每次运行的任务保存在节点内部，结果作为该节点的新版本，不再新增可见的结果占位节点。
+服务端 Agent 路由识别本机回环地址及本机网卡地址，拒绝其他电脑和跨站 Origin。局域网地址以启动器及浏览器地址栏为准，不硬编码 IP。节点操作由服务端执行，关闭或多开页面不会改变项目作用域；页面显示同一份已保存作品。所有创作节点复用画布预检、日志和保存机制。每次运行的任务保存在节点内部，结果作为该节点的新版本，不再新增可见的结果占位节点。
 
 ## 默认模型与参数
 
-在 **Agent 接入 → Agent 默认设置** 中，分别设置文本 / LLM、图片、视频、音频和音乐的平台、模型、运行模式及参数，点击 **保存默认设置**。AI 应用与 ComfyUI 直接选择已配置的应用或工作流，并设置相应参数，无需退出弹窗选择节点。数值支持滑块和直接输入，修改后点击保存。设置保存在当前画布的 `settings.agentDefaults`，不会修改其他画布或 API 设置里的模型启用清单。
+在 **Agent 接入 → Agent 默认设置** 中，分别设置文本 / LLM、图片、视频、音频和音乐的平台、模型、运行模式及参数，点击 **保存默认设置**。AI 应用与 ComfyUI 直接选择已配置的应用或工作流，并设置相应参数，无需退出弹窗选择节点。选项和范围由具体模型的能力档案决定，修改后点击保存。设置保存在当前画布的 `settings.agentDefaults`，不会修改其他画布或 API 设置里的模型启用清单。
 
 创建节点时按字段合并：用户在命令里明确给出的字段优先，其余采用当前画布默认。`parameters` 按参数键合并，`false` 和 `0` 都是明确值；固定选项参数缺省时按当前能力档案初始化为界面可见的具体值；`"__canvas_unset__"` 仅对允许留空的自由输入表示不发送，不能用于让固定选项恢复不透明的“平台默认”。用户换平台或换模型时，旧模型参数不会自动沿用，Agent 必须按新能力档案重新检查。没有设置此类默认、命令又没有明确给出平台和模型时，创建会被阻止，不能猜一个模型开始收费。
 
@@ -37,12 +37,12 @@ Codex、Claude Code 或其他能调用 HTTP／Python 的 Agent，可以通过结
 
 - `GET /api/agent/canvases/{canvas_id}/commands/{id}`：查询该命令。
 - `GET /api/agent/canvases/{canvas_id}/commands`：查询命令记录与 `connected`。
-- `queued`：等待画布页面领取；用户正在文本框编辑时也会等待，避免抢焦点。
-- `running`：画布已领取。运行命令需要等模型完成，其他结构化命令仍可提交。
+- `queued`：服务端已接收，等待执行。
+- `running`：服务端正在处理命令。`run_node` 返回任务 ID 后，继续读取任务；命令成功不代表媒体已生成。
 - `succeeded`：已执行并检查保存，读取 `result`。
 - `failed`：读取 `error` 与画布日志；先修正原因再发新的操作。
 
-**同一画布的 `request_id` 永久去重。** 相同编号、不同内容返回 409。超时只查询原命令，不能换新编号重发收费的 `run_node`。页面或服务意外关闭后，已领取命令不会自动重投，避免上游已受理又被重复收费；先查画布结果及 `/api/canvas-runs?canvas_id=...`，人工确认后决定下一步。
+**同一画布的 `request_id` 永久去重。** 相同编号、不同内容返回 409。超时只查询原命令，不能换新编号重发收费的 `run_node`。服务意外关闭后，已提交命令不会自动重投，避免上游已受理又被重复收费；先查画布结果及 `/api/canvas-runs?canvas_id=...`，人工确认后决定下一步。
 
 ## 支持的动作
 
@@ -58,7 +58,7 @@ Codex、Claude Code 或其他能调用 HTTP／Python 的 Agent，可以通过结
 | `run_node` | `node_id` | `node_id`, `task_ids`, `tasks`, `versions`；逐项读取任务状态 |
 | `cancel_run` | `task_id`（来自 `task_ids`） | 停止本地等待；上游是否取消取决于平台 |
 | `arrange` | `node_ids` 数组；省略则整理全部。保留原区域，就近宫格居中；大节点跨格，冲突时就近避让，不按连线重排，不改变尺寸 | 节点 ID 清单 |
-| `snapshot` | `{}` | 页面实时画布状态 |
+| `snapshot` | `{}` | 服务端当前已保存画布状态 |
 | `production_status` | `{}` | 分段、图片、音频/音色与视频的当前节点、预览和状态 |
 
 `kind` 可取 `material`、`text`、`image`、`video`、`audio`、`music`、`app`、`comfy`。创建音乐使用 `music`，不能放进 `audio`；GPT CLI 只能用于文本任务。
@@ -234,3 +234,20 @@ python canvas_cli.py status CANVAS_ID COMMAND_ID
 音色通常创建 `kind:"audio"` 节点，或使用 `kind:"material"` 的真实音频。已有默认模型时自动沿用；确实尚未配置且用户要求先规划时，可显式传 `defer_configuration:true` 创建没有模型的待配置执行节点，不代表可以运行或绕过预检。声线描述放在自由说明及当前模型支持的输入中，不把它当音频文件引用。
 
 查询实时表格使用命令 `production_status`，返回每段实际节点及派生状态。关闭浏览器后只能读取已保存的 `production` 元数据。复制一个分段不会自动登记成新的剧情段；需明确提供新的序号和原文定位。整份工作流导入时重新映射节点 ID，不能继续指向原画布中的节点。
+
+
+## 工作台项目与稳定编号
+
+每个项目拥有独立 ID。`GET /api/studio/projects?module=canvas` 读取画布项目列表，`module=hypit` 读取 Hypit 工程。不要根据当前标签、标题或列表顺序选择作品；同项目可以同时打开多个标签，也可以没有打开的页面。网页标签名固定为模块名。
+
+节点的 `displayNumber` 是项目内稳定编号。对单节点命令可使用 `args.node_number`，例如“修改 3 号节点”先核对编号和标题，再提交 `update_node`；真实连线与素材引用继续使用节点 ID。节点移动和排序不改变编号，删除的编号不分配给另一节点。
+
+接入当前项目：`GET /api/studio/projects/{id}/connection?module=canvas`。可选创作环境说明：`GET /api/studio/modules/canvas/preparation`。准备 Skill 与接入项目独立，不能在每次新建作品时重复安装，也不能把 Skill 打包到工作台或强制替换用户创作方法。
+
+服务端生成任务：`GET /api/studio/tasks/{id}` 或节点 `creationTasks` 中读取真实状态。遇到 `recoverable` 先查原平台任务，不能把它当成未提交自动重试。
+
+## Hypit 模块
+
+Hypit 使用自己的原生工程、Run、Studio 与评论，不转换成画布节点。`GET /api/studio/projects/{id}/connection?module=hypit` 返回本项目的具体文件与执行入口。官方 Skill 只提供创作方法；工程、程序、模型、结果位置按工作台提供的配置，不能因 PATH 没有全局 `hypit` 就安装另一套程序或打开独立 Studio。
+
+程序更新、Hypit 受管版本更新、Agent Skill 更新是不同操作。常规工作台更新不自动拉取 Hypit 上游最新版，不覆盖用户的 Agent 技能。原生结果按清单登记到统一素材库，工程删除不删除成品。
