@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import time
 import unittest
 from pathlib import Path
@@ -74,6 +75,50 @@ def catalog():
                     },
                 ],
             },
+            {
+                "id": "runninghub",
+                "name": "RunningHub",
+                "protocol": "runninghub",
+                "regions": [
+                    {"region": "global", "enabled": True},
+                    {"region": "cn", "enabled": True},
+                ],
+                "models": [
+                    {
+                        "model_id": "shared-image",
+                        "node_type": "image_generation",
+                        "family_id": "shared-image-family",
+                        "runnable": True,
+                        "readiness": "ready",
+                        "validation_mode": "strict",
+                        "regions": ["global", "cn"],
+                        "region_profiles": {
+                            "global": {
+                                "model_id": "shared-image",
+                                "node_type": "image_generation",
+                                "family_id": "shared-image-family",
+                                "runnable": True,
+                                "readiness": "ready",
+                                "validation_mode": "strict",
+                                "parameters": {"count": {"type": "integer", "min": 1, "max": 1}},
+                                "inputs": {"prompt": {"media_type": "text", "min": 1, "max": 1}},
+                            },
+                            "cn": {
+                                "model_id": "shared-image",
+                                "node_type": "image_generation",
+                                "family_id": "shared-image-family",
+                                "runnable": True,
+                                "readiness": "ready",
+                                "validation_mode": "strict",
+                                "parameters": {"count": {"type": "integer", "min": 1, "max": 2}},
+                                "inputs": {"prompt": {"media_type": "text", "min": 1, "max": 1}},
+                            },
+                        },
+                        "parameters": {"count": {"type": "integer", "min": 1, "max": 4}},
+                        "inputs": {"prompt": {"media_type": "text", "min": 1, "max": 1}},
+                    },
+                ],
+            },
         ],
     }
 
@@ -134,16 +179,18 @@ class HypitModelsTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail(f"request did not reach {expected}: {value}")
 
-    def test_defaults_have_no_keys_and_project_binding_is_pinned(self):
+    def test_module_settings_are_shared_and_binding_is_compatibility_read(self):
         with TestClient(self.app) as client:
             initial = client.get("/api/studio/hypit/models/settings")
             self.assertEqual(initial.status_code, 200, initial.text)
             self.assertNotIn("api_key", initial.text.lower())
             self.assertEqual(initial.json()["defaults"]["image"]["provider"], "")
+            self.assertEqual(initial.json()["revision"], 1)
 
             saved = client.put(
                 "/api/studio/hypit/models/settings",
                 json={
+                    "expected_revision": initial.json()["revision"],
                     "defaults": {
                         "image": {
                             "provider": "provider-a",
@@ -160,16 +207,34 @@ class HypitModelsTests(unittest.TestCase):
             )
             self.assertEqual(saved.status_code, 200, saved.text)
             self.assertNotIn("api_key", saved.text.lower())
+            self.assertEqual(saved.json()["revision"], 2)
 
             first = client.get(
                 "/api/studio/hypit/models/projects/project-a/binding"
             )
             self.assertEqual(first.status_code, 200, first.text)
             self.assertEqual(first.json()["defaults"]["image"]["model"], "image-1")
+            self.assertEqual(first.json()["revision"], saved.json()["revision"])
+            self.assertEqual(first.json()["source"], "module_settings")
+
+            legacy_path = self.root / "data" / "hypit_bindings" / "project-a.json"
+            legacy_path.parent.mkdir(parents=True, exist_ok=True)
+            legacy_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "project_id": "project-a",
+                        "defaults": {"image": {"provider": "provider-a", "model": "image-1", "parameters": {}}},
+                        "revision": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             changed = client.put(
                 "/api/studio/hypit/models/settings",
                 json={
+                    "expected_revision": saved.json()["revision"],
                     "defaults": {
                         "image": {
                             "provider": "provider-a",
@@ -184,8 +249,18 @@ class HypitModelsTests(unittest.TestCase):
                 "/api/studio/hypit/models/projects/project-a/binding"
             )
             self.assertEqual(pinned.status_code, 200, pinned.text)
-            self.assertEqual(pinned.json()["defaults"]["image"]["model"], "image-1")
-            self.assertTrue((self.root / "data" / "hypit_bindings" / "project-a.json").is_file())
+            self.assertEqual(pinned.json()["defaults"]["image"]["model"], "image-2")
+            self.assertEqual(pinned.json()["revision"], changed.json()["revision"])
+            self.assertEqual(json.loads(legacy_path.read_text(encoding="utf-8"))["defaults"]["image"]["model"], "image-1")
+
+            stale_settings = client.put(
+                "/api/studio/hypit/models/settings",
+                json={
+                    "expected_revision": saved.json()["revision"],
+                    "defaults": {"image": {"provider": "provider-a", "model": "image-1", "parameters": {}}},
+                },
+            )
+            self.assertEqual(stale_settings.status_code, 409, stale_settings.text)
 
     def test_project_binding_update_rejects_stale_revision(self):
         with TestClient(self.app) as client:
@@ -199,7 +274,8 @@ class HypitModelsTests(unittest.TestCase):
             self.assertEqual(client.put(url, json=payload).status_code, 409)
             self.assertEqual(client.get(url).json()['defaults']['image']['model'], 'image-1')
             other = client.get('/api/studio/hypit/models/projects/project-b/binding').json()
-            self.assertEqual(other['defaults']['image']['model'], '')
+            self.assertEqual(other['defaults']['image']['model'], 'image-1')
+            self.assertEqual(other['revision'], updated.json()['revision'])
 
     def test_only_enabled_model_ids_are_accepted(self):
         with TestClient(self.app) as client:
@@ -217,6 +293,72 @@ class HypitModelsTests(unittest.TestCase):
             )
             self.assertEqual(response.status_code, 400)
             self.assertIn("启用", response.text)
+
+    def test_runninghub_region_is_saved_projected_and_required_when_ambiguous(self):
+        with TestClient(self.app) as client:
+            setup = client.put(
+                "/api/studio/hypit/models/settings",
+                json={
+                    "defaults": {
+                        "image": {
+                            "provider": "runninghub",
+                            "model": "shared-image",
+                            "region": "cn",
+                            "parameters": {"count": 2},
+                        }
+                    }
+                },
+            )
+            self.assertEqual(setup.status_code, 200, setup.text)
+            self.assertEqual(setup.json()["defaults"]["image"]["region"], "cn")
+
+            payload = {
+                "request_id": "runninghub-cn",
+                "capability": {"module": {"name": "@laohu/studio-models", "version": "1"}, "name": "image-generation"},
+                "constraints": {"kind": "image", "prompt": "a red fox"},
+            }
+            submitted = client.post(
+                "/api/studio/hypit/models/projects/project-a/requests", json=payload
+            )
+            self.assertEqual(submitted.status_code, 200, submitted.text)
+            self.wait_for_status(client, "project-a", "runninghub-cn", "succeeded")
+            validate_request = [call[1] for call in self.calls if call[0] == "validate"][-1]
+            generate_request = [call[1] for call in self.calls if call[0] == "generate"][-1]
+            self.assertEqual(validate_request["region"], "cn")
+            self.assertEqual(generate_request["region"], "cn")
+
+            ambiguous = client.put(
+                "/api/studio/hypit/models/settings",
+                json={
+                    "defaults": {
+                        "image": {
+                            "provider": "runninghub",
+                            "model": "shared-image",
+                            "parameters": {"count": 1},
+                        }
+                    }
+                },
+            )
+            self.assertEqual(ambiguous.status_code, 400, ambiguous.text)
+            self.assertIn("region", ambiguous.text.lower())
+
+            explicit_global = client.post(
+                "/api/studio/hypit/models/projects/project-a/requests",
+                json={
+                    **payload,
+                    "request_id": "runninghub-global",
+                    "constraints": {
+                        "kind": "image",
+                        "prompt": "a blue fox",
+                        "region": "global",
+                        "parameters": {"count": 1},
+                    },
+                },
+            )
+            self.assertEqual(explicit_global.status_code, 200, explicit_global.text)
+            self.wait_for_status(client, "project-a", "runninghub-global", "succeeded")
+            explicit_request = [call[1] for call in self.calls if call[0] == "validate"][-1]
+            self.assertEqual(explicit_request["region"], "global")
 
     def test_native_projection_keeps_media_roles_and_rejects_music(self):
         with TestClient(self.app) as client:
@@ -302,10 +444,44 @@ class HypitModelsTests(unittest.TestCase):
             self.assertEqual(repeat.json()["task_id"], done["task_id"])
             self.assertEqual(len([call for call in self.calls if call[0] == "generate"]), 1)
 
+            current_settings = client.get("/api/studio/hypit/models/settings").json()
+            changed = client.put(
+                "/api/studio/hypit/models/settings",
+                json={
+                    "expected_revision": current_settings["revision"],
+                    "defaults": {
+                        "image": {
+                            "provider": "provider-a",
+                            "model": "image-2",
+                            "parameters": {"count": 1},
+                        }
+                    },
+                },
+            )
+            self.assertEqual(changed.status_code, 200, changed.text)
+            after_setting_change = client.post(
+                "/api/studio/hypit/models/projects/project-a/requests", json=payload
+            )
+            self.assertEqual(after_setting_change.status_code, 200, after_setting_change.text)
+            self.assertEqual(after_setting_change.json()["task_id"], done["task_id"])
+            self.assertEqual(after_setting_change.json()["request"]["model"], "image-1")
+            self.assertEqual(len([call for call in self.calls if call[0] == "generate"]), 1)
+
+            different_input = {
+                **payload,
+                "constraints": {**payload["constraints"], "prompt": "a blue fox"},
+            }
+            conflict = client.post(
+                "/api/studio/hypit/models/projects/project-a/requests", json=different_input
+            )
+            self.assertEqual(conflict.status_code, 409, conflict.text)
+            self.assertIn("不同输入", conflict.text)
+
             other = client.post(
                 "/api/studio/hypit/models/projects/project-b/requests", json=payload
             )
             self.assertEqual(other.status_code, 200, other.text)
+            self.assertEqual(other.json()["request"]["model"], "image-2")
             self.wait_for_status(client, "project-b", "same-request", "succeeded")
             self.assertEqual(len([call for call in self.calls if call[0] == "generate"]), 2)
 

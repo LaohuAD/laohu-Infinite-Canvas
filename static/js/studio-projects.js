@@ -451,7 +451,7 @@
             const project = projectById(action.dataset.projectId);
             if(!project) return;
             const type = action.dataset.cardAction;
-            if(type === 'models') window.open('/static/api-settings.html?hypit_project='+encodeURIComponent(project.id),'_blank','noopener');
+            if(type === 'models') window.open('/static/api-settings.html?section=hypit','_blank','noopener');
             if(type === 'open') openProject(project);
             if(type === 'rename') renameProject(project);
             if(type === 'delete') deleteProject(project);

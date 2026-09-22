@@ -104,7 +104,7 @@ class AiMoneyUiTests(unittest.TestCase):
         ]
         for link in expected_links:
             self.assertIn(link, html)
-        self.assertIn("老胡用AI画梦", html)
+        self.assertIn("老胡画梦枋", html)
         self.assertNotIn("dx-letter", html)
         self.assertNotIn("frame-online", html)
         self.assertNotIn("frame-gpt-chat", html)

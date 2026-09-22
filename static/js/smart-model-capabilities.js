@@ -5,10 +5,31 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function(){
     'use strict';
 
-    function providersForNodeType(catalog, nodeType){
+    function normalizeRegion(value){
+        const region = String(value || '').trim().toLowerCase();
+        return region === 'cn' || region === 'global' ? region : '';
+    }
+
+    function profileForRegion(model, region=''){
+        const rawRegion = String(region || '').trim().toLowerCase();
+        const wanted = normalizeRegion(rawRegion);
+        if(!rawRegion || !model || typeof model !== 'object') return model || null;
+        if(!wanted) return null;
+        const regions = Array.isArray(model.regions)
+            ? model.regions.map(normalizeRegion).filter(Boolean)
+            : [];
+        if(regions.length && !regions.includes(wanted)) return null;
+        const scoped = model.region_profiles?.[wanted];
+        if(scoped && typeof scoped === 'object') return {...model, ...scoped, region:wanted};
+        return regions.length ? {...model, region:wanted} : model;
+    }
+
+    function providersForNodeType(catalog, nodeType, region=''){
         return (catalog?.providers || []).map(provider => ({
             ...provider,
-            models:(provider.models || []).filter(model => model.node_type === nodeType)
+            models:(provider.models || [])
+                .map(model => profileForRegion(model, region))
+                .filter(model => model && model.node_type === nodeType)
         })).filter(provider => provider.models.length);
     }
 
@@ -91,7 +112,9 @@
         return !declared || declared === requested;
     }
 
-    function modelSupportsInputs(model, inputCounts={}, inputRoles={}, parameters={}){
+    function modelSupportsInputs(model, inputCounts={}, inputRoles={}, parameters={}, region=''){
+        model = profileForRegion(model, region);
+        if(!model) return false;
         if(model?.validation_mode !== 'strict') return false;
         if(model?.readiness && model.readiness !== 'ready') return false;
         if(model?.runnable === false) return false;
@@ -130,9 +153,9 @@
         return Object.entries(roleMediaCounts).every(([mediaType, count]) => count <= (Number(inputCounts?.[mediaType]) || 0));
     }
 
-    function modelsForInputs(catalog, nodeType, inputCounts={}, inputRoles={}, parameters={}){
-        return providersForNodeType(catalog, nodeType).flatMap(provider =>
-            provider.models.filter(model => modelSupportsInputs(model, inputCounts, inputRoles, parameters)).map(model => ({
+    function modelsForInputs(catalog, nodeType, inputCounts={}, inputRoles={}, parameters={}, region=''){
+        return providersForNodeType(catalog, nodeType, region).flatMap(provider =>
+            provider.models.filter(model => modelSupportsInputs(model, inputCounts, inputRoles, parameters, region)).map(model => ({
                 ...model,
                 provider_id:provider.id,
                 provider_name:provider.name,
@@ -141,11 +164,11 @@
         );
     }
 
-    function modelsForVerifiedInputs(catalog, nodeType, inputCounts={}, inputRoles={}, parameters={}){
-        return providersForNodeType(catalog, nodeType).flatMap(provider =>
+    function modelsForVerifiedInputs(catalog, nodeType, inputCounts={}, inputRoles={}, parameters={}, region=''){
+        return providersForNodeType(catalog, nodeType, region).flatMap(provider =>
             provider.models.filter(model => {
                 if(model?.validation_mode !== 'strict') return false;
-                return modelSupportsInputs(model, inputCounts, inputRoles, parameters);
+                return modelSupportsInputs(model, inputCounts, inputRoles, parameters, region);
             }).map(model => ({
                 ...model,
                 provider_id:provider.id,
@@ -155,12 +178,14 @@
         );
     }
 
-    function compatibleFamilyVariants(family, inputCounts={}, inputRoles={}, parameters={}){
-        return (family?.variants || []).filter(model => modelSupportsInputs(model, inputCounts, inputRoles, parameters));
+    function compatibleFamilyVariants(family, inputCounts={}, inputRoles={}, parameters={}, region=''){
+        return (family?.variants || [])
+            .map(model => profileForRegion(model, region))
+            .filter(model => model && modelSupportsInputs(model, inputCounts, inputRoles, parameters, region));
     }
 
-    function resolveFamilyVariant(family, inputCounts={}, operation='', inputRoles={}, parameters={}){
-        const variants = compatibleFamilyVariants(family, inputCounts, inputRoles, parameters).filter(model => {
+    function resolveFamilyVariant(family, inputCounts={}, operation='', inputRoles={}, parameters={}, region=''){
+        const variants = compatibleFamilyVariants(family, inputCounts, inputRoles, parameters, region).filter(model => {
             if(!operation) return true;
             return model.operation === operation || model.variant_id === operation || model.model_id === operation;
         });
@@ -177,12 +202,12 @@
         return exact.length === 1 ? exact[0] : null;
     }
 
-    function familiesForInputs(catalog, nodeType, inputCounts={}, providerId='', operation='', inputRoles={}, parameters={}){
+    function familiesForInputs(catalog, nodeType, inputCounts={}, providerId='', operation='', inputRoles={}, parameters={}, region=''){
         return (catalog?.providers || []).filter(provider => !providerId || provider.id === providerId).flatMap(provider =>
             (provider.families || []).filter(family => family.node_type === nodeType).map(family => {
-                const compatibleVariants = compatibleFamilyVariants(family, inputCounts, inputRoles, parameters);
+                const compatibleVariants = compatibleFamilyVariants(family, inputCounts, inputRoles, parameters, region);
                 if(!compatibleVariants.length) return null;
-                const resolved = resolveFamilyVariant(family, inputCounts, operation, inputRoles, parameters);
+                const resolved = resolveFamilyVariant(family, inputCounts, operation, inputRoles, parameters, region);
                 return {
                     ...family,
                     provider_id:provider.id,
@@ -197,7 +222,7 @@
 
     // 选择器可以跨平台读取候选，但这里只按能力档案中的真实 family_id 合并。
     // 不使用 display_name 推断不同平台的模型等价关系，避免把不同协议误合并。
-    function familiesAcrossProviders(catalog, nodeType, inputCounts={}, providerIds=[], operation='', inputRoles={}, parameters={}){
+    function familiesAcrossProviders(catalog, nodeType, inputCounts={}, providerIds=[], operation='', inputRoles={}, parameters={}, region=''){
         const allowed = new Set((Array.isArray(providerIds) ? providerIds : [providerIds])
             .map(value => String(value || '').trim())
             .filter(Boolean));
@@ -205,7 +230,7 @@
         (catalog?.providers || []).forEach(provider => {
             const providerId = String(provider?.id || '').trim();
             if(!providerId || (allowed.size && !allowed.has(providerId))) return;
-            const families = familiesForInputs(catalog, nodeType, inputCounts, providerId, operation, inputRoles, parameters);
+            const families = familiesForInputs(catalog, nodeType, inputCounts, providerId, operation, inputRoles, parameters, region);
             families.forEach(family => {
                 const familyId = String(family?.family_id || '').trim();
                 if(!familyId) return;
@@ -244,14 +269,14 @@
                     item.compatible_variants.push(variant);
                     item.variants.push(variant);
                 });
-                item.resolved_variant = resolveFamilyVariant(item, inputCounts, operation, inputRoles, parameters);
+                item.resolved_variant = resolveFamilyVariant(item, inputCounts, operation, inputRoles, parameters, region);
             });
         });
         return [...merged.values()];
     }
 
-    function variantsAcrossProviders(catalog, nodeType, familyId, inputCounts={}, providerIds=[], operation='', inputRoles={}, parameters={}){
-        const family = familiesAcrossProviders(catalog, nodeType, inputCounts, providerIds, operation, inputRoles, parameters)
+    function variantsAcrossProviders(catalog, nodeType, familyId, inputCounts={}, providerIds=[], operation='', inputRoles={}, parameters={}, region=''){
+        const family = familiesAcrossProviders(catalog, nodeType, inputCounts, providerIds, operation, inputRoles, parameters, region)
             .find(item => item.family_id === familyId);
         return family ? [...(family.compatible_variants || [])] : [];
     }
@@ -265,16 +290,28 @@
             || String(variant?.model_id || '').trim();
     }
 
-    function familyForModel(provider, modelId, nodeType=''){
+    function matchesSearch(value, query){
+        const tokens = String(query || '').trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+        if(!tokens.length) return true;
+        const haystack = String(value || '').toLocaleLowerCase();
+        return tokens.every(token => haystack.includes(token));
+    }
+
+    function familyForModel(provider, modelId, nodeType='', region=''){
         return (provider?.families || []).find(family =>
             (!nodeType || family.node_type === nodeType) &&
-            (family.variants || []).some(variant => variant.model_id === modelId)
+            (family.variants || []).some(variant => {
+                const profile = profileForRegion(variant, region);
+                return profile?.model_id === modelId;
+            })
         ) || null;
     }
 
-    function findModel(catalog, providerId, modelId, nodeType=''){
+    function findModel(catalog, providerId, modelId, nodeType='', region=''){
         const provider = (catalog?.providers || []).find(item => item.id === providerId);
-        return (provider?.models || []).find(model => model.model_id === modelId && (!nodeType || model.node_type === nodeType)) || null;
+        return (provider?.models || [])
+            .map(model => profileForRegion(model, region))
+            .find(model => model && model.model_id === modelId && (!nodeType || model.node_type === nodeType)) || null;
     }
 
     function effectiveParameters(profile, values={}){
@@ -404,6 +441,8 @@
 
     return Object.freeze({
         providersForNodeType,
+        normalizeRegion,
+        profileForRegion,
         mediaLimits,
         normalizeInputRole,
         roleLimits,
@@ -422,6 +461,7 @@
         familiesAcrossProviders,
         variantsAcrossProviders,
         variantSelectionKey,
+        matchesSearch,
         resolveVideoExecutionMode,
         capabilitySnapshot,
         buildVideoRequest,
