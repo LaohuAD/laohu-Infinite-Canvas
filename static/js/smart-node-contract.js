@@ -1019,7 +1019,7 @@
         if(type === NODE_TYPES.videoGenerator) return '视频生成';
         if(type === NODE_TYPES.audioGenerator) return '音频生成';
         if(type === NODE_TYPES.musicGenerator) return '音乐生成';
-        if(type === NODE_TYPES.aiApp) return 'RunningHub ComfyUI';
+        if(type === NODE_TYPES.aiApp) return 'AI 应用';
         if(type === NODE_TYPES.comfyWorkflow) return '本地 ComfyUI';
         if(type === NODE_TYPES.imageCompare) return '图像对比';
         if(type === NODE_TYPES.resultGroup) return '结果组';

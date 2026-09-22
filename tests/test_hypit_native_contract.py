@@ -17,6 +17,18 @@ from hypit_runtime import HypitRuntime
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class NativeThemeAssetTests(unittest.TestCase):
+    def test_native_theme_asset_covers_light_dark_and_internal_surfaces(self):
+        theme = (ROOT / 'static/css/hypit-native-theme.css').read_text(encoding='utf-8')
+        self.assertIn(':root[data-laohu-theme="dark"]', theme)
+        self.assertIn('--app: #f7f3eb', theme)
+        self.assertIn('--interaction-accent: #7891a4', theme)
+        self.assertIn('.topbar', theme)
+        self.assertIn('.timeline-panel', theme)
+        self.assertIn('.parameter-select-menu', theme)
+        self.assertIn('@media (prefers-reduced-motion: reduce)', theme)
+
+
 @unittest.skipUnless(os.environ.get('STUDIO_NATIVE_HYPIT_TESTS') == '1', '原生 Hypit 验收需要显式启用')
 class NativeHypitContractTests(unittest.TestCase):
     def test_native_author_http_endpoint_and_media_result_contract(self):

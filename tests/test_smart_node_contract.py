@@ -190,7 +190,8 @@ console.log(JSON.stringify({
             source.index("async function runMinimaxNode")
         ]
 
-        self.assertIn("runningHubEntries('app')", adapter)
+        self.assertIn("runningHubEntries('app', {rhRegion:region})", adapter)
+        self.assertIn("adapter.region", adapter)
         self.assertIn("comfyWorkflows", adapter)
         self.assertNotIn("runningHubEntries('workflow')", adapter)
         self.assertIn("key:'engine'", renderer)
@@ -438,18 +439,18 @@ console.log(JSON.stringify({
         video = source[source.index("function renderApiVideoParams"):source.index("function renderApiAudioParams")]
         audio = source[source.index("function renderApiAudioParams"):source.index("function renderVolcengineParams")]
 
-        self.assertIn("renderExecutionPlatformControl('image', providers)", image)
-        self.assertIn("renderExecutionPlatformControl('video', providers)", video)
-        self.assertIn("renderExecutionPlatformControl('audio', providers)", audio)
-        self.assertIn("data-execution-platform", source)
-        self.assertIn("data-execution-family", source)
+        self.assertIn("renderCapabilityModelPicker(selection, descriptor)", image)
+        self.assertIn("renderCapabilityModelPicker(selection, descriptor)", video)
+        self.assertIn("renderCapabilityModelPicker(selection, descriptor)", audio)
+        self.assertIn("region: data.region || ''", source)
+        self.assertIn("data-capability-picker-option", source)
         self.assertIn("if(!settings.provider_id)", image)
         self.assertNotIn("!providers.some", image)
         self.assertIn("if(!settings.videoProvider)", video)
         self.assertNotIn("!providers.some", video)
         self.assertIn("if(!settings.audioProvider)", audio)
         self.assertNotIn("!providers.some", audio)
-        self.assertIn("configuredCapabilityModelIds(providerId, nodeType)", source)
+        self.assertIn("configuredCapabilityModelIds(providerId, nodeType, region)", source)
         self.assertIn("enabledIds.has(String(variant.model_id", source)
 
     def test_generation_error_toast_is_centered_and_opens_logs(self):
@@ -548,6 +549,7 @@ let settings={}, recentSmartSettingsByMode={}, selectedId='', nodes=[];
 const canvasDefaultSmartSettings={engine:'api',provider_id:'platform',model:'initial',count:1};
 const initialSmartSettings=canvasDefaultSmartSettings;
 const saveRecentSmartSettings=()=>{};
+const capabilityRegionForProvider=()=>'';
 const capabilityProfileFor=()=>null;
 const sanitizeSmartApiSelection=()=>{};
 const ensureExecutionSelectionDefaults=(s,n,opts)=>{if(opts.resetSelection)s.model='initial';};
@@ -608,6 +610,8 @@ console.log(JSON.stringify({ok:true}));
 const assert=require('node:assert/strict');
 const executionSelectionDescriptor=()=>({kind:'image',nodeType:'image_generation',providerKey:'provider_id',modelKey:'model',familyKey:'imageFamilyId'});
 const executionSelectionInputState=()=>({inputCounts:{text:1},inputRoles:[]});
+const capabilityRegionForProvider=()=>'';
+const capabilityProfileFor=()=>null;
 const capabilityParameterIntent=()=>({style:'manga',webSearch:false,outputFormat:'png'});
 const executionCompatibleProviderIds=(d,c,r,p)=>Object.keys(p).length?[]:['other-platform'];
 const resolveCapabilityFamilySelection=(p,t,c,f,m,s,r,parameters)=>{
@@ -731,8 +735,8 @@ console.log(JSON.stringify({ok:true}));
         self.assertNotIn("data-capability-drag-handle", renderer)
         self.assertIn("${renderCapabilityModelHelp(profile)}${settingsControl}", panel)
         self.assertIn("data-capability-option-sort", source)
-        self.assertIn("data-capability-option-drag-handle", reorder)
-        self.assertIn("handle.addEventListener('pointerdown'", reorder)
+        self.assertNotIn("data-capability-option-drag-handle", reorder)
+        self.assertNotIn("document.createElement('span')", source[source.index("function bindCapabilityOptionSort"):source.index("function preferenceListButtons")])
         self.assertIn("function capabilityOptionLayout", reorder)
         self.assertIn("function capabilityOptionVerticalInsertionTarget", reorder)
         self.assertIn("if(layout === 'vertical') return capabilityOptionVerticalInsertionTarget(items, clientY);", reorder)
@@ -749,7 +753,6 @@ console.log(JSON.stringify({ok:true}));
         self.assertIn("function finishPreferencePointerDrag", reorder)
         self.assertIn("function cancelPreferencePointerDrag", reorder)
         self.assertIn("handle.closest('button[data-preference-id]')", reorder)
-        self.assertIn("pointerdown", reorder)
         self.assertIn("pointermove", reorder)
         self.assertIn("pointerup", reorder)
         self.assertIn("preference-drag-preview", reorder)
@@ -1171,7 +1174,8 @@ console.log(JSON.stringify(request));
         ]
 
         self.assertIn("textGenerationCandidateInputCounts(request)", candidate_filter)
-        self.assertIn("configuredCapabilityModelIds(model.provider_id, 'text_generation')", candidate_filter)
+        self.assertIn("const sourceSettings = node?.runSettings || settings", candidate_filter)
+        self.assertIn("configuredCapabilityModelIds(model.provider_id, 'text_generation', region)", candidate_filter)
         self.assertIn("enabledIds.has(String(model.model_id", candidate_filter)
         self.assertIn("const inputCounts = textGenerationCandidateInputCounts(request)", renderer)
         self.assertIn("resolveCapabilityFamilySelection(settings.textProvider, 'text_generation', inputCounts", renderer)
@@ -1345,7 +1349,7 @@ console.log(JSON.stringify({
 """
         data = run_node(script)
 
-        self.assertEqual(data["title"], "RunningHub ComfyUI")
+        self.assertEqual(data["title"], "AI 应用")
         self.assertEqual(data["kinds"], ["app"])
         self.assertEqual(data["localTitle"], "本地 ComfyUI")
         self.assertEqual(data["localSettings"]["engine"], "comfy")
@@ -1355,7 +1359,11 @@ console.log(JSON.stringify({
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
 
         picker = source[source.index("function renderRhConfigControl"):source.index("function renderRhPaymentControl")]
-        self.assertIn("const apps = runningHubEntries('app')", picker)
+        self.assertIn("runningHubEnabledRegions()", picker)
+        self.assertIn("runningHubEntries('app', {...settings, rhRegion:region})", picker)
+        self.assertIn("data-rh-region", picker)
+        self.assertIn("RunningHub · CN", picker)
+        self.assertIn("RunningHub · AI", picker)
         self.assertIn("data-smart-param=\"rhConfigKey\"", picker)
         self.assertNotIn("runningHubEntries('workflow')", picker)
         self.assertNotIn("data-rh-app-id-input", picker)
@@ -1364,9 +1372,12 @@ console.log(JSON.stringify({
     def test_runninghub_canvas_passes_selected_region_to_runtime_requests(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
 
-        self.assertIn("function runningHubRegion()", source)
-        self.assertIn("region:runningHubRegion()", source)
-        self.assertIn("&region=${encodeURIComponent(runningHubRegion())}", source)
+        self.assertIn("function runningHubRegion(sourceSettings=null)", source)
+        self.assertIn("runningHubRegion(runSettings)", source)
+        self.assertIn("rhRegion", source)
+        self.assertIn("runningHubProviderForRegion", source)
+        self.assertIn("runningHubWorkflowCacheKey", source)
+        self.assertNotIn("&region=${encodeURIComponent(runningHubRegion())}", source)
 
     def test_api_settings_runninghub_registry_only_accepts_ai_apps(self):
         html = (ROOT / "static/api-settings.html").read_text(encoding="utf-8")
@@ -1374,7 +1385,8 @@ console.log(JSON.stringify({
         css = (ROOT / "static/css/api-settings.css").read_text(encoding="utf-8")
 
         self.assertIn('id="runninghubConfigBlock"', html)
-        self.assertIn('id="rhAppsList"', html)
+        self.assertIn('id="rhGlobalAppsList"', html)
+        self.assertIn('id="rhCnAppsList"', html)
         self.assertNotIn('id="rhWorkflowsList"', html)
         runninghub_block = html[html.index('id="runninghubConfigBlock"'):html.index('id="modelsHead"')]
         self.assertIn("AI 应用", runninghub_block)
@@ -1383,9 +1395,9 @@ console.log(JSON.stringify({
         self.assertIn("if(/^[0-9A-Za-z_-]{4,}$/.test(text)) return { type:'app', id:text }", source)
         create_entry = source[source.index("async function createRhEntryFromPaste"):source.index("function updateRhEntry")]
         self.assertIn("parsed.type !== 'app'", create_entry)
-        self.assertIn("const listKey = 'rh_apps'", create_entry)
+        self.assertIn("runningHubRegionEntries(item, targetRegion, 'app')", create_entry)
         self.assertNotIn("'rh_workflows'", create_entry)
-        self.assertIn("await syncRhAppFromOfficial(targetIndex)", create_entry)
+        self.assertIn("await syncRhAppFromOfficial(targetIndex, targetRegion)", create_entry)
         self.assertNotIn("openRhAppEditor(targetIndex)", create_entry)
         self.assertIn("function syncRhAppFromOfficial", source)
         self.assertIn("entry.title = officialTitle", source)
@@ -1453,7 +1465,7 @@ console.log(JSON.stringify({
 
     def test_runninghub_region_switch_clears_stale_picker_catalog(self):
         source = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
-        switch_block = source[source.index("function changeRunningHubRegion"):source.index("function broadcastStudioApiChange")]
+        switch_block = source[source.index("function selectRunningHubModelRegion"):source.index("function updateRunningHubKeyInput")]
 
         self.assertIn("clearFetchedModelState();", switch_block)
         self.assertIn("function clearFetchedModelState()", source)
@@ -1930,7 +1942,7 @@ console.log(JSON.stringify({
         css = (ROOT / "static/css/smart-canvas.css").read_text(encoding="utf-8")
 
         menu = html[html.index('<div id="createMenu"'):html.index('<input id="fileInput"')]
-        headings = ["添加资源", "常规节点", "ComfyUI 节点", "工具节点"]
+        headings = ["添加资源", "常规节点", "应用与工作流", "工具节点"]
         self.assertEqual([menu.index(heading) for heading in headings], sorted(menu.index(heading) for heading in headings))
         regular_types = ["prompt", "image-generator", "video-generator", "audio-generator", "music-generator"]
         self.assertEqual(
@@ -3094,7 +3106,8 @@ console.log(JSON.stringify({explicit,resolved}));
             ("function renderApiAudioParams", "function renderVolcengineParams"),
         ):
             renderer = source[source.index(renderer_name):source.index(next_name)]
-            self.assertIn("renderCapabilityVariantControl", renderer)
+            self.assertIn("renderCapabilityModelPicker(selection, descriptor)", renderer)
+            self.assertNotIn("renderCapabilityVariantControl", renderer)
         video_renderer = source[
             source.index("function renderApiVideoParams"):
             source.index("function renderApiAudioParams")
@@ -3102,9 +3115,9 @@ console.log(JSON.stringify({explicit,resolved}));
         self.assertIn("videoCapabilityInputRoles(refs, settings, true)", video_renderer)
         self.assertIn("renderVideoInputModeControl(profile, refs)", video_renderer)
         self.assertIn("data-video-input-mode", source)
-        self.assertIn("function resolveCapabilityForRun(providerId, nodeType, inputCounts, familyId='', legacyModelId='', operation='', inputRoles={}, parameters={})", source)
-        self.assertIn("resolveCapabilityFamilySelection(providerId, nodeType, inputCounts, familyId, legacyModelId, operation, inputRoles, parameters)", source)
-        self.assertIn("capabilityProvidersFor(descriptor.nodeType, inputCounts, [], inputRoles, parameters)", source)
+        self.assertIn("function resolveCapabilityForRun(providerId, nodeType, inputCounts, familyId='', legacyModelId='', operation='', inputRoles={}, parameters={}, region='')", source)
+        self.assertIn("resolveCapabilityFamilySelection(providerId, nodeType, inputCounts, familyId, legacyModelId, operation, inputRoles, parameters, region)", source)
+        self.assertIn("capabilityProvidersFor(descriptor.nodeType, inputCounts, [], inputRoles, parameters, region)", source)
         self.assertIn("capabilityParameterIntent(runSettings.videoProvider, runSettings.videoModel, 'video_generation', runSettings)", source)
         text_renderer = source[
             source.index("function renderTextGenerationParams"):

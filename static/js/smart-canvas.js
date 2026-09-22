@@ -1229,7 +1229,7 @@ function manualExecutionSettingsSnapshot(node, source){
         snapshot.comfyParams = Object.fromEntries(Object.entries(snapshot.comfyParams || {}).filter(([key]) => allowed.has(key)));
     }
     if(descriptor){
-        const profile = capabilityProfileFor(source[descriptor.providerKey], source[descriptor.modelKey], descriptor.nodeType);
+        const profile = capabilityProfileFor(source[descriptor.providerKey], source[descriptor.modelKey], descriptor.nodeType, capabilityRegionForProvider(source[descriptor.providerKey], source));
         const parameters = profile ? capabilityParameterValues(profile, source) : source.capabilityParameters?.[source[descriptor.modelKey]] || {};
         // 素材、正文及上一任务引用不属于可复用的模型设置。
         const reusable = Object.fromEntries(Object.entries(parameters).filter(([key]) => !/^(prompt|text|lyrics|instructions|input|(?:(?:source|upstream)_?)?task_?id|reference_?urls?)$/i.test(key)));
@@ -3164,7 +3164,7 @@ function selectExecutionPlatform(providerId){
     const previousFamily = descriptor ? String(settings[descriptor.familyKey] || '') : '';
     const previousModel = descriptor ? String(settings[descriptor.modelKey] || '') : '';
     const previousProfile = descriptor && previousModel
-        ? capabilityProfileFor(previousProvider, previousModel, descriptor.nodeType)
+        ? capabilityProfileFor(previousProvider, previousModel, descriptor.nodeType, capabilityRegionForProvider(previousProvider, settings))
         : null;
     const previousVariantKey = previousProfile ? capabilityPickerVariantKey(previousProfile) : '';
     if(providerId === 'modelscope') settings.engine = 'modelscope';
@@ -3232,7 +3232,8 @@ function selectExecutionPlatform(providerId){
                 '',
                 '',
                 inputRoles,
-                parameterIntent
+                parameterIntent,
+                capabilityRegionForProvider(providerId, settings)
             );
             settings[descriptor.familyKey] = providerSelection.family?.family_id || '';
             settings[descriptor.modelKey] = providerSelection.profile?.model_id || '';
@@ -3288,11 +3289,14 @@ function capabilityInputCounts(apiKind, node=activeSettingsSubject()){
         audio:audioRefsOnly(refs).length
     };
 }
-function capabilityProviderEntry(providerId, nodeType, inputCounts, inputRoles={}, parameters={}){
+function capabilityRegionForProvider(providerId, sourceSettings=settings){
+    return providerId === 'runninghub' ? runningHubRegion(sourceSettings) : '';
+}
+function capabilityProviderEntry(providerId, nodeType, inputCounts, inputRoles={}, parameters={}, region=''){
     const provider = (modelCapabilityCatalog.providers || []).find(item => item.id === providerId);
     if(!provider) return null;
-    const models = window.SmartModelCapabilities?.modelsForInputs(modelCapabilityCatalog, nodeType, inputCounts, inputRoles, parameters)
-        .filter(model => model.provider_id === providerId && configuredCapabilityModelIds(providerId, nodeType).has(String(model.model_id || ''))) || [];
+    const models = window.SmartModelCapabilities?.modelsForInputs(modelCapabilityCatalog, nodeType, inputCounts, inputRoles, parameters, region)
+        .filter(model => model.provider_id === providerId && configuredCapabilityModelIds(providerId, nodeType, region).has(String(model.model_id || ''))) || [];
     if(!models.length) return null;
     return {
         ...provider,
@@ -3309,38 +3313,46 @@ function capabilityProviderEnabled(providerId){
     const provider = capabilityProviderConfig(providerId);
     return Boolean(provider && provider.enabled !== false);
 }
-function configuredCapabilityModelIds(providerId, nodeType){
+function configuredCapabilityModelIds(providerId, nodeType, region=''){
     const provider = capabilityProviderConfig(providerId);
     if(!provider || provider.enabled === false) return new Set();
     const key = nodeType === 'text_generation' ? 'chat_models'
         : nodeType === 'video_generation' ? 'video_models'
         : ['audio_generation','music_generation'].includes(nodeType) ? 'audio_models'
         : 'image_models';
+    if(providerId === 'runninghub' && provider.rh_regions && typeof provider.rh_regions === 'object' && !Array.isArray(provider.rh_regions)){
+        const requestedRegion = String(region || '').trim().toLowerCase();
+        const regionKeys = requestedRegion
+            ? (['global','cn'].includes(requestedRegion) ? [requestedRegion] : [])
+            : runningHubEnabledRegions(provider);
+        return new Set(regionKeys.flatMap(regionKey => provider.rh_regions?.[regionKey]?.[key] || [])
+            .map(model => String(model || '').trim()).filter(Boolean));
+    }
     return new Set((provider[key] || []).map(model => String(model || '').trim()).filter(Boolean));
 }
-function capabilityEnabledProviderIds(nodeType){
+function capabilityEnabledProviderIds(nodeType, region=''){
     return (modelCapabilityCatalog.providers || [])
         .filter(provider => !['modelscope','volcengine'].includes(provider.id))
         .filter(provider => capabilityProviderEnabled(provider.id))
-        .filter(provider => configuredCapabilityModelIds(provider.id, nodeType).size)
+        .filter(provider => configuredCapabilityModelIds(provider.id, nodeType, region).size)
         .map(provider => provider.id);
 }
-function capabilityProvidersFor(nodeType, inputCounts, fallback=[], inputRoles={}, parameters={}){
+function capabilityProvidersFor(nodeType, inputCounts, fallback=[], inputRoles={}, parameters={}, region=''){
     const entries = [];
     (modelCapabilityCatalog.providers || []).forEach(provider => {
         if(provider.id === 'modelscope' || provider.id === 'volcengine') return;
-        const entry = capabilityProviderEntry(provider.id, nodeType, inputCounts, inputRoles, parameters);
+        const entry = capabilityProviderEntry(provider.id, nodeType, inputCounts, inputRoles, parameters, region);
         if(entry) entries.push(entry);
     });
     return smartOrderedItems(entries, smartPreferenceScopeKey('platforms', nodeType), entry => entry.id);
 }
-function capabilityModelsForProvider(providerId, nodeType, inputCounts, fallback=[], inputRoles={}, parameters={}){
-    const entry = capabilityProviderEntry(providerId, nodeType, inputCounts, inputRoles, parameters);
+function capabilityModelsForProvider(providerId, nodeType, inputCounts, fallback=[], inputRoles={}, parameters={}, region=''){
+    const entry = capabilityProviderEntry(providerId, nodeType, inputCounts, inputRoles, parameters, region);
     if(entry) return entry.capabilityModels || [];
     return [];
 }
-function capabilityFamiliesForProvider(providerId, nodeType, inputCounts, operation='', inputRoles={}, parameters={}){
-    const enabledIds = configuredCapabilityModelIds(providerId, nodeType);
+function capabilityFamiliesForProvider(providerId, nodeType, inputCounts, operation='', inputRoles={}, parameters={}, region=''){
+    const enabledIds = configuredCapabilityModelIds(providerId, nodeType, region);
     const families = (window.SmartModelCapabilities?.familiesForInputs(
         modelCapabilityCatalog,
         nodeType,
@@ -3348,19 +3360,20 @@ function capabilityFamiliesForProvider(providerId, nodeType, inputCounts, operat
         providerId,
         operation,
         inputRoles,
-        parameters
+        parameters,
+        region
     ) || []).map(family => {
         const variants = (family.variants || []).filter(variant => enabledIds.has(String(variant.model_id || '').trim()));
         if(!variants.length) return null;
-        const compatibleVariants = window.SmartModelCapabilities?.compatibleFamilyVariants({...family, variants}, inputCounts, inputRoles, parameters) || [];
+        const compatibleVariants = window.SmartModelCapabilities?.compatibleFamilyVariants({...family, variants}, inputCounts, inputRoles, parameters, region) || [];
         if(!compatibleVariants.length) return null;
-        const resolved = window.SmartModelCapabilities.resolveFamilyVariant({...family, variants}, inputCounts, operation, inputRoles, parameters);
+        const resolved = window.SmartModelCapabilities.resolveFamilyVariant({...family, variants}, inputCounts, operation, inputRoles, parameters, region);
         return {...family, variants, compatible_variants:compatibleVariants, resolved_variant:resolved};
     }).filter(Boolean);
     return smartOrderedItems(families, smartPreferenceScopeKey('families', nodeType, providerId), family => family.family_id);
 }
-function capabilityFamiliesAcrossEnabledProviders(nodeType, inputCounts, operation='', inputRoles={}, parameters={}){
-    const providerIds = capabilityEnabledProviderIds(nodeType);
+function capabilityFamiliesAcrossEnabledProviders(nodeType, inputCounts, operation='', inputRoles={}, parameters={}, region=''){
+    const providerIds = capabilityEnabledProviderIds(nodeType, region);
     const families = window.SmartModelCapabilities?.familiesAcrossProviders?.(
         modelCapabilityCatalog,
         nodeType,
@@ -3368,19 +3381,21 @@ function capabilityFamiliesAcrossEnabledProviders(nodeType, inputCounts, operati
         providerIds,
         operation,
         inputRoles,
-        parameters
+        parameters,
+        region
     ) || [];
     return families.map(family => {
         const variants = (family.compatible_variants || family.variants || []).filter(variant => (
             capabilityProviderEnabled(variant.provider_id)
-            && configuredCapabilityModelIds(variant.provider_id, nodeType).has(String(variant.model_id || '').trim())
+            && configuredCapabilityModelIds(variant.provider_id, nodeType, region).has(String(variant.model_id || '').trim())
         ));
         if(!variants.length) return null;
         const compatibleVariants = variants.filter(variant => window.SmartModelCapabilities?.modelSupportsInputs(
             variant,
             inputCounts,
             inputRoles,
-            parameters
+            parameters,
+            region
         ));
         if(!compatibleVariants.length) return null;
         return {
@@ -3397,16 +3412,18 @@ function capabilityFamiliesAcrossEnabledProviders(nodeType, inputCounts, operati
                 inputCounts,
                 operation,
                 inputRoles,
-                parameters
+                parameters,
+                region
             ) || null
         };
     }).filter(Boolean).sort((left, right) => String(left.family_id || '').localeCompare(String(right.family_id || '')));
 }
-function resolveCapabilityFamilySelection(providerId, nodeType, inputCounts, familyId='', legacyModelId='', operation='', inputRoles={}, parameters={}){
+function resolveCapabilityFamilySelection(providerId, nodeType, inputCounts, familyId='', legacyModelId='', operation='', inputRoles={}, parameters={}, region=''){
     const provider = (modelCapabilityCatalog.providers || []).find(item => item.id === providerId) || null;
-    const families = capabilityFamiliesForProvider(providerId, nodeType, inputCounts, operation, inputRoles, parameters);
+    const scopedRegion = region || capabilityRegionForProvider(providerId, settings);
+    const families = capabilityFamiliesForProvider(providerId, nodeType, inputCounts, operation, inputRoles, parameters, scopedRegion);
     const requestedModelId = String(legacyModelId || '').trim();
-    const legacyFamily = window.SmartModelCapabilities?.familyForModel(provider, legacyModelId, nodeType) || null;
+    const legacyFamily = window.SmartModelCapabilities?.familyForModel(provider, legacyModelId, nodeType, scopedRegion) || null;
     const requestedId = legacyFamily?.family_id || familyId || '';
     const requestedFamily = families.find(item => item.family_id === requestedId) || null;
     const defaultFamily = families.find(item => capabilitySafeDefaultProfileForFamily(item)) || families[0] || null;
@@ -3454,8 +3471,36 @@ function capabilityPickerProviderEntries(profiles=[]){
         return provider && provider.enabled !== false ? {...provider} : null;
     }).filter(Boolean);
 }
+function capabilityPickerPlatformEntries(profiles=[], nodeType=''){
+    const entries = [];
+    const seen = new Set();
+    (profiles || []).forEach(profile => {
+        const providerId = String(profile?.provider_id || '').trim();
+        if(!providerId) return;
+        const provider = capabilityProviderConfig(providerId);
+        if(!provider || provider.enabled === false) return;
+        const regions = providerId === 'runninghub'
+            ? runningHubEnabledRegions(provider).filter(region => {
+                const scoped = window.SmartModelCapabilities?.profileForRegion?.(profile, region);
+                return Boolean(scoped) && (!nodeType || configuredCapabilityModelIds(providerId, nodeType, region).has(String(scoped.model_id || '').trim()));
+            })
+            : [''];
+        regions.forEach(region => {
+            const key = `${providerId}::${region || 'default'}`;
+            if(seen.has(key)) return;
+            const scopedProfile = providerId === 'runninghub'
+                ? window.SmartModelCapabilities?.profileForRegion?.(profile, region)
+                : profile;
+            if(!scopedProfile) return;
+            seen.add(key);
+            entries.push({id:providerId, region, provider, profile:scopedProfile});
+        });
+    });
+    return entries;
+}
 function resolveCapabilityFamilyPickerSelection(nodeType, inputCounts, familyId='', legacyModelId='', operation='', inputRoles={}, parameters={}, preferredProviderId='', preferredVariantKey=''){
     const families = capabilityFamiliesAcrossEnabledProviders(nodeType, inputCounts, operation, inputRoles, parameters);
+    const preferredRegion = preferredProviderId === 'runninghub' ? capabilityRegionForProvider(preferredProviderId, settings) : '';
     const requestedModelId = String(legacyModelId || '').trim();
     const legacyFamily = requestedModelId
         ? families.find(family => (family.compatible_variants || []).some(variant => variant.model_id === requestedModelId))
@@ -3468,7 +3513,10 @@ function resolveCapabilityFamilyPickerSelection(nodeType, inputCounts, familyId=
     const defaultFamily = requestedFamily || families.find(item => capabilitySafeDefaultProfileForFamily(item)) || families[0] || null;
     const family = requestedFamily || (!requestedId ? defaultFamily : null);
     const invalidSelection = Boolean(requestedId && !requestedFamily);
-    const compatibleVariants = family?.compatible_variants || [];
+    const allCompatibleVariants = family?.compatible_variants || [];
+    const compatibleVariants = preferredRegion
+        ? allCompatibleVariants.map(variant => window.SmartModelCapabilities?.profileForRegion?.(variant, preferredRegion)).filter(Boolean)
+        : allCompatibleVariants;
     let profile = null;
     let invalidVariant = false;
     if(requestedModelId){
@@ -3486,20 +3534,25 @@ function resolveCapabilityFamilyPickerSelection(nodeType, inputCounts, familyId=
             || capabilityDefaultProfileForFamily(preferredFamily)
             || capabilityDefaultProfileForFamily(family);
     }
-    const variantGroups = capabilityPickerVariantGroups(family, preferredProviderId);
+    const variantFamily = family
+        ? {...family, compatible_variants:compatibleVariants, variants:compatibleVariants}
+        : family;
+    const variantGroups = capabilityPickerVariantGroups(variantFamily, preferredProviderId);
     const selectedVariantKey = profile ? capabilityPickerVariantKey(profile) : '';
     const platformProfiles = selectedVariantKey
-        ? compatibleVariants.filter(variant => capabilityPickerVariantKey(variant) === selectedVariantKey)
-        : compatibleVariants;
+        ? allCompatibleVariants.filter(variant => capabilityPickerVariantKey(variant) === selectedVariantKey)
+        : allCompatibleVariants;
     return {
         families,
         family,
         profile,
         compatibleVariants,
+        allCompatibleVariants,
         variantGroups,
         selectedVariantKey,
         platformProfiles,
-        platforms:capabilityPickerProviderEntries(platformProfiles),
+        platforms:capabilityPickerPlatformEntries(platformProfiles, nodeType),
+        region:preferredRegion,
         invalidSelection,
         invalidVariant,
         requiresVariantSelection:Boolean(family && !profile && variantGroups.length > 1),
@@ -3537,17 +3590,18 @@ function executionSelectionInputState(node, descriptor){
         inputRoles:capabilityInputRoles(refs, true)
     };
 }
-function executionCompatibleProviderIds(descriptor, inputCounts, inputRoles, parameters={}){
+function executionCompatibleProviderIds(descriptor, inputCounts, inputRoles, parameters={}, region=''){
     if(descriptor.kind === 'text'){
         return [...new Set((window.SmartModelCapabilities?.modelsForVerifiedInputs(
             modelCapabilityCatalog,
             descriptor.nodeType,
             inputCounts,
             inputRoles,
-            parameters
-        ) || []).filter(model => configuredCapabilityModelIds(model.provider_id, descriptor.nodeType).has(String(model.model_id || '').trim())).map(model => model.provider_id))];
+            parameters,
+            region
+        ) || []).filter(model => configuredCapabilityModelIds(model.provider_id, descriptor.nodeType, region).has(String(model.model_id || '').trim())).map(model => model.provider_id))];
     }
-    return capabilityProvidersFor(descriptor.nodeType, inputCounts, [], inputRoles, parameters).map(provider => provider.id);
+    return capabilityProvidersFor(descriptor.nodeType, inputCounts, [], inputRoles, parameters, region).map(provider => provider.id);
 }
 function ensureExecutionSelectionDefaults(target, node, {resetSelection=false}={}){
     const descriptor = executionSelectionDescriptor(node);
@@ -3557,10 +3611,10 @@ function ensureExecutionSelectionDefaults(target, node, {resetSelection=false}={
     // 候选模型按输入筛选；当前模型的参数不能排除其他模型。运行前仍校验全部提交值。
     const parameterIntent = {};
     if(descriptor.kind === 'video'){
-        const currentProfile = capabilityProfileFor(target[descriptor.providerKey], target[descriptor.modelKey], descriptor.nodeType);
+        const currentProfile = capabilityProfileFor(target[descriptor.providerKey], target[descriptor.modelKey], descriptor.nodeType, capabilityRegionForProvider(target[descriptor.providerKey], target));
         parameterIntent.__execution_mode = videoExecutionModeFor(currentProfile, visibleReferenceImagesFor(node), target);
     }
-    const providerIds = executionCompatibleProviderIds(descriptor, inputCounts, inputRoles, parameterIntent);
+    const providerIds = executionCompatibleProviderIds(descriptor, inputCounts, inputRoles, parameterIntent, capabilityRegionForProvider(target[descriptor.providerKey], target));
     if(!providerIds.length) return false;
     const previous = {
         provider:String(target[descriptor.providerKey] || ''),
@@ -3572,6 +3626,7 @@ function ensureExecutionSelectionDefaults(target, node, {resetSelection=false}={
         if(previous.model && !resetSelection) return false;
         providerId = providerIds[0] || '';
     }
+    const selectionRegion = capabilityRegionForProvider(providerId, target);
     const selection = resolveCapabilityFamilySelection(
         providerId,
         descriptor.nodeType,
@@ -3580,7 +3635,8 @@ function ensureExecutionSelectionDefaults(target, node, {resetSelection=false}={
         resetSelection ? '' : previous.model,
         '',
         inputRoles,
-        parameterIntent
+        parameterIntent,
+        selectionRegion
     );
     if((selection.invalidSelection || selection.invalidVariant) && previous.model && !resetSelection) return false;
     target[descriptor.providerKey] = providerId;
@@ -3680,6 +3736,174 @@ function renderCapabilityVariantControl(selection, settingKey){
     }).join('')}`;
     return renderExecutionChoiceControl(label, 'list-filter', 'model-variant-control', options, !variants.length, Boolean(selection.invalidVariant), selected ? capabilityVariantLabel(selected) : '');
 }
+function capabilityPickerProviderLabel(providerId, profile=null){
+    const provider = capabilityProviderConfig(providerId);
+    return provider?.name || profile?.provider_name || profile?.providerId || profile?.provider_id || providerId || '';
+}
+function capabilityPickerSearchMatches(value, query){
+    return window.SmartModelCapabilities?.matchesSearch
+        ? window.SmartModelCapabilities.matchesSearch(value, query)
+        : String(query || '').trim().toLocaleLowerCase().split(/\s+/).filter(Boolean).every(token => String(value || '').toLocaleLowerCase().includes(token));
+}
+function capabilityPickerBadgeLabels(variant, nodeType=''){
+    const profiles = Array.isArray(variant?.profiles) && variant.profiles.length ? variant.profiles : [variant || {}];
+    const roleMax = new Map();
+    const operations = new Set();
+    const identifiers = [];
+    profiles.forEach(profile => {
+        const operation = String(profile?.operation || '').trim().toLowerCase().replace(/-/g, '_');
+        if(operation) operations.add(operation);
+        identifiers.push(...[profile?.variant_id, profile?.variant_name, profile?.model_id]
+            .map(value => String(value || '').trim().toLowerCase())
+            .filter(Boolean));
+        Object.entries(profile?.inputs || {}).forEach(([key, spec]) => {
+            const rawRole = String(spec?.role || key).trim().toLowerCase().replace(/-/g, '_');
+            const role = ({first:'first_frame', last:'last_frame', reference_image:'reference', image_reference:'reference', audio_reference:'reference_audio'})[rawRole] || rawRole;
+            if(!role) return;
+            const max = Number(spec?.max);
+            roleMax.set(role, Math.max(roleMax.get(role) || 0, Number.isFinite(max) ? max : 1));
+        });
+    });
+    const roles = new Set(roleMax.keys());
+    const badges = [];
+    const add = (zh, en) => {
+        const label = capabilityUiText(zh, en);
+        if(label && !badges.includes(label)) badges.push(label);
+    };
+    const hasOperation = fragment => [...operations].some(operation => operation.includes(fragment));
+    if(nodeType === 'video_generation'){
+        const hasFirstFrame = roles.has('first_frame');
+        const hasLastFrame = roles.has('last_frame');
+        if(hasFirstFrame && hasLastFrame) add('首尾帧', 'Start/end frames');
+        else if(hasFirstFrame) add('首帧', 'First frame');
+        else if(hasLastFrame) add('尾帧', 'Last frame');
+        if(hasOperation('extend') || identifiers.some(value => value.includes('extend') || value.includes('延长'))) add('视频延长', 'Video extend');
+        else if(roles.has('source_video')) add('视频编辑', 'Video edit');
+        if(roles.has('reference') && (roles.has('source_video') || roles.has('reference_audio'))) add('全能参考', 'Multi-reference');
+        else if(roles.has('reference')) add(roleMax.get('reference') > 1 ? '多图参考' : '参考图', roleMax.get('reference') > 1 ? 'Multi-reference' : 'Image reference');
+        if(roles.has('reference_audio')) add('音频参考', 'Audio reference');
+        if(roles.has('prompt') && (hasOperation('text_to_video') || hasOperation('multimodal_to_video'))) add('文生视频', 'Text to video');
+    } else if(nodeType === 'image_generation'){
+        if(roles.has('reference')) add(roleMax.get('reference') > 1 ? '多图参考' : '图像编辑', roleMax.get('reference') > 1 ? 'Multi-reference' : 'Image edit');
+        if(roles.has('prompt') && !roles.has('reference')) add('文生图', 'Text to image');
+    }
+    return badges.slice(0, 4);
+}
+function renderCapabilityPickerOption(stage, value, label, searchText, active=false, data={}){
+    const attributes = Object.entries({
+        stage,
+        value,
+        family: data.family || '',
+        model: data.model || '',
+        provider: data.provider || '',
+        variantKey: data.variantKey || '',
+        region: data.region || ''
+    }).map(([key, raw]) => `data-capability-picker-${key}="${escapeAttr(raw)}"`).join(' ');
+    const badges = (Array.isArray(data.badges) ? data.badges : []).map(value => String(value || '').trim()).filter(Boolean).slice(0, 4);
+    const badgeMarkup = badges.length
+        ? `<span class="capability-picker-option-badges">${badges.map(badge => `<span class="capability-picker-option-badge">${escapeHtml(badge)}</span>`).join('')}</span>`
+        : '';
+    return `<button type="button" class="capability-picker-option ${active ? 'active' : ''}" data-capability-picker-option data-capability-picker-search-text="${escapeAttr(searchText)}" ${attributes} title="${escapeAttr(searchText)}"><span class="capability-picker-option-main"><span class="capability-picker-option-label">${escapeHtml(label)}</span></span>${badgeMarkup}</button>`;
+}
+function renderCapabilityPickerStage(stage, index, label, options, emptyText){
+    return `<section class="capability-picker-stage capability-picker-stage-${escapeAttr(stage)}" data-capability-picker-stage="${escapeAttr(stage)}">
+        <div class="capability-picker-stage-title"><span>${escapeHtml(String(index))}</span><strong>${escapeHtml(label)}</strong></div>
+        <div class="capability-picker-stage-options" data-capability-picker-options="${escapeAttr(stage)}">${options || `<div class="capability-picker-empty">${escapeHtml(emptyText)}</div>`}</div>
+    </section>`;
+}
+function renderCapabilityModelPicker(selection, descriptor=null){
+    selection = selection || {};
+    descriptor = descriptor || executionSelectionDescriptor(activeSettingsSubject());
+    const nodeType = descriptor?.nodeType || '';
+    const familyScope = smartPreferenceScopeKey('families', nodeType);
+    const variantScope = smartPreferenceScopeKey('variants', nodeType, selection.family?.family_id || '');
+    const selectedFamily = selection.family || null;
+    const selectedVariantKey = selection.selectedVariantKey || '';
+    const selectedVariant = (selection.variantGroups || []).find(item => item.key === selectedVariantKey)
+        || (selection.profile ? {key:selectedVariantKey, ...selection.profile, profiles:[selection.profile]} : null);
+    const selectedProfile = selection.profile || null;
+    const selectedProviderId = String(selectedProfile?.provider_id || settings?.[descriptor?.providerKey] || '').trim();
+    const selectedRegion = selectedProviderId === 'runninghub'
+        ? String(selectedProfile?.region || selection.region || runningHubRegion(settings)).trim()
+        : '';
+    const selectedFamilyLabel = capabilityFamilyLabel(selectedFamily) || capabilityUiText('选择模型家族','Choose a model family');
+    const selectedVariantLabel = selectedVariant
+        ? capabilityVariantLabel(selectedVariant)
+        : capabilityUiText('选择运行模式','Choose a mode');
+    const selectedProviderLabel = selectedProviderId
+        ? (selectedProviderId === 'runninghub'
+            ? `RunningHub · ${selectedRegion === 'cn' ? 'CN' : 'AI'}`
+            : capabilityPickerProviderLabel(selectedProviderId, selectedProfile))
+        : capabilityUiText('选择平台','Choose a provider');
+    // 摘要与选择顺序保持一致：模型 · 平台 · 运行模式。
+    const summaryParts = [selectedFamilyLabel, selectedProviderLabel, selectedVariantLabel];
+    const summaryTitle = selectedProfile?.model_id
+        ? `${summaryParts.join(' · ')} · ${selectedProfile.model_id}`
+        : summaryParts.join(' · ');
+    const families = smartOrderedItems(
+        selection.families || [],
+        familyScope,
+        family => family.family_id
+    );
+    const familyOptions = families.map(family => {
+        const label = capabilityFamilyLabel(family);
+        const searchText = [label, family.family_id, family.family_name, family.display_name_en, (family.providers || []).map(item => item.name).join(' ')].filter(Boolean).join(' · ');
+        return renderCapabilityPickerOption('family', family.family_id, label, searchText, family.family_id === selectedFamily?.family_id, {family:family.family_id});
+    }).join('');
+    const variants = smartOrderedItems(
+        selection.variantGroups || [],
+        variantScope,
+        variant => variant.key || variant.model_id
+    );
+    const currentProvider = selectedProviderId;
+    // 运行模式（变体）改为选择链的最后一段：只保留当前平台真实提供的运行模式，避免出现选了平台却无法运行的模式。
+    const variantOptions = variants
+        .filter(variant => !currentProvider || (variant.profiles || []).some(item => item.provider_id === currentProvider))
+        .map(variant => {
+            const profiles = variant.profiles || [];
+            const profile = profiles.find(item => item.provider_id === currentProvider) || variant.representative || profiles[0] || variant;
+            const label = capabilityVariantLabel(variant) || profile.model_id || variant.key;
+            const value = profile.model_id || variant.model_id || variant.key;
+            const searchText = [label, variant.variant_id, variant.variant_name, variant.variant_name_en, variant.model_id, ...profiles.flatMap(item => [item.model_id, item.provider_id, item.provider_name])].filter(Boolean).join(' · ');
+            return renderCapabilityPickerOption('variant', value, label, searchText, variant.key === selectedVariantKey, {
+                family:selectedFamily?.family_id || '', model:value, provider:profile.provider_id || '', variantKey:variant.key,
+                badges:capabilityPickerBadgeLabels(variant, nodeType)
+            });
+        }).join('');
+    // 平台段提前到第二级：展示整个家族在所有已启用平台上的可选渠道，而非仅当前运行模式对应的平台。
+    const platformSourceProfiles = (selection.allCompatibleVariants && selection.allCompatibleVariants.length)
+        ? selection.allCompatibleVariants
+        : (selection.platformProfiles || []);
+    const platforms = capabilityPickerPlatformEntries(platformSourceProfiles, nodeType);
+    const platformOptions = platforms.map(entry => {
+        const providerId = entry.id || entry.provider?.id || '';
+        const region = providerId === 'runninghub' ? (entry.region || 'global') : '';
+        const profile = entry.profile || platformSourceProfiles.find(item => item.provider_id === providerId) || null;
+        const label = providerId === 'runninghub'
+            ? `RunningHub · ${region === 'cn' ? 'CN' : 'AI'}`
+            : (entry.provider?.name || providerId);
+        const searchText = [label, providerId, region, entry.provider?.protocol, profile?.model_id, capabilityVariantLabel(profile)].filter(Boolean).join(' · ');
+        return renderCapabilityPickerOption('platform', providerId, label, searchText, providerId === selectedProviderId && region === selectedRegion, {
+            family:selectedFamily?.family_id || '', model:profile?.model_id || '', provider:providerId, variantKey:selectedVariantKey, region
+        });
+    }).join('');
+    const emptyText = capabilityUiText('当前输入下没有可用选项','No compatible options for the current inputs');
+    const title = tr('smart.modelPicker') || capabilityUiText('模型选择','Model selection');
+    const searchLabel = tr('smart.modelPickerSearch') || capabilityUiText('搜索模型、平台或运行模式','Search model, platform, or mode');
+    return `<div class="smart-control capability-model-picker capability-model-picker-control" data-capability-model-picker data-control-key="capability-model-picker-control">
+        <button class="smart-pill capability-model-picker-pill" type="button" title="${escapeAttr(summaryTitle)}" aria-label="${escapeAttr(title)}"><i data-lucide="boxes"></i><span class="capability-model-picker-value">${summaryParts.map((part, index) => `${index ? '<span class="capability-model-picker-separator" aria-hidden="true">·</span>' : ''}<span>${escapeHtml(part)}</span>`).join('')}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
+        <div class="smart-popover capability-model-picker-popover">
+            <div class="capability-model-picker-head"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(tr('smart.modelPickerFiltered') || capabilityUiText('按能力筛选','Filtered by capability'))}</span></div>
+            <label class="capability-model-picker-search"><i data-lucide="search"></i><input type="search" data-capability-picker-search aria-label="${escapeAttr(searchLabel)}" placeholder="${escapeAttr(searchLabel)}" autocomplete="off"></label>
+            <div class="capability-model-picker-stages">
+                ${renderCapabilityPickerStage('family', 1, tr('smart.modelPickerFamily') || capabilityUiText('模型','Model'), familyOptions, emptyText)}
+                ${renderCapabilityPickerStage('platform', 2, tr('smart.modelPickerProvider') || capabilityUiText('平台','Platform'), platformOptions, emptyText)}
+                ${renderCapabilityPickerStage('variant', 3, tr('smart.modelPickerVariant') || capabilityUiText('运行模式','Run mode'), variantOptions, emptyText)}
+            </div>
+            <div class="capability-model-picker-no-match" data-capability-picker-no-match hidden>${escapeHtml(tr('smart.modelPickerNoMatch') || capabilityUiText('没有匹配的模型、模式或平台','No matching family, mode, or provider'))}</div>
+        </div>
+    </div>`;
+}
 function renderExecutionModeFallbackControl(){
     const label = tr('smart.mode') || '运行模式';
     const value = capabilityUiText('标准模式', 'Standard mode');
@@ -3692,8 +3916,8 @@ function capabilityFamilySelectionNote(selection){
 function capabilityVariantSelectionNote(selection){
     return '';
 }
-function resolveCapabilityForRun(providerId, nodeType, inputCounts, familyId='', legacyModelId='', operation='', inputRoles={}, parameters={}){
-    const selection = resolveCapabilityFamilySelection(providerId, nodeType, inputCounts, familyId, legacyModelId, operation, inputRoles, parameters);
+function resolveCapabilityForRun(providerId, nodeType, inputCounts, familyId='', legacyModelId='', operation='', inputRoles={}, parameters={}, region=''){
+    const selection = resolveCapabilityFamilySelection(providerId, nodeType, inputCounts, familyId, legacyModelId, operation, inputRoles, parameters, region);
     if(!selection.profile){
         if(selection.invalidSelection) throw new Error(tr('smart.familyInputMismatch') || '当前模型家族不支持新的输入组合，请重新选择模型。');
         if(selection.invalidVariant) throw new Error(tr('smart.variantInputMismatch') || '当前运行模式不支持新的输入组合，请重新选择运行模式。');
@@ -3702,8 +3926,9 @@ function resolveCapabilityForRun(providerId, nodeType, inputCounts, familyId='',
     }
     return selection;
 }
-function capabilityProfileFor(providerId, modelId, nodeType){
-    return window.SmartModelCapabilities?.findModel(modelCapabilityCatalog, providerId, modelId, nodeType) || null;
+function capabilityProfileFor(providerId, modelId, nodeType, region=''){
+    const scopedRegion = region || capabilityRegionForProvider(providerId, settings);
+    return window.SmartModelCapabilities?.findModel(modelCapabilityCatalog, providerId, modelId, nodeType, scopedRegion) || null;
 }
 function capabilityModelLabel(model, fallback=''){
     const profile = typeof model === 'string' ? null : model;
@@ -3949,7 +4174,7 @@ function capabilityAudioParameterValues(profile, source=settings, referenceAudio
     return window.SmartModelCapabilities?.effectiveParameters(profile, values) || values;
 }
 function capabilityParameterIntent(providerId, modelId, nodeType, source=settings){
-    const profile = capabilityProfileFor(providerId, modelId, nodeType);
+    const profile = capabilityProfileFor(providerId, modelId, nodeType, capabilityRegionForProvider(providerId, source));
     return profile ? capabilityParameterSubmissionValues(profile, source) : {};
 }
 function videoExecutionModeFor(profile, refs=[], source=settings, manualVideoReference=false){
@@ -3974,7 +4199,9 @@ function capabilityOptionLabel(key, option){
         standard:['标准','Standard'], true:['是','Yes'], false:['否','No'],
         landscape:['横向','Landscape'], portrait:['竖向','Portrait'], square:['方形','Square'],
         empty:['自动','Auto'], adaptive:['自适应','Adaptive'], source:['原图比例','Source ratio'], original:['原图比例','Original ratio'],
-        '-1':['自动','Auto']
+        '-1':['自动','Auto'],
+        native1080p:['原生1080p','Native 1080p'], native720p:['原生720p','Native 720p'], native4k:['原生4K','Native 4K'],
+        native:['原生','Native']
     };
     if(common[normalized]) return capabilityUiText(common[normalized][0], common[normalized][1]);
     const numberedMedia = normalized.match(/^(image|video|audio|text)(\d+)$/);
@@ -4441,21 +4668,33 @@ function renderJimengUpscaleSetting(){
     const description = capabilityUiText('决定是否在生成完成后继续放大图片，以及放大后的目标清晰度。开启会增加处理时间，并可能产生额外费用。','Controls whether the generated image is upscaled and its target clarity. Enabling it adds processing time and may add cost.');
     return `<section class="capability-setting-row"><div class="capability-setting-label"><span>${escapeHtml(label)}</span>${renderCapabilityParameterHelp(label, description)}</div><div class="capability-option-grid">${JIMENG_UPSCALE_RESOLUTIONS.map(value => `<button type="button" class="capability-option ${value === current ? 'active' : ''}" data-smart-param="jimengUpscaleRes" data-smart-value="${escapeAttr(value)}">${escapeHtml(value.toUpperCase())}</button>`).join('')}</div></section>`;
 }
+function capabilityParameterIsAdvanced(spec){
+    return String(spec?.level || '').toLowerCase() === 'advanced';
+}
 function renderCapabilityParameterBundleForSource(profile, source, excluded=[], extraSettings=''){
     if(!profile || profile.validation_mode !== 'strict') return '';
     const excludedKeys = new Set(excluded || []);
     const values = capabilityParameterValues(profile, source);
-    const entries = Object.entries(profile.parameters || {})
+    const rawEntries = Object.entries(profile.parameters || {})
         .filter(([key, spec]) => !excludedKeys.has(key) && spec?.ui_hidden !== true)
-        .map(([key, spec]) => renderCapabilityParameterEditor(key, spec, profile, values));
+        .map(([key, spec]) => ({...renderCapabilityParameterEditor(key, spec, profile, values), advanced:capabilityParameterIsAdvanced(spec)}));
     const shortcutOrder = {resolution:0, duration:1, aspect_ratio:2};
     const shortcutPriority = entry => entry.semantic === 'quality' ? 1 : (shortcutOrder[entry.semantic] ?? 99);
-    const shortcuts = entries.filter(entry => entry.semantic).sort((left, right) => shortcutPriority(left) - shortcutPriority(right));
-    const orderedEntries = [...shortcuts, ...entries.filter(entry => !entry.semantic)];
+    const orderByShortcut = list => [
+        ...list.filter(entry => entry.semantic).sort((left, right) => shortcutPriority(left) - shortcutPriority(right)),
+        ...list.filter(entry => !entry.semantic)
+    ];
+    // 常用参数（分辨率 / 时长 / 画幅 / 生成音频 / 画质等非高级项）直接铺在参数面板上；
+    // 仅 level=advanced 的冷门参数收进右侧齿轮，避免常用调节被藏起来。
+    const inlineEntries = orderByShortcut(rawEntries.filter(entry => !entry.advanced));
+    const advancedEntries = orderByShortcut(rawEntries.filter(entry => entry.advanced));
+    const markup = inlineEntries.map(entry => renderCapabilityParameterControl(
+        entry.key, entry.label, profile.parameters?.[entry.key] || {}, profile, entry.value, entry.unset, entry.body, entry.extraClass
+    )).join('');
+    const orderedEntries = [...inlineEntries, ...advancedEntries];
     return {
-        // 五类生成节点的模型参数统一进入同一个弹层，避免快捷参数与高级参数出现两套入口。
-        markup:'',
-        settingsControl:renderCapabilitySettingsControl(orderedEntries, extraSettings),
+        markup,
+        settingsControl:renderCapabilitySettingsControl(advancedEntries, extraSettings),
         layout:{key:capabilityLayoutKey(profile), mode:'grid', order:orderedEntries.map(entry => entry.key)}
     };
 }
@@ -4480,31 +4719,62 @@ function volcengineProvider(){
 function runningHubProvider(){
     return (apiProviders || []).find(p => p.id === 'runninghub' && p.enabled !== false) || null;
 }
-function runningHubRegion(){
-    const provider = runningHubProvider();
-    const region = String(provider?.rh_region || '').trim().toLowerCase();
-    return region === 'cn' ? 'cn' : 'global';
+function normalizeRunningHubRegion(value, fallback='global'){
+    const region = String(value || '').trim().toLowerCase();
+    if(region === 'cn' || region === 'global') return region;
+    const safeFallback = String(fallback || '').trim().toLowerCase();
+    return safeFallback === 'cn' ? 'cn' : 'global';
 }
-function runningHubEntries(kind){
-    const provider = runningHubProvider();
+function runningHubRegion(sourceSettings=null){
+    const provider = sourceSettings?.id === 'runninghub' || sourceSettings?.rh_regions
+        ? sourceSettings
+        : runningHubProvider();
+    const requested = sourceSettings && (sourceSettings.rhRegion || sourceSettings.region);
+    if(requested) return normalizeRunningHubRegion(requested, provider?.rh_region || 'global');
+    return normalizeRunningHubRegion(provider?.rh_region, 'global');
+}
+function runningHubEnabledRegions(provider=runningHubProvider()){
+    const regions = provider?.rh_regions;
+    if(!regions || typeof regions !== 'object' || Array.isArray(regions)) return provider ? [normalizeRunningHubRegion(provider.rh_region, 'global')] : [];
+    return Object.entries(regions)
+        .filter(([, config]) => config && config.enabled === true)
+        .map(([region]) => normalizeRunningHubRegion(region, ''))
+        .filter((region, index, list) => region && list.indexOf(region) === index);
+}
+function runningHubProviderForRegion(region, provider=runningHubProvider()){
+    if(!provider) return null;
+    const safeRegion = normalizeRunningHubRegion(region, provider.rh_region || 'global');
+    const regions = provider.rh_regions;
+    if(!regions || typeof regions !== 'object' || Array.isArray(regions)) return {...provider, rh_region:safeRegion};
+    const config = regions[safeRegion];
+    if(!config || config.enabled !== true) return null;
+    return {...provider, ...config, rh_region:safeRegion, rh_regions:regions};
+}
+function runningHubEntries(kind, sourceSettings=settings){
+    const region = runningHubRegion(sourceSettings);
+    const provider = runningHubProviderForRegion(region);
+    if(!provider) return [];
     if(kind === 'model'){
         return (provider?.image_models || []).map(model => ({
             id:String(model || '').trim(),
             title:String(model || '').trim(),
-            enabled:true
+            enabled:true,
+            region
         })).filter(item => item.id);
     }
     const key = kind === 'workflow' ? 'rh_workflows' : 'rh_apps';
-    return Array.isArray(provider?.[key]) ? provider[key].filter(item => item?.enabled !== false && item?.hidden !== true) : [];
+    return Array.isArray(provider?.[key])
+        ? provider[key].filter(item => item?.enabled !== false && item?.hidden !== true).map(item => ({...item, region}))
+        : [];
 }
 function runningHubEntryId(entry, kind){
     if(kind === 'model') return String(entry?.id || entry?.model || entry?.title || '').trim();
     return String(kind === 'workflow' ? (entry?.workflowId || entry?.id || '') : (entry?.appId || entry?.webappId || entry?.id || '')).trim();
 }
-function runningHubEntryLabel(entry, kind){
+function runningHubEntryLabel(entry, kind, sourceSettings=settings){
     const id = runningHubEntryId(entry, kind);
     if(kind === 'model') return entry?.title || entry?.name || id;
-    const region = runningHubRegion();
+    const region = normalizeRunningHubRegion(entry?.region || runningHubRegion(sourceSettings), 'global');
     const localized = [entry?.titles, entry?.names, entry?.localizedNames, entry?.webappNames]
         .find(value => value && typeof value === 'object' && !Array.isArray(value)) || {};
     const isEnglish = region !== 'cn' && window.StudioI18n?.lang?.() === 'en';
@@ -4520,7 +4790,8 @@ function smartMinimaxEngine(node){
         : SMART_MINIMAX_DEFAULT_ENGINE;
 }
 function smartMinimaxRunningHubEntry(node=null){
-    const entries = runningHubEntries('workflow');
+    const sourceSettings = {rhRegion:node?.minimaxRunningHubRegion || node?.runSettings?.rhRegion || settings.rhRegion};
+    const entries = runningHubEntries('workflow', sourceSettings);
     const requestedId = String(node?.minimaxRunningHubWorkflowId || '').trim();
     const titleKey = SMART_MINIMAX_RUNNINGHUB_WORKFLOW_TITLE.toLowerCase().replace(/\s+/g, '');
     let entry = requestedId ? entries.find(item => runningHubEntryId(item, 'workflow') === requestedId) : null;
@@ -4531,7 +4802,10 @@ function smartMinimaxRunningHubEntry(node=null){
             return title === titleKey || (/minimax/.test(title) && /多参视频/.test(title));
         });
     }
-    if(entry && node) node.minimaxRunningHubWorkflowId = runningHubEntryId(entry, 'workflow');
+    if(entry && node){
+        node.minimaxRunningHubWorkflowId = runningHubEntryId(entry, 'workflow');
+        node.minimaxRunningHubRegion = entry.region || runningHubRegion(sourceSettings);
+    }
     return entry || null;
 }
 function smartMinimaxRunningHubFieldText(field){
@@ -4609,21 +4883,32 @@ function parseRunningHubEntryKey(value){
     const match = text.match(/^(app|workflow|model):(.+)$/);
     return match ? {kind:match[1], id:match[2].trim()} : null;
 }
-function runningHubAllEntries(kinds=['model','app','workflow']){
+function runningHubAllEntries(kinds=['model','app','workflow'], sourceSettings=settings, regionOverride=''){
     const allowed = new Set(kinds);
+    const region = normalizeRunningHubRegion(regionOverride || runningHubRegion(sourceSettings), 'global');
+    const scopedSettings = {...(sourceSettings || {}), rhRegion:region};
     return [
-        ...(allowed.has('model') ? runningHubEntries('model').map(entry => ({kind:'model', id:runningHubEntryId(entry, 'model'), entry})).filter(x => x.id) : []),
-        ...(allowed.has('app') ? runningHubEntries('app').map(entry => ({kind:'app', id:runningHubEntryId(entry, 'app'), entry})).filter(x => x.id) : []),
-        ...(allowed.has('workflow') ? runningHubEntries('workflow').map(entry => ({kind:'workflow', id:runningHubEntryId(entry, 'workflow'), entry})).filter(x => x.id) : [])
+        ...(allowed.has('model') ? runningHubEntries('model', scopedSettings).map(entry => ({kind:'model', id:runningHubEntryId(entry, 'model'), entry, region})).filter(x => x.id) : []),
+        ...(allowed.has('app') ? runningHubEntries('app', scopedSettings).map(entry => ({kind:'app', id:runningHubEntryId(entry, 'app'), entry, region})).filter(x => x.id) : []),
+        ...(allowed.has('workflow') ? runningHubEntries('workflow', scopedSettings).map(entry => ({kind:'workflow', id:runningHubEntryId(entry, 'workflow'), entry, region})).filter(x => x.id) : [])
     ];
 }
 function selectedRunningHubRef(sourceSettings=settings){
-    const all = runningHubAllEntries(SMART_NODE_CONTRACT.runningHubEntryKindsForType(SMART_NODE_TYPES.aiApp));
     sourceSettings = sourceSettings || settings;
+    const kinds = SMART_NODE_CONTRACT.runningHubEntryKindsForType(SMART_NODE_TYPES.aiApp);
+    const all = runningHubAllEntries(kinds, sourceSettings);
     const parsed = parseRunningHubEntryKey(sourceSettings.rhConfigKey || '');
     let ref = parsed ? all.find(item => item.kind === parsed.kind && item.id === parsed.id) : null;
+    if(!ref && parsed && !sourceSettings.rhRegion){
+        const matches = runningHubEnabledRegions().flatMap(region => runningHubAllEntries(kinds, sourceSettings, region))
+            .filter(item => item.kind === parsed.kind && item.id === parsed.id);
+        if(matches.length === 1) ref = matches[0];
+    }
     if(!ref && all.length) ref = all[0];
-    if(ref && sourceSettings === settings) settings.rhConfigKey = runningHubEntryKey(ref.kind, ref.id);
+    if(ref){
+        sourceSettings.rhRegion = ref.region || runningHubRegion(sourceSettings);
+        if(sourceSettings === settings) settings.rhConfigKey = runningHubEntryKey(ref.kind, ref.id);
+    }
     return ref || null;
 }
 function rhEntryFields(entry){
@@ -4661,7 +4946,7 @@ function rhActiveFields(sourceSettings=settings){
             ? sourceSettings.rhFields
             : rhEntryFields(ref?.entry);
     if(ref?.kind === 'workflow' && !(Array.isArray(sourceSettings?.rhFields) && sourceSettings.rhFields.length)){
-        const cached = runningHubWorkflowCache[ref.id];
+        const cached = runningHubWorkflowCache[runningHubWorkflowCacheKey(ref.id, sourceSettings)];
         if(Array.isArray(cached?.fields) && cached.fields.length) fields = cached.fields;
     }
     fields = rhUsableFields(fields);
@@ -4864,7 +5149,7 @@ const JIMENG_VIDEO_MODELS_BY_COMMAND = {
 function jimengVideoCommand(){
     const node = activeComposerNode() || selectedNode();
     const refs = node ? visibleReferenceImagesFor(node) : [];
-    const profile = capabilityProfileFor(settings.videoProvider, settings.videoModel, 'video_generation');
+    const profile = capabilityProfileFor(settings.videoProvider, settings.videoModel, 'video_generation', capabilityRegionForProvider(settings.videoProvider, settings));
     return videoExecutionModeFor(profile, refs, settings, Boolean(manualSmartVideoLink(settings)));
 }
 function filterJimengVideoModels(models){
@@ -4974,7 +5259,7 @@ function renderVideoProviderControl(providers){
 }
 function renderVideoModelControl(models){
     const refs = visibleReferenceImagesFor(activeSettingsSubject());
-    const profiles = capabilityModelsForProvider(settings.videoProvider, 'video_generation', capabilityInputCounts('video'), models, capabilityInputRoles(refs, true));
+    const profiles = capabilityModelsForProvider(settings.videoProvider, 'video_generation', capabilityInputCounts('video'), models, capabilityInputRoles(refs, true), {}, capabilityRegionForProvider(settings.videoProvider, settings));
     const byId = new Map(profiles.map(item => [item.model_id, item]));
     return `<div class="smart-control model-control">
         <button class="smart-pill" type="button"><i data-lucide="film"></i><span class="sub">${escapeHtml(settings.videoModel || tr('smart.model'))}</span></button>
@@ -5289,15 +5574,18 @@ function textGenerationCandidateInputCounts(request){
 function verifiedTextGenerationModels(node=activeSettingsSubject()){
     const request = textGenerationRequestForNode(node);
     const inputCounts = textGenerationCandidateInputCounts(request);
+    const sourceSettings = node?.runSettings || settings;
+    const region = capabilityRegionForProvider(sourceSettings?.textProvider || '', sourceSettings);
     const models = window.SmartModelCapabilities?.modelsForVerifiedInputs(
         modelCapabilityCatalog,
         'text_generation',
         inputCounts,
         request.inputRoles,
-        {}
+        {},
+        region
     ) || [];
     return models.filter(model => {
-        const enabledIds = configuredCapabilityModelIds(model.provider_id, 'text_generation');
+        const enabledIds = configuredCapabilityModelIds(model.provider_id, 'text_generation', region);
         return enabledIds.has(String(model.model_id || '').trim());
     });
 }
@@ -5317,11 +5605,8 @@ function renderTextGenerationParams(node=activeSettingsSubject()){
     const selection = resolveCapabilityFamilyPickerSelection('text_generation', inputCounts, settings.textFamilyId, settings.textModel, '', request.inputRoles, parameterIntent, settings.textProvider);
     applyCapabilityPickerSelection(settings, descriptor, selection);
     const parameterBundle = renderCapabilityParameterBundle(selection.profile);
-    const platformEntries = selection.platforms?.length ? selection.platforms : capabilityPickerProviderEntries(models);
     dynamicParams.innerHTML = renderExecutionConfigPanel(`<div class="text-generation-params">
-        ${renderCapabilityFamilyControl(selection.families, 'textFamilyId', settings.textFamilyId, 'box')}
-        ${renderCapabilityVariantControl(selection, 'textModel')}
-        ${renderExecutionPlatformControl('text', platformEntries)}
+        ${renderCapabilityModelPicker(selection, descriptor)}
         ${renderTextProviderCompatibilityNote(models, inputCounts)}
         ${!models.length ? `<div class="smart-capability-note warning text-generation-empty"><i data-lucide="triangle-alert"></i><span>${escapeHtml(tr('smart.noVerifiedTextModel'))}</span></div>` : ''}
         ${capabilityFamilySelectionNote(selection)}
@@ -5352,11 +5637,8 @@ function renderApiParams(){
     const compatibleControls = profile?.validation_mode === 'strict'
         ? ''
         : `${renderSizePickerControl('', true)}${renderQualityControl()}${renderCountVisualControl()}`;
-    const providers = selection.platforms?.length ? selection.platforms : capabilityProvidersFor('image_generation', inputCounts, imageProviders(), inputRoles, parameterIntent);
     dynamicParams.innerHTML = renderExecutionConfigPanel(`
-        ${renderCapabilityFamilyControl(selection.families, 'imageFamilyId', settings.imageFamilyId, 'image')}
-        ${renderCapabilityVariantControl(selection, 'model')}
-        ${renderExecutionPlatformControl('image', providers)}
+        ${renderCapabilityModelPicker(selection, descriptor)}
         ${capabilityFamilySelectionNote(selection)}
         ${capabilityVariantSelectionNote(selection)}
         ${profileControls.markup || compatibleControls}
@@ -5377,7 +5659,7 @@ function renderApiVideoParams(){
     const refs = visibleReferenceImagesFor(activeSettingsSubject());
     const inputRoles = videoCapabilityInputRoles(refs, settings, true);
     const parameterIntent = {};
-    const currentProfile = capabilityProfileFor(settings.videoProvider, settings.videoModel, 'video_generation');
+    const currentProfile = capabilityProfileFor(settings.videoProvider, settings.videoModel, 'video_generation', capabilityRegionForProvider(settings.videoProvider, settings));
     parameterIntent.__execution_mode = videoExecutionModeFor(currentProfile, refs, settings, Boolean(manualSmartVideoLink(settings)));
     const descriptor = executionSelectionDescriptor(activeSettingsSubject());
     const selection = resolveCapabilityFamilyPickerSelection('video_generation', inputCounts, settings.videoFamilyId, settings.videoModel, '', inputRoles, parameterIntent, settings.videoProvider);
@@ -5387,11 +5669,8 @@ function renderApiVideoParams(){
     }
     const profile = selection.profile;
     const profileControls = renderCapabilityParameters(profile, 'video');
-    const providers = selection.platforms?.length ? selection.platforms : capabilityProvidersFor('video_generation', inputCounts, videoApiProviders(), inputRoles, parameterIntent);
     dynamicParams.innerHTML = renderExecutionConfigPanel(`
-        ${renderCapabilityFamilyControl(selection.families, 'videoFamilyId', settings.videoFamilyId, 'film')}
-        ${renderCapabilityVariantControl(selection, 'videoModel')}
-        ${renderExecutionPlatformControl('video', providers)}
+        ${renderCapabilityModelPicker(selection, descriptor)}
         ${capabilityFamilySelectionNote(selection)}
         ${capabilityVariantSelectionNote(selection)}
         ${renderVideoInputModeControl(profile, refs)}
@@ -5412,11 +5691,8 @@ function renderApiAudioParams(){
     const profile = selection.profile;
     if(inputCounts.audio > 0) settings.audioSpeaker = '';
     const profileControls = renderCapabilityParameters(profile, 'audio');
-    const providers = selection.platforms?.length ? selection.platforms : capabilityProvidersFor('audio_generation', inputCounts, audioApiProviders(), inputRoles, parameterIntent);
     dynamicParams.innerHTML = renderExecutionConfigPanel(`
-        ${renderCapabilityFamilyControl(selection.families, 'audioFamilyId', settings.audioFamilyId, 'audio-lines')}
-        ${renderCapabilityVariantControl(selection, 'audioModel')}
-        ${renderExecutionPlatformControl('audio', providers)}
+        ${renderCapabilityModelPicker(selection, descriptor)}
         ${capabilityFamilySelectionNote(selection)}
         ${capabilityVariantSelectionNote(selection)}
         ${profileControls.markup}
@@ -5432,11 +5708,8 @@ function renderApiMusicParams(){
     applyCapabilityPickerSelection(settings, descriptor, selection);
     const profile = selection.profile;
     const profileControls = renderCapabilityParameters(profile, 'music');
-    const providers = selection.platforms?.length ? selection.platforms : capabilityProvidersFor('music_generation', inputCounts, audioApiProviders(), inputRoles, parameterIntent);
     dynamicParams.innerHTML = renderExecutionConfigPanel(`
-        ${renderCapabilityFamilyControl(selection.families, 'musicFamilyId', settings.musicFamilyId, 'music-2')}
-        ${renderCapabilityVariantControl(selection, 'musicModel')}
-        ${renderExecutionPlatformControl('music', providers)}
+        ${renderCapabilityModelPicker(selection, descriptor)}
         ${capabilityFamilySelectionNote(selection)}
         ${capabilityVariantSelectionNote(selection)}
         ${profileControls.markup}
@@ -5463,6 +5736,10 @@ function renderVolcengineVideoParams(){
     const provider = volcengineProvider();
     const providers = [provider];
     const models = volcengineVideoModels();
+    const videoInputModeControl = renderVideoInputModeControl(
+        {inputs:{first_frame:{max:1}, last_frame:{max:1}}},
+        visibleReferenceImagesFor(activeSettingsSubject())
+    );
     settings.videoProvider = 'volcengine';
     if(!settings.videoModel || !models.includes(settings.videoModel)) settings.videoModel = models[0] || 'seedance-1.0-pro';
     dynamicParams.innerHTML = `
@@ -5478,7 +5755,7 @@ function renderVolcengineVideoParams(){
         ${renderVideoToggleControl('videoCameraFixed', tr('smart.videoCameraFixed'))}
         ${renderVideoToggleControl('videoWatermark', tr('smart.videoWatermark'))}
         ${renderVideoToggleControl('videoMultimodal', tr('smart.videoMultimodal'))}
-        ${renderVideoToggleControl('videoUseFrameRoles', tr('smart.videoUseFrameRoles'))}
+        ${videoInputModeControl}
     `;
 }
 function renderRunningHubParams(){
@@ -5760,23 +6037,27 @@ function rhFieldDisplayLabel(field, fields){
     return original && !['text','image','video','audio'].includes(original.toLowerCase()) ? original : rhMediaKindLabel(kind, index);
 }
 function renderRhConfigControl(ref){
-    const apps = runningHubEntries('app');
     const selected = ref ? runningHubEntryKey(ref.kind, ref.id) : '';
-    const groupHtml = (kind, entries, label) => entries.length ? `
+    const selectedRegion = ref?.region || runningHubRegion(settings);
+    const groupHtml = (kind, entries, region, label) => entries.length ? `
         <div class="model-list-label rh-list-label">${escapeHtml(label)}<span class="count">${entries.length}</span></div>
         ${entries.map(entry => {
             const id = runningHubEntryId(entry, kind);
             const key = runningHubEntryKey(kind, id);
             const icon = kind === 'workflow' ? 'workflow' : kind === 'model' ? 'box' : 'sparkles';
-            return `<button type="button" class="direct-option rh-entry-option ${key === selected ? 'active' : ''}" data-smart-param="rhConfigKey" data-smart-value="${escapeHtml(key)}"><i data-lucide="${icon}"></i><span>${escapeHtml(runningHubEntryLabel(entry, kind))}</span></button>`;
+            return `<button type="button" class="direct-option rh-entry-option ${key === selected && region === selectedRegion ? 'active' : ''}" data-smart-param="rhConfigKey" data-smart-value="${escapeAttr(key)}" data-rh-region="${escapeAttr(region)}"><i data-lucide="${icon}"></i><span>${escapeHtml(runningHubEntryLabel(entry, kind, {...settings, rhRegion:region}))}</span></button>`;
         }).join('')}
     ` : '';
+    const regionGroups = runningHubEnabledRegions().map(region => ({
+        region,
+        entries:runningHubEntries('app', {...settings, rhRegion:region})
+    })).filter(group => group.entries.length);
     return `<div class="smart-control rh-config-control">
         <button class="smart-pill" type="button"><i data-lucide="workflow"></i><span class="sub">${escapeHtml(ref ? runningHubEntryLabel(ref.entry, ref.kind) : tr('smart.rhConfig'))}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
         <div class="smart-popover compact-popover rh-picker-popover">
             <div class="smart-popover-title">${escapeHtml(tr('smart.rhConfig'))}</div>
             <div class="model-list rh-config-list">
-                ${groupHtml('app', apps, tr('smart.rhApps')) || `<div class="muted-note">${escapeHtml(tr('smart.rhNoConfig'))}</div>`}
+                ${regionGroups.map(group => groupHtml('app', group.entries, group.region, group.region === 'cn' ? 'RunningHub · CN' : 'RunningHub · AI')).join('') || `<div class="muted-note">${escapeHtml(tr('smart.rhNoConfig'))}</div>`}
             </div>
         </div>
     </div>`;
@@ -6413,50 +6694,59 @@ function rhFieldIndexes(fields){
     });
     return map;
 }
-async function ensureRunningHubWorkflow(workflowId, options={}){
+function runningHubWorkflowCacheKey(workflowId, sourceSettings=settings){
+    return `${runningHubRegion(sourceSettings)}:${String(workflowId || '').trim()}`;
+}
+async function ensureRunningHubWorkflow(workflowId, options={}, sourceSettings=settings){
     workflowId = String(workflowId || '').trim();
     if(!workflowId) return null;
-    if(runningHubWorkflowCache[workflowId]) return runningHubWorkflowCache[workflowId];
-    const res = await fetch(`/api/runninghub/workflows/${encodeURIComponent(workflowId)}`);
-    if(!res.ok){
+    const region = runningHubRegion(sourceSettings);
+    const cacheKey = runningHubWorkflowCacheKey(workflowId, sourceSettings);
+    if(runningHubWorkflowCache[cacheKey]) return runningHubWorkflowCache[cacheKey];
+    const res = options.fetchRemote === true
+        ? null
+        : await fetch(`/api/runninghub/workflows/${encodeURIComponent(workflowId)}?region=${encodeURIComponent(region)}`);
+    if(!res?.ok){
         if(options.fetchRemote !== true) {
-            delete runningHubWorkflowCache[workflowId];
+            delete runningHubWorkflowCache[cacheKey];
             return null;
         }
-        const entry = runningHubEntries('workflow').find(item => runningHubEntryId(item, 'workflow') === workflowId);
+        const entry = runningHubEntries('workflow', sourceSettings).find(item => runningHubEntryId(item, 'workflow') === workflowId);
         const remoteRes = await fetch('/api/runninghub/workflows/fetch', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({
                 workflowId,
-                title:runningHubEntryLabel(entry, 'workflow') || workflowId,
-                description:entry?.note || ''
+                title:runningHubEntryLabel(entry, 'workflow', sourceSettings) || workflowId,
+                description:entry?.note || '',
+                region
             })
         }).catch(() => null);
         if(!remoteRes?.ok){
-            delete runningHubWorkflowCache[workflowId];
+            delete runningHubWorkflowCache[cacheKey];
             return null;
         }
         const remoteData = await remoteRes.json().catch(() => null);
         const fetched = remoteData?.data;
         if(!fetched || !Array.isArray(fetched.fields)){
-            delete runningHubWorkflowCache[workflowId];
+            delete runningHubWorkflowCache[cacheKey];
             return null;
         }
-        runningHubWorkflowCache[workflowId] = {
+        runningHubWorkflowCache[cacheKey] = {
             workflowId,
-            title:fetched.title || runningHubEntryLabel(entry, 'workflow') || workflowId,
+            region,
+            title:fetched.title || runningHubEntryLabel(entry, 'workflow', sourceSettings) || workflowId,
             description:fetched.description || entry?.note || '',
             fields:fetched.fields || [],
             workflowJson:fetched.workflowJson || {},
             optionalImageMode:entry?.optionalImageMode || 'prune-workflow',
             raw:fetched.raw || {}
         };
-        return runningHubWorkflowCache[workflowId];
+        return runningHubWorkflowCache[cacheKey];
     }
     const data = await res.json();
-    runningHubWorkflowCache[workflowId] = data.workflow || null;
-    return runningHubWorkflowCache[workflowId];
+    runningHubWorkflowCache[cacheKey] = data.workflow ? {...data.workflow, region} : null;
+    return runningHubWorkflowCache[cacheKey];
 }
 async function currentRunningHubWorkflowConfig(sourceSettings=settings){
     const ref = selectedRunningHubRef(sourceSettings);
@@ -6470,7 +6760,17 @@ async function currentRunningHubWorkflowConfig(sourceSettings=settings){
             workflowJson:rhWorkflowJsonFromSources(sourceSettings.rhWorkflowJson, ref.entry?.workflowJson, ref.entry?.raw?.workflowJson, ref.entry?.raw?.prompt)
         };
     }
-    const cached = await ensureRunningHubWorkflow(ref.id).catch(() => null);
+    const entryFields = rhEntryFields(ref.entry);
+    if(entryFields.length){
+        return {
+            ...(ref.entry || {}),
+            workflowId:ref.id,
+            fields:entryFields,
+            optionalImageMode:ref.entry?.optionalImageMode || 'prune-workflow',
+            workflowJson:rhWorkflowJsonFromSources(ref.entry?.workflowJson, ref.entry?.raw?.workflowJson, ref.entry?.raw?.prompt)
+        };
+    }
+    const cached = await ensureRunningHubWorkflow(ref.id, {}, sourceSettings).catch(() => null);
     return {
         ...(ref.entry || {}),
         ...(cached || {}),
@@ -6788,7 +7088,7 @@ async function rhUploadValueIfNeeded(value, sourceSettings=settings){
     const res = await fetch('/api/runninghub/upload-asset', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({url:sourceUrl, useWallet:(sourceSettings || settings).rhPayment === 'wallet', region:runningHubRegion()})
+        body:JSON.stringify({url:sourceUrl, useWallet:(sourceSettings || settings).rhPayment === 'wallet', region:runningHubRegion(sourceSettings || settings)})
     });
     const data = await res.json();
     if(!res.ok || data.success === false) throw new Error(data.detail || data.error || tr('smart.rhUploadFailed'));
@@ -7221,23 +7521,7 @@ function bindCapabilityOptionSort(){
             buttons.sort((left, right) => (positions.get(capabilityOptionId(left)) ?? Number.MAX_SAFE_INTEGER) - (positions.get(capabilityOptionId(right)) ?? Number.MAX_SAFE_INTEGER));
             buttons.forEach(button => container.appendChild(button));
         }
-        capabilityOptionButtons(container).forEach(button => {
-            button.classList.add('capability-option-sortable');
-            let handle = button.querySelector(':scope > [data-capability-option-drag-handle]');
-            if(!handle){
-                handle = document.createElement('span');
-                handle.className = 'capability-option-drag-handle';
-                handle.dataset.capabilityOptionDragHandle = '';
-                handle.title = capabilityUiText('拖动调整选项顺序','Drag to reorder options');
-                handle.innerHTML = '<i data-lucide="grip-vertical"></i>';
-                button.prepend(handle);
-            }
-            handle.addEventListener('pointerdown', event => startCapabilityOptionDrag(event, handle));
-            handle.addEventListener('click', event => {
-                event.preventDefault();
-                event.stopPropagation();
-            });
-        });
+        // 仍恢复用户已经保存的选项顺序，但参数弹层不再注入默认拖拽手柄，避免短选项被挤窄。
     });
 }
 function preferenceListButtons(list){
@@ -7405,6 +7689,99 @@ function bindDynamicParams(){
             selectExecutionPlatform(button.dataset.executionPlatformOption || '');
         };
     });
+    dynamicParams.querySelectorAll('[data-capability-picker-search]').forEach(input => {
+        const picker = input.closest('[data-capability-model-picker]');
+        const filter = () => {
+            const query = input.value || '';
+            let visibleCount = 0;
+            picker?.querySelectorAll('[data-capability-picker-options]').forEach(stage => {
+                let stageCount = 0;
+                stage.querySelectorAll('[data-capability-picker-option]').forEach(option => {
+                    const visible = capabilityPickerSearchMatches(option.dataset.capabilityPickerSearchText || '', query);
+                    option.hidden = !visible;
+                    if(visible){ stageCount += 1; visibleCount += 1; }
+                });
+                stage.classList.toggle('is-search-empty', Boolean(query.trim()) && stageCount === 0);
+            });
+            const noMatch = picker?.querySelector('[data-capability-picker-no-match]');
+            if(noMatch) noMatch.hidden = !query.trim() || visibleCount > 0;
+        };
+        input.onclick = event => event.stopPropagation();
+        input.oninput = filter;
+    });
+    dynamicParams.querySelectorAll('[data-capability-picker-option]').forEach(button => {
+        button.onclick = event => {
+            if(smartPreferenceDragMoved) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const node = activeSettingsSubject();
+            const descriptor = executionSelectionDescriptor(node);
+            if(!descriptor) return;
+            const stage = button.dataset.capabilityPickerStage || '';
+            const value = button.dataset.capabilityPickerValue || '';
+            if(stage === 'family'){
+                const state = executionSelectionInputState(node, descriptor);
+                const selection = resolveCapabilityFamilyPickerSelection(
+                    descriptor.nodeType,
+                    state.inputCounts,
+                    value,
+                    '',
+                    '',
+                    state.inputRoles,
+                    {},
+                    settings[descriptor.providerKey] || ''
+                );
+                settings[descriptor.familyKey] = value;
+                settings[descriptor.modelKey] = selection.profile?.model_id || '';
+                if(selection.profile?.provider_id) settings[descriptor.providerKey] = selection.profile.provider_id;
+            } else if(stage === 'variant'){
+                settings[descriptor.familyKey] = button.dataset.capabilityPickerFamily || settings[descriptor.familyKey] || '';
+                settings[descriptor.modelKey] = button.dataset.capabilityPickerModel || value;
+                if(button.dataset.capabilityPickerProvider) settings[descriptor.providerKey] = button.dataset.capabilityPickerProvider;
+            } else if(stage === 'platform'){
+                settings[descriptor.familyKey] = button.dataset.capabilityPickerFamily || settings[descriptor.familyKey] || '';
+                settings[descriptor.modelKey] = button.dataset.capabilityPickerModel || settings[descriptor.modelKey] || '';
+                settings[descriptor.providerKey] = value;
+                if(value === 'runninghub' && button.dataset.capabilityPickerRegion){
+                    settings.rhRegion = normalizeRunningHubRegion(button.dataset.capabilityPickerRegion, runningHubRegion(settings));
+                }
+            } else return;
+            // 运行模式是选择链的最后一段：选中即确定，随即收起整个参数选择弹层。
+            // 模型 / 平台仍保持打开，交由 restoreOpenControl 在重渲染后自动恢复。
+            if(stage === 'variant'){
+                button.closest('[data-capability-model-picker]')?.classList.remove('pinned');
+            }
+            ensureExecutionSelectionDefaults(settings, node);
+            persistActiveSmartSettings();
+            renderDynamicParams();
+            scheduleSave();
+            render();
+        };
+    });
+    // 运行模式（最后一段）悬停预览：鼠标移到某个运行模式上时，顶部实时显示它对应的真实模型 ID，移开后还原为已选值。
+    (() => {
+        const modelName = dynamicParams.querySelector('.execution-config-panel-head .capability-model-name');
+        if(!modelName) return;
+        const committedText = modelName.textContent || '';
+        const committedTitle = modelName.getAttribute('title') || '';
+        const restore = option => {
+            modelName.textContent = committedText;
+            modelName.setAttribute('title', committedTitle);
+            modelName.classList.remove('is-previewing');
+            option?.classList.remove('is-previewing');
+        };
+        dynamicParams.querySelectorAll('[data-capability-picker-option][data-capability-picker-stage="variant"]').forEach(option => {
+            const modelId = option.dataset.capabilityPickerModel || option.dataset.capabilityPickerValue || '';
+            if(!modelId) return;
+            option.addEventListener('mouseenter', () => {
+                modelName.textContent = modelId;
+                modelName.setAttribute('title', modelId);
+                modelName.classList.add('is-previewing');
+                option.classList.add('is-previewing');
+            });
+            option.addEventListener('mouseleave', () => restore(option));
+        });
+    })();
     dynamicParams.querySelectorAll('[data-execution-family-option]').forEach(button => {
         button.onclick = event => {
             if(smartPreferenceDragMoved) return;
@@ -7523,6 +7900,9 @@ function bindDynamicParams(){
             event.stopPropagation();
             const inCapabilitySettings = Boolean(btn.closest('.capability-settings-popover'));
             if(!inCapabilitySettings) closeAllSmartPopovers();
+            if(btn.dataset.smartParam === 'rhConfigKey' && btn.dataset.rhRegion){
+                settings.rhRegion = normalizeRunningHubRegion(btn.dataset.rhRegion, runningHubRegion(settings));
+            }
             setDynamicSetting(btn.dataset.smartParam, btn.dataset.smartValue);
             if(btn.dataset.smartParam === 'videoDuration') renderDynamicParams();
             else if(inCapabilitySettings && btn.dataset.smartParam !== 'jimengUpscaleRes') renderDynamicParams();
@@ -7846,9 +8226,12 @@ async function loadConfig(){
         comfyWorkflows = Array.isArray(wf.workflows) ? wf.workflows : [];
         runningHubWorkflowCache = {};
         const rhProvider = apiProviders.find(p => p.id === 'runninghub');
-        const rhWorkflowIds = (rhProvider?.rh_workflows || []).map(item => String(item.workflowId || item.id || '').trim()).filter(Boolean);
-        await Promise.all(rhWorkflowIds.map(async workflowId => {
-            try { await ensureRunningHubWorkflow(workflowId); } catch(_) {}
+        const rhRegions = runningHubEnabledRegions(rhProvider);
+        const rhWorkflowRequests = rhRegions.flatMap(region => runningHubEntries('workflow', {rhRegion:region})
+            .map(item => ({workflowId:String(item.workflowId || item.id || '').trim(), region}))
+            .filter(item => item.workflowId));
+        await Promise.all(rhWorkflowRequests.map(async request => {
+            try { await ensureRunningHubWorkflow(request.workflowId, {}, {rhRegion:request.region}); } catch(_) {}
         }));
         lastConfigRefreshAt = Date.now();
         sanitizeSmartApiSelection(settings);
@@ -9955,6 +10338,12 @@ async function loadCanvas(){
         nodes.forEach(node => {
             if(node.runSettings) normalizeSmartVideoModeSettings(node.runSettings, true);
         });
+        const initializedRunningHubRegions = nodes.reduce((changed, node) => {
+            if(node?.type !== SMART_NODE_TYPES.aiApp || !node.runSettings) return changed;
+            const before = String(node.runSettings.rhRegion || '');
+            const ref = selectedRunningHubRef(node.runSettings);
+            return Boolean(ref && before !== String(node.runSettings.rhRegion || '')) || changed;
+        }, false);
         const initializedExecutionDefaults = nodes.reduce((changed, node) => {
             if(!node.runSettings) return changed;
             return ensureExecutionSelectionDefaults(node.runSettings, node) || changed;
@@ -9971,7 +10360,7 @@ async function loadCanvas(){
         });
         applyViewport();
         render();
-    if(smartNodeMigrationPending || migratedMusicNodes || initializedExecutionDefaults || cleanedDetachedInputs || cleanedCompletedState || recoveredLoopOutputs || hiddenCompletedTimers || hydratedTextResults) scheduleSave();
+    if(smartNodeMigrationPending || migratedMusicNodes || initializedRunningHubRegions || initializedExecutionDefaults || cleanedDetachedInputs || cleanedCompletedState || recoveredLoopOutputs || hiddenCompletedTimers || hydratedTextResults) scheduleSave();
         resumeSmartPendingTasks();
         resumeJimengPendingNodes();
         startCanvasMetaPoll();
@@ -9983,7 +10372,7 @@ function migrateLegacyMusicGeneratorNodes(){
     nodes.forEach(node => {
         if(node?.type !== SMART_NODE_TYPES.audioGenerator) return;
         const runSettings = node.runSettings || {};
-        const profile = capabilityProfileFor(runSettings.audioProvider, runSettings.audioModel, 'music_generation');
+        const profile = capabilityProfileFor(runSettings.audioProvider, runSettings.audioModel, 'music_generation', capabilityRegionForProvider(runSettings.audioProvider, runSettings));
         if(profile?.node_type !== 'music_generation') return;
         node.type = SMART_NODE_TYPES.musicGenerator;
         node.title = SMART_NODE_CONTRACT.titleForType(node.type);
@@ -10229,7 +10618,9 @@ function createExecutionNode(x, y, type, options={}){
     if(type === SMART_NODE_TYPES.aiApp){
         node.runSettings.engine = 'runninghub';
         node.runSettings.apiKind = 'image';
-        const defaultApp = runningHubEntries('app')[0];
+        const defaultRegion = runningHubEnabledRegions()[0] || runningHubRegion(node.runSettings);
+        node.runSettings.rhRegion = defaultRegion;
+        const defaultApp = runningHubEntries('app', {...node.runSettings, rhRegion:defaultRegion})[0];
         node.runSettings.rhConfigKey = defaultApp ? runningHubEntryKey('app', runningHubEntryId(defaultApp, 'app')) : '';
         node.runSettings.rhAppId = defaultApp ? runningHubEntryId(defaultApp, 'app') : '';
         delete node.runSettings.rhWorkflowId;
@@ -11365,6 +11756,7 @@ function smartRunRequestMeta(run){
         workflow_id:s.rhWorkflowId || '',
         webapp_id:s.rhAppId || '',
         task_id:s.rhTaskId || '',
+        region:s.rhRegion || '',
         mode:s.rhMode || 'workflow',
         duration:s.duration || '',
         aspect_ratio:s.aspectRatio || '',
@@ -11372,10 +11764,10 @@ function smartRunRequestMeta(run){
         refs:s.refCount || 0
     };
     if(s.engine === 'modelscope') return {backend:'Modelscope', model:s.msCustomModel || ''};
-    if(run?.kind === 'video') return {provider_id:s.videoProvider || '', family_id:s.videoFamilyId || '', model:s.videoModel || '', duration:s.videoDuration || '', aspect_ratio:s.videoAspect || '', resolution:s.videoResolution || ''};
-    if(run?.kind === 'audio') return {provider_id:s.audioProvider || '', family_id:s.audioFamilyId || '', model:s.audioModel || '', format:s.audioFormat || '', sample_rate:s.audioSampleRate || '', speaker:s.audioSpeaker || ''};
-    if(run?.kind === 'music') return {provider_id:s.musicProvider || '', family_id:s.musicFamilyId || '', model:s.musicModel || ''};
-    return {provider_id:s.provider_id || '', family_id:s.imageFamilyId || '', model:s.model || '', size:run?.size || '', quality:s.quality || '', n:s.count || 1};
+    if(run?.kind === 'video') return {provider_id:s.videoProvider || '', family_id:s.videoFamilyId || '', model:s.videoModel || '', region:s.rhRegion || '', duration:s.videoDuration || '', aspect_ratio:s.videoAspect || '', resolution:s.videoResolution || ''};
+    if(run?.kind === 'audio') return {provider_id:s.audioProvider || '', family_id:s.audioFamilyId || '', model:s.audioModel || '', region:s.rhRegion || '', format:s.audioFormat || '', sample_rate:s.audioSampleRate || '', speaker:s.audioSpeaker || ''};
+    if(run?.kind === 'music') return {provider_id:s.musicProvider || '', family_id:s.musicFamilyId || '', model:s.musicModel || '', region:s.rhRegion || ''};
+    return {provider_id:s.provider_id || '', family_id:s.imageFamilyId || '', model:s.model || '', region:s.rhRegion || '', size:run?.size || '', quality:s.quality || '', n:s.count || 1};
 }
 function smartRunSnapshot(node, prompt, refs=[], kind='image'){
     const settingsSnapshot = cloneSmartSettings(settings);
@@ -11400,7 +11792,7 @@ function smartRunSnapshot(node, prompt, refs=[], kind='image'){
         video:videoRefsOnly(refs).length,
         audio:audioRefsOnly(refs).length
     };
-    const profile = capabilityProfileFor(providerId, modelId, nodeType);
+    const profile = capabilityProfileFor(providerId, modelId, nodeType, capabilityRegionForProvider(providerId, settingsSnapshot));
     const referenceAudio = audioRefsOnly(refs).find(ref => ref?.url)?.url || '';
     const parameterValues = kind === 'video'
         ? capabilityVideoParameterValues(profile, settingsSnapshot)
@@ -12942,15 +13334,26 @@ function smartDirectorPersonalizedAdapter(node, seg){
         : 'local-comfyui';
     adapter.engine = engine;
     if(engine === 'runninghub-app'){
-        const entries = runningHubEntries('app');
-        let entry = entries.find(item => runningHubEntryId(item, 'app') === String(adapter.selectedId || '')) || entries[0] || null;
+        const explicitRegion = String(adapter.region || '').trim();
+        let region = normalizeRunningHubRegion(explicitRegion || settings.rhRegion, runningHubRegion(settings));
+        let entries = runningHubEntries('app', {rhRegion:region});
+        let entry = entries.find(item => runningHubEntryId(item, 'app') === String(adapter.selectedId || '')) || null;
+        if(!entry && !explicitRegion && adapter.selectedId){
+            for(const candidateRegion of runningHubEnabledRegions()){
+                const candidateEntries = runningHubEntries('app', {rhRegion:candidateRegion});
+                const candidate = candidateEntries.find(item => runningHubEntryId(item, 'app') === String(adapter.selectedId || ''));
+                if(candidate){ region = candidateRegion; entries = candidateEntries; entry = candidate; break; }
+            }
+        }
+        if(!entry) entry = entries[0] || null;
         const selectedId = entry ? runningHubEntryId(entry, 'app') : '';
         adapter.selectedId = selectedId;
+        adapter.region = entry?.region || region;
         const fields = sortRunningHubFields(rhUsableFields(rhEntryFields(entry)));
         smartDirectorRememberPersonalizedDurationConstraint(adapter, fields, engine);
         return {
-            adapter, engine, selectedId, entry, fields, config:null,
-            options:entries.map(item => ({id:runningHubEntryId(item, 'app'), label:runningHubEntryLabel(item, 'app')})).filter(item => item.id)
+            adapter, engine, selectedId, region:adapter.region, entry, fields, config:null,
+            options:entries.map(item => ({id:runningHubEntryId(item, 'app'), region:item.region, label:runningHubEntryLabel(item, 'app', {rhRegion:item.region})})).filter(item => item.id)
         };
     }
     const options = comfyWorkflows.map(workflow => ({
@@ -12980,7 +13383,7 @@ function smartDirectorPersonalizedChoiceHtml({key, label, value='', options=[], 
         : kind === 'common'
             ? 'data-director-personalized-common-option'
             : 'data-director-personalized-choice-option';
-    const optionHtml = options.map(option => `<button type="button" class="direct-option director-choice-option ${String(option.value) === String(value) ? 'active' : ''}" ${optionAttr}="${escapeAttr(key)}" data-director-personalized-choice-value="${escapeAttr(option.value)}" ${kind === 'param' ? `data-director-personalized-param-type="${escapeAttr(type)}"` : ''} ${option.disabled ? 'disabled' : ''}><span>${escapeHtml(option.label || option.value)}</span></button>`).join('');
+    const optionHtml = options.map(option => `<button type="button" class="direct-option director-choice-option ${String(option.value) === String(value) ? 'active' : ''}" ${optionAttr}="${escapeAttr(key)}" data-director-personalized-choice-value="${escapeAttr(option.value)}" data-director-personalized-choice-region="${escapeAttr(option.region || '')}" ${kind === 'param' ? `data-director-personalized-param-type="${escapeAttr(type)}"` : ''} ${option.disabled ? 'disabled' : ''}><span>${escapeHtml(option.label || option.value)}</span></button>`).join('');
     return `<div class="smart-control director-choice-field director-personalized-choice-field" data-director-personalized-choice="${escapeAttr(key)}">
         <span class="director-choice-label">${escapeHtml(label)}</span>
         <button type="button" class="smart-pill director-choice-trigger" title="${escapeAttr(selectedText)}" aria-haspopup="listbox" aria-expanded="false" ${disabled ? 'disabled' : ''}><span>${escapeHtml(selectedText)}</span><i data-lucide="chevron-down"></i></button>
@@ -13100,8 +13503,8 @@ function smartDirectorPersonalizedSettingHtml(node, seg, adapterState=smartDirec
             ? capabilityUiText('请先在 API 设置中同步 RunningHub AI 应用','Sync a RunningHub AI app in API Settings first')
             : capabilityUiText('请先在 API 设置中添加本地 ComfyUI 工作流','Add a local ComfyUI workflow in API Settings first');
     return `<div class="director-personalized-settings">
-        ${smartDirectorPersonalizedChoiceHtml({key:'engine', label:capabilityUiText('运行来源','Engine'), value:adapterState.engine, options:[...(legacy ? [{value:'runninghub-workflow-deprecated',label:capabilityUiText('旧 RunningHub 工作流（已废弃）','Legacy RunningHub workflow (Deprecated)'),disabled:true}] : []),{value:'local-comfyui',label:capabilityUiText('本地 ComfyUI','Local ComfyUI')},{value:'runninghub-app',label:'RunningHub ComfyUI'}]})}
-        ${legacy ? `<div class="director-personalized-warning">${escapeHtml(capabilityUiText('该入口只供历史画布兼容。请选择新的运行来源后再继续。','This entry is retained only for legacy canvases. Choose a current engine to continue.'))}</div>` : `${smartDirectorPersonalizedChoiceHtml({key:'source', label:adapterState.engine === 'runninghub-app' ? capabilityUiText('AI 应用','AI app') : capabilityUiText('工作流','Workflow'), value:adapterState.selectedId, options:adapterState.options.map(option => ({value:option.id,label:option.label})), disabled:!adapterState.options.length})}
+        ${smartDirectorPersonalizedChoiceHtml({key:'engine', label:capabilityUiText('运行来源','Engine'), value:adapterState.engine, options:[...(legacy ? [{value:'runninghub-workflow-deprecated',label:capabilityUiText('旧 RunningHub 工作流（已废弃）','Legacy RunningHub workflow (Deprecated)'),disabled:true}] : []),{value:'local-comfyui',label:capabilityUiText('本地 ComfyUI','Local ComfyUI')},{value:'runninghub-app',label:capabilityUiText('AI 应用','AI App')}]})}
+        ${legacy ? `<div class="director-personalized-warning">${escapeHtml(capabilityUiText('该入口只供历史画布兼容。请选择新的运行来源后再继续。','This entry is retained only for legacy canvases. Choose a current engine to continue.'))}</div>` : `${smartDirectorPersonalizedChoiceHtml({key:'source', label:adapterState.engine === 'runninghub-app' ? capabilityUiText('AI 应用','AI app') : capabilityUiText('工作流','Workflow'), value:adapterState.selectedId, options:adapterState.options.map(option => ({value:option.id,label:option.label,region:option.region})), disabled:!adapterState.options.length})}
         ${adapterState.engine === 'local-comfyui' && adapterState.selectedId && !adapterState.config ? `<div class="director-personalized-loading" data-director-workflow-loading="${escapeAttr(adapterState.selectedId)}">${escapeHtml(capabilityUiText(`正在读取 ${selectedLabel}…`,`Loading ${selectedLabel}…`))}</div>` : ''}
         <div class="director-personalized-parameters">${parameterHtml || `<div class="director-parameter-empty">${escapeHtml(emptyText)}</div>`}</div>`}
     </div>`;
@@ -13462,18 +13865,18 @@ function smartExecutionNodeMeta(node){
         : runSettings.provider_id;
     const provider = providers.find(item => item.id === providerId);
     const model = node.type === SMART_NODE_TYPES.textGenerator
-        ? capabilityModelIdLabel(capabilityProfileFor(runSettings.textProvider, runSettings.textModel, 'text_generation')) || runSettings.textModel
+        ? capabilityModelIdLabel(capabilityProfileFor(runSettings.textProvider, runSettings.textModel, 'text_generation', capabilityRegionForProvider(runSettings.textProvider, runSettings))) || runSettings.textModel
         : node.type === SMART_NODE_TYPES.videoGenerator
-        ? capabilityModelIdLabel(capabilityProfileFor(runSettings.videoProvider, runSettings.videoModel, 'video_generation')) || runSettings.videoModel
+        ? capabilityModelIdLabel(capabilityProfileFor(runSettings.videoProvider, runSettings.videoModel, 'video_generation', capabilityRegionForProvider(runSettings.videoProvider, runSettings))) || runSettings.videoModel
         : node.type === SMART_NODE_TYPES.audioGenerator
-        ? capabilityModelIdLabel(capabilityProfileFor(runSettings.audioProvider, runSettings.audioModel, 'audio_generation')) || runSettings.audioModel
+        ? capabilityModelIdLabel(capabilityProfileFor(runSettings.audioProvider, runSettings.audioModel, 'audio_generation', capabilityRegionForProvider(runSettings.audioProvider, runSettings))) || runSettings.audioModel
         : node.type === SMART_NODE_TYPES.musicGenerator
-        ? capabilityModelIdLabel(capabilityProfileFor(runSettings.musicProvider, runSettings.musicModel, 'music_generation')) || runSettings.musicModel
+        ? capabilityModelIdLabel(capabilityProfileFor(runSettings.musicProvider, runSettings.musicModel, 'music_generation', capabilityRegionForProvider(runSettings.musicProvider, runSettings))) || runSettings.musicModel
         : node.type === SMART_NODE_TYPES.aiApp
         ? (selectedRhRef ? runningHubEntryLabel(selectedRhRef.entry, selectedRhRef.kind) : '')
         : node.type === SMART_NODE_TYPES.comfyWorkflow
         ? (runSettings.comfyWorkflow || '')
-        : capabilityModelIdLabel(capabilityProfileFor(runSettings.provider_id, runSettings.model, 'image_generation')) || runSettings.model;
+        : capabilityModelIdLabel(capabilityProfileFor(runSettings.provider_id, runSettings.model, 'image_generation', capabilityRegionForProvider(runSettings.provider_id, runSettings))) || runSettings.model;
     const mediaInputCount = node.type === SMART_NODE_TYPES.textGenerator
         ? Object.values(textGenerationRequestForNode(node).inputCounts || {}).reduce((sum, count) => sum + Number(count || 0), 0)
         : inputImagesFor(node).filter(item => item?.url).length;
@@ -13748,7 +14151,7 @@ function smartGenerationProfile(snapshot){
         : nodeType === 'audio_generation' ? runSettings.audioModel
         : nodeType === 'music_generation' ? runSettings.musicModel
         : runSettings.model;
-    return {nodeType, providerId:providerId || '', modelId:modelId || '', profile:capabilityProfileFor(providerId, modelId, nodeType)};
+    return {nodeType, providerId:providerId || '', modelId:modelId || '', profile:capabilityProfileFor(providerId, modelId, nodeType, capabilityRegionForProvider(providerId, runSettings))};
 }
 function smartGenerationValueText(key, value){
     if(value === undefined || value === null || value === '' || value === CAPABILITY_PARAMETER_UNSET) return capabilityUiText('未设置，不发送','Not set; omitted');
@@ -14201,12 +14604,13 @@ async function runFixedTextGenerationSnapshot(snapshot, runNode){
     const audios = audioRefsOnly(refs).map(item => item.url).filter(Boolean);
     const inputCounts = {text:1, image:images.length, video:videos.length, audio:audios.length};
     const inputRoles = capabilityInputRoles(refs, true);
-    const selection = resolveCapabilityForRun(descriptor.providerId, 'text_generation', inputCounts, runSettings.textFamilyId, descriptor.modelId, '', inputRoles, capabilityParameterIntent(descriptor.providerId, descriptor.modelId, 'text_generation', runSettings));
+    const region = capabilityRegionForProvider(descriptor.providerId, runSettings);
+    const selection = resolveCapabilityForRun(descriptor.providerId, 'text_generation', inputCounts, runSettings.textFamilyId, descriptor.modelId, '', inputRoles, capabilityParameterIntent(descriptor.providerId, descriptor.modelId, 'text_generation', runSettings), region);
     const parameters = capabilityParameterSubmissionValues(selection.profile, runSettings);
-    await preflightCanvasNodeRun({node:runNode, clientOperationId:createCanvasOperationId(runNode.id), providerId:descriptor.providerId, modelId:selection.profile.model_id, familyId:selection.family.family_id, nodeType:'text_generation', inputs:{prompt:message, reference:images, source_video:videos, reference_audio:audios}, inputCounts, inputRoles, parameters});
+    await preflightCanvasNodeRun({node:runNode, clientOperationId:createCanvasOperationId(runNode.id), providerId:descriptor.providerId, modelId:selection.profile.model_id, familyId:selection.family.family_id, nodeType:'text_generation', inputs:{prompt:message, reference:images, source_video:videos, reference_audio:audios}, inputCounts, inputRoles, parameters, region});
     await queueCanvasRun(runNode);
     throwIfCanvasRunCancelled(runNode);
-    const response = await fetch('/api/canvas-llm', {method:'POST', headers:{'Content-Type':'application/json'}, signal:executionResultAbortSignal(runNode), body:JSON.stringify({message, messages:[], images, videos, audios, input_roles:inputRoles, model:selection.profile.model_id, family_id:selection.family.family_id, provider:descriptor.providerId, ms_model:descriptor.providerId === 'modelscope' ? selection.profile.model_id : '', system_prompt:runSettings.textSystemEnabled ? String(runSettings.textSystemPrompt || '') : '', parameters})});
+    const response = await fetch('/api/canvas-llm', {method:'POST', headers:{'Content-Type':'application/json'}, signal:executionResultAbortSignal(runNode), body:JSON.stringify({message, messages:[], images, videos, audios, input_roles:inputRoles, model:selection.profile.model_id, family_id:selection.family.family_id, provider:descriptor.providerId, ...(descriptor.providerId === 'runninghub' ? {region} : {}), ms_model:descriptor.providerId === 'modelscope' ? selection.profile.model_id : '', system_prompt:runSettings.textSystemEnabled ? String(runSettings.textSystemPrompt || '') : '', parameters})});
     const data = await response.json().catch(() => ({}));
     if(!response.ok) throw new Error(apiErrorMessage(data, capabilityUiText('文本重新生成失败','Text regeneration failed')));
     throwIfCanvasRunCancelled(runNode);
@@ -14542,7 +14946,7 @@ async function runJimengUpscale(node, index){
         });
         if(!task.task_id) throw new Error(tr('smart.errRunFailed'));
         const live = liveSmartNode(target) || target;
-        live.pendingTasks = [{taskId:task.task_id, kind:'image', providerId, model:''}];
+        live.pendingTasks = [{taskId:task.task_id, kind:'image', providerId, model:'', region:providerId === 'runninghub' ? runningHubRegion(settings) : ''}];
         live.pending = 1;
         live.running = false;
         render();
@@ -15352,6 +15756,9 @@ function bindMinimaxNodeControls(el, node){
             } else if(key === 'source'){
                 const adapter = smartDirectorPersonalizedAdapter(node, seg).adapter;
                 adapter.selectedId = value;
+                if(adapter.engine === 'runninghub-app' && option.dataset.directorPersonalizedChoiceRegion){
+                    adapter.region = normalizeRunningHubRegion(option.dataset.directorPersonalizedChoiceRegion, runningHubRegion(settings));
+                }
                 adapter.params = {};
                 adapter.inputBindings = {};
                 if(adapter.engine === 'local-comfyui') await ensureComfyWorkflow(adapter.selectedId);
@@ -21457,7 +21864,7 @@ async function handleSmartImageDropPayload(payload, targetId='', opts={}){
     }
 }
 function sizeForRun(sourceSettings=settings){
-    const profile = capabilityProfileFor(sourceSettings.provider_id, sourceSettings.model, 'image_generation');
+    const profile = capabilityProfileFor(sourceSettings.provider_id, sourceSettings.model, 'image_generation', capabilityRegionForProvider(sourceSettings.provider_id, sourceSettings));
     const effective = capabilityImageParameterValues(profile, sourceSettings);
     const explicitSize = String(effective.size || '').trim();
     const parsedSize = parseSizeValue(explicitSize);
@@ -23884,7 +24291,7 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
                 delete history.h;
                 outputSlot.images = [];
             }
-            outputSlot.pendingTasks = taskIds.map(taskId => ({taskId, kind:'image', providerId:taskResult.providerId, model:taskResult.model}));
+            outputSlot.pendingTasks = taskIds.map(taskId => ({taskId, kind:'image', providerId:taskResult.providerId, model:taskResult.model, region:taskResult.region || ''}));
             outputSlot.pending = Math.max(taskIds.length, Number(outputSlot.pending || 0) || taskIds.length);
             outputSlot.running = false;
             render();
@@ -24405,7 +24812,7 @@ async function runGeneration(){
             }
             if(outImages?.runRef) pendingNode.runRef = cloneSmartSettings(outImages.runRef);
             pendingNode.runSubmissionFailures = Array.isArray(outImages?.submissionFailures) ? [...outImages.submissionFailures] : [];
-            pendingNode.pendingTasks = taskIds.map(taskId => ({taskId, kind:'image', providerId:outImages.providerId, model:outImages.model}));
+            pendingNode.pendingTasks = taskIds.map(taskId => ({taskId, kind:'image', providerId:outImages.providerId, model:outImages.model, region:outImages.region || ''}));
             pendingNode.pending = Math.max(taskIds.length, Number(pendingNode.pending || 0) || taskIds.length);
             pendingNode.runStartedAt = nowMs();
             pendingNode.runTimerHidden = false;
@@ -24506,7 +24913,8 @@ async function runPromptLLMNode(nodeId){
                 runSettings.textModel,
                 '',
                 request.inputRoles,
-                capabilityParameterIntent(runSettings.textProvider, runSettings.textModel, 'text_generation', runSettings)
+                capabilityParameterIntent(runSettings.textProvider, runSettings.textModel, 'text_generation', runSettings),
+                capabilityRegionForProvider(runSettings.textProvider, runSettings)
             );
             runSettings.textFamilyId = textCapabilitySelection.family.family_id;
             runSettings.textModel = textCapabilitySelection.profile.model_id;
@@ -24561,7 +24969,8 @@ async function runPromptLLMNode(nodeId){
             inputs:{prompt:message, reference:images, source_video:videos, reference_audio:audios},
             inputCounts:textInputCounts,
             inputRoles:textInputRoles,
-            parameters:textParameters
+            parameters:textParameters,
+            region:capabilityRegionForProvider(provider, runSettings)
         });
         throwIfCanvasRunCancelled(runSubject);
         await queueCanvasRun(runSubject);
@@ -24579,6 +24988,7 @@ async function runPromptLLMNode(nodeId){
                 model,
                 family_id:isTextGenerator ? (runSettings.textFamilyId || '') : '',
                 provider,
+                ...(provider === 'runninghub' ? {region:runningHubRegion(runSettings)} : {}),
                 ms_model: provider === 'modelscope' ? model : '',
                 system_prompt:(isTextGenerator ? runSettings.textSystemEnabled : node.llmSystemEnabled) ? (systemPrompt || 'You are a helpful prompt assistant.') : '',
                 parameters:textParameters
@@ -24845,6 +25255,7 @@ async function preflightCanvasNodeRun(options={}){
         graphConnections:canvas?.connections || [],
         inputMetadata:options.inputMetadata || canvasInputMetadataForPreflight(options.inputs || {})
     });
+    if(options.region) request.region = String(options.region);
     const response = await fetch('/api/canvas-preflight', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
@@ -24870,7 +25281,8 @@ async function runApiGeneration(prompt, refs, runSettings=settings, runNode=null
     const inputCounts = {text:prompt ? 1 : 0, image:imageRefsOnly(refs).length, video:0, audio:0};
     const inputRoles = capabilityInputRoles(refs, Boolean(prompt));
     const parameterIntent = capabilityParameterIntent(runSettings.provider_id, runSettings.model, 'image_generation', runSettings);
-    const selection = resolveCapabilityForRun(runSettings.provider_id, 'image_generation', inputCounts, runSettings.imageFamilyId, runSettings.model, '', inputRoles, parameterIntent);
+    const region = capabilityRegionForProvider(runSettings.provider_id, runSettings);
+    const selection = resolveCapabilityForRun(runSettings.provider_id, 'image_generation', inputCounts, runSettings.imageFamilyId, runSettings.model, '', inputRoles, parameterIntent, region);
     const profile = selection.profile;
     runSettings.imageFamilyId = selection.family.family_id;
     runSettings.model = profile.model_id;
@@ -24887,7 +25299,8 @@ async function runApiGeneration(prompt, refs, runSettings=settings, runNode=null
         n:1,
         reference_images:imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX),
         input_roles:inputRoles,
-        parameters:effective
+        parameters:effective,
+        ...(runSettings.provider_id === 'runninghub' ? {region} : {})
     };
     await preflightCanvasNodeRun({
         node:runNode || activeSettingsSubject(),
@@ -24899,7 +25312,8 @@ async function runApiGeneration(prompt, refs, runSettings=settings, runNode=null
         inputs:{prompt:payload.prompt, reference:payload.reference_images.map(item => item.url).filter(Boolean)},
         inputCounts,
         inputRoles,
-        parameters:effective
+        parameters:effective,
+        region
     });
     const activeRunNode = runNode || activeSettingsSubject();
     await queueCanvasRun(activeRunNode);
@@ -24914,7 +25328,7 @@ async function runApiGeneration(prompt, refs, runSettings=settings, runNode=null
     }
     await submitCanvasRun(activeRunNode, taskIds.join(','));
     if(submissionFailures.length) await recoverCanvasRun(activeRunNode, submissionFailures.join('\n'));
-    return {taskIds, count, providerId:payload.provider_id, model:payload.model, runRef:cloneSmartSettings(activeRunNode?.runRef || null), submissionFailures};
+    return {taskIds, count, providerId:payload.provider_id, model:payload.model, region:payload.region || '', runRef:cloneSmartSettings(activeRunNode?.runRef || null), submissionFailures};
 }
 function smartCompactJson(value, max=4200){
     let text = '';
@@ -24971,7 +25385,7 @@ async function submitAndPollRunningHub(endpoint, body, runSettings=settings, run
         throwIfCanvasRunCancelled(runNode);
         await sleep(2500);
         throwIfCanvasRunCancelled(runNode);
-        const data = await fetch(`/api/runninghub/query?taskId=${encodeURIComponent(taskId)}&useWallet=${useWallet ? '1' : '0'}&region=${encodeURIComponent(runningHubRegion())}`, {signal:executionResultAbortSignal(runNode)}).then(async response => {
+        const data = await fetch(`/api/runninghub/query?taskId=${encodeURIComponent(taskId)}&useWallet=${useWallet ? '1' : '0'}&region=${encodeURIComponent(runningHubRegion(runSettings))}`, {signal:executionResultAbortSignal(runNode)}).then(async response => {
             const json = await response.clone().json().catch(async () => ({detail:await response.text().catch(() => '')}));
             if(!response.ok || json.success === false) throw runningHubPayloadError('查询', json, tr('smart.rhFailed'), {taskId});
             return json.data || json;
@@ -24994,7 +25408,7 @@ async function runLegacyRunningHubWorkflowGeneration(prompt, refs, runSettings){
     const media = rhPrepareMediaBindings(rhMediaForRun(prompt, refs), runSettings, fields);
     const nodeInfoList = await rhBuildNodeInfoList(media, runSettings, {});
     const workflow = rhApplyNodeInfoListToWorkflow(runSettings.rhWorkflowJson || {}, nodeInfoList);
-    const body = {workflowId, nodeInfoList, useWallet:runSettings.rhPayment === 'wallet', region:runningHubRegion(), ...(workflow ? {workflow} : {})};
+    const body = {workflowId, nodeInfoList, useWallet:runSettings.rhPayment === 'wallet', region:runningHubRegion(runSettings), ...(workflow ? {workflow} : {})};
     runSettings.rhWorkflowId = workflowId;
     runSettings.rhMode = 'workflow';
     return submitAndPollRunningHub('/api/runninghub/workflow-submit', body, runSettings);
@@ -25018,12 +25432,13 @@ async function runRunningHubGeneration(prompt, refs, runSettings=settings, node=
         providerId:'runninghub',
         nodeType:'ai_application',
         aiAppId:ref.id,
-        appFieldValues
+        appFieldValues,
+        region:runningHubRegion(runSettings)
     });
     await queueCanvasRun(node);
     const nodeInfoList = await rhBuildNodeInfoList(media, runSettings, randomValues);
     const endpoint = '/api/runninghub/submit';
-    const body = {webappId:ref.id, nodeInfoList, useWallet:runSettings.rhPayment === 'wallet', region:runningHubRegion()};
+    const body = {webappId:ref.id, nodeInfoList, useWallet:runSettings.rhPayment === 'wallet', region:runningHubRegion(runSettings)};
     runSettings.rhAppId = ref.id;
     delete runSettings.rhTaskId;
     delete runSettings.rhWorkflowId;
@@ -25066,9 +25481,10 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, runNode
         const inputRefs = [...refImages, ...refVideos.map(url => ({url, kind:'video'})), ...refAudios.map(url => ({url, kind:'audio'}))];
         const inputRoles = videoCapabilityInputRoles(inputRefs, runSettings, Boolean(prompt));
         const parameterIntent = capabilityParameterIntent(runSettings.videoProvider, runSettings.videoModel, 'video_generation', runSettings);
-        const currentProfile = capabilityProfileFor(runSettings.videoProvider, runSettings.videoModel, 'video_generation');
+        const region = capabilityRegionForProvider(runSettings.videoProvider, runSettings);
+        const currentProfile = capabilityProfileFor(runSettings.videoProvider, runSettings.videoModel, 'video_generation', region);
         parameterIntent.__execution_mode = videoExecutionModeFor(currentProfile, inputRefs, runSettings, Boolean(manualSmartVideoLink(runSettings)));
-        const selection = resolveCapabilityForRun(runSettings.videoProvider, 'video_generation', inputCounts, runSettings.videoFamilyId, runSettings.videoModel, '', inputRoles, parameterIntent);
+        const selection = resolveCapabilityForRun(runSettings.videoProvider, 'video_generation', inputCounts, runSettings.videoFamilyId, runSettings.videoModel, '', inputRoles, parameterIntent, region);
         const profile = selection.profile;
         runSettings.videoFamilyId = selection.family.family_id;
         runSettings.videoModel = profile.model_id;
@@ -25088,6 +25504,7 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, runNode
         }, parameterValues);
         const effectiveParameters = window.SmartModelCapabilities?.effectiveParameters(profile, parameterValues) || {};
         payload.parameters = effectiveParameters;
+        if(runSettings.videoProvider === 'runninghub') payload.region = region;
         await preflightCanvasNodeRun({
             node:runNode || activeSettingsSubject(),
             clientOperationId,
@@ -25098,7 +25515,8 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, runNode
             inputs:{prompt:payload.prompt, first_frame:refImages.filter(item => item.role === 'first_frame').map(item => item.url), last_frame:refImages.filter(item => item.role === 'last_frame').map(item => item.url), reference:refImages.filter(item => !['first_frame','last_frame'].includes(item.role)).map(item => item.url), source_video:refVideos, reference_audio:refAudios},
             inputCounts,
             inputRoles,
-            parameters:effectiveParameters
+            parameters:effectiveParameters,
+            region
         });
         const activeRunNode = runNode || activeSettingsSubject();
         await queueCanvasRun(activeRunNode);
@@ -25129,7 +25547,8 @@ async function runApiAudioMediaGeneration(prompt, refs, runSettings=settings, ru
     const inputCounts = {text:prompt ? 1 : 0, image:0, video:0, audio:referenceAudios.length};
     const inputRoles = capabilityInputRoles(referenceAudios.map(url => ({url, kind:'audio', role:'reference_audio'})), Boolean(prompt));
     const parameterIntent = capabilityParameterIntent(providerId, modelId, nodeType, runSettings);
-    const selection = resolveCapabilityForRun(providerId, nodeType, inputCounts, familyId, modelId, '', inputRoles, parameterIntent);
+    const region = capabilityRegionForProvider(providerId, runSettings);
+    const selection = resolveCapabilityForRun(providerId, nodeType, inputCounts, familyId, modelId, '', inputRoles, parameterIntent, region);
     const profile = selection.profile;
     if(isMusic){
         runSettings.musicFamilyId = selection.family.family_id;
@@ -25152,6 +25571,7 @@ async function runApiAudioMediaGeneration(prompt, refs, runSettings=settings, ru
     const effectiveParameters = window.SmartModelCapabilities?.effectiveParameters(profile, parameterValues) || {};
     payload.parameters = effectiveParameters;
     payload.reference_audios = referenceAudios;
+    if(providerId === 'runninghub') payload.region = region;
     await preflightCanvasNodeRun({
         node:runNode || activeSettingsSubject(),
         clientOperationId,
@@ -25162,7 +25582,8 @@ async function runApiAudioMediaGeneration(prompt, refs, runSettings=settings, ru
         inputs:{prompt:payload.prompt, reference_audio:referenceAudios},
         inputCounts,
         inputRoles,
-        parameters:effectiveParameters
+        parameters:effectiveParameters,
+        region
     });
     const activeRunNode = runNode || activeSettingsSubject();
     await queueCanvasRun(activeRunNode);
@@ -25436,7 +25857,8 @@ async function smartMinimaxRunningHubSettings(node){
     const entry = smartMinimaxRunningHubEntry(node);
     const workflowId = runningHubEntryId(entry, 'workflow');
     if(!entry || !workflowId) throw new Error(`请先在 API 设置中添加「${SMART_MINIMAX_RUNNINGHUB_WORKFLOW_TITLE}」`);
-    const cached = await ensureRunningHubWorkflow(workflowId, {fetchRemote:true}).catch(() => null);
+    const sourceSettings = {rhRegion:entry.region || node?.minimaxRunningHubRegion || settings.rhRegion};
+    const cached = await ensureRunningHubWorkflow(workflowId, {fetchRemote:true}, sourceSettings).catch(() => null);
     const fields = smartMinimaxRunningHubFieldsForConfig(
         Array.isArray(cached?.fields) && cached.fields.length ? cached.fields : rhEntryFields(entry)
     );
@@ -25445,6 +25867,7 @@ async function smartMinimaxRunningHubSettings(node){
     return {
         engine:'runninghub',
         rhConfigKey:runningHubEntryKey('workflow', workflowId),
+        rhRegion:runningHubRegion(sourceSettings),
         rhPayment:'free',
         rhInstanceType:'',
         rhParams:{},
@@ -25648,6 +26071,7 @@ function smartDirectorRunningHubAppSettings(node, seg){
     return {
         engine:'runninghub',
         rhConfigKey:runningHubEntryKey('app', state.selectedId),
+        rhRegion:state.region || state.adapter.region || runningHubRegion(settings),
         rhPayment:'free',
         rhParams,
         rhRandomActive:{},
@@ -26002,11 +26426,12 @@ async function queryJimengNow(nodeId){
 function providerIdForSmartTask(node, task){
     return task?.providerId || node?.runSettings?.provider_id || settings.provider_id || 'comfly';
 }
-async function fetchImageTaskQuery(providerId, taskId){
+async function fetchImageTaskQuery(providerId, taskId, sourceSettings=null){
+    const region = providerId === 'runninghub' ? runningHubRegion(sourceSettings || settings) : '';
     return fetch('/api/image-task-query', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({provider_id:providerId || 'comfly', task_id:taskId})
+        body:JSON.stringify({provider_id:providerId || 'comfly', task_id:taskId, ...(region ? {region} : {})})
     }).then(async r => {
         if(!r.ok) throw new Error(await r.text());
         return r.json();
@@ -26026,7 +26451,8 @@ async function querySmartImageTaskNow(nodeId, localTaskId){
     task.recoverTaskId = recoverTaskId;
     render();
     try {
-        const data = await fetchImageTaskQuery(providerIdForSmartTask(node, task), recoverTaskId);
+        const providerId = providerIdForSmartTask(node, task);
+        const data = await fetchImageTaskQuery(providerId, recoverTaskId, providerId === 'runninghub' ? {rhRegion:task.region || node.runSettings?.rhRegion} : null);
         if(data.status === 'succeeded'){
             task.failed = false;
             task.querying = false;

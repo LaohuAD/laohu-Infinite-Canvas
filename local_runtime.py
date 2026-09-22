@@ -18,7 +18,7 @@ import webbrowser
 
 ROOT = Path(__file__).resolve().parent
 LOCAL_URL = 'http://127.0.0.1:3000/'
-REPO_URL = 'https://github.com/LaohuAD/laohu-Infinite-Canvas'
+REPO_URL = 'https://github.com/LaohuAD/laohu-creative-studio'
 
 
 @functools.lru_cache(maxsize=48)
